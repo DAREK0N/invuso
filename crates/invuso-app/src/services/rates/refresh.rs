@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use invuso_core::domain::Currency;
 
 use super::{CurrencyApi, Frankfurter, RateError, RateProvider};
-use crate::state::{DataRevision, Toaster};
+use crate::state::{DataRevision, RateStatus, Toaster};
 use crate::storage::{Db, NewExchangeRate, StorageError, now_ms};
 
 /// Result of one refresh: how many rates were archived and which
@@ -14,6 +14,15 @@ use crate::storage::{Db, NewExchangeRate, StorageError, now_ms};
 pub struct RefreshOutcome {
     pub archived: usize,
     pub failures: Vec<(&'static str, RateError)>,
+    /// How many providers were asked.
+    pub attempted: usize,
+}
+
+impl RefreshOutcome {
+    /// No provider answered, e.g. without internet.
+    pub fn reached_none(&self) -> bool {
+        self.failures.len() == self.attempted
+    }
 }
 
 /// Fetches the newest rates from both providers and archives them (FX-01,
@@ -51,7 +60,10 @@ fn fetch_and_archive(
     fallback: &dyn RateProvider,
     fetch: impl Fn(&dyn RateProvider) -> Result<Vec<NewExchangeRate>, RateError>,
 ) -> Result<RefreshOutcome, StorageError> {
-    let mut outcome = RefreshOutcome::default();
+    let mut outcome = RefreshOutcome {
+        attempted: 2,
+        ..RefreshOutcome::default()
+    };
     let fetched_at = now_ms();
 
     let covered: BTreeSet<Currency> = match fetch(primary) {
@@ -99,6 +111,7 @@ pub fn use_rate_refresh() {
     let db = use_context::<Db>();
     let mut toaster = use_context::<Toaster>();
     let mut revision = use_context::<DataRevision>();
+    let mut status = use_context::<RateStatus>();
 
     use_hook(move || {
         spawn(async move {
@@ -116,10 +129,15 @@ pub fn use_rate_refresh() {
                         refresh_latest(&worker_db, &Frankfurter, &CurrencyApi)
                     })
                     .await;
-                    let (archived, failed) = match outcome {
-                        Ok(Ok(outcome)) => (outcome.archived, !outcome.failures.is_empty()),
-                        _ => (0, true),
+                    let (archived, failed, offline) = match outcome {
+                        Ok(Ok(outcome)) => (
+                            outcome.archived,
+                            !outcome.failures.is_empty(),
+                            outcome.reached_none(),
+                        ),
+                        _ => (0, true, true),
                     };
+                    status.set_offline(offline);
                     if archived > 0 {
                         revision.bump();
                     }
@@ -226,6 +244,7 @@ mod tests {
         let outcome = refresh_latest(&db, &primary(false), &fallback(true)).unwrap();
         assert_eq!(outcome.archived, 2);
         assert_eq!(outcome.failures.len(), 1);
+        assert!(!outcome.reached_none());
         assert_eq!(source_of(&db, "JPY"), "frankfurter");
         assert_eq!(source_of(&db, "VED"), "currency-api");
     }
@@ -237,6 +256,7 @@ mod tests {
         let outcome = refresh_latest(&db, &primary(false), &fallback(false)).unwrap();
         assert_eq!(outcome.archived, 0);
         assert_eq!(outcome.failures.len(), 2);
+        assert!(outcome.reached_none());
         let quote = db.latest_rate(cur("JPY"), cur("EUR")).unwrap().unwrap();
         assert_eq!(quote.rate_date.as_deref(), Some("2026-10-04"));
     }

@@ -92,6 +92,12 @@ currency_picker:
   favorites: "Favoriten"
   all: "Alle Währungen"
   no_results: "Keine Währung gefunden"
+  recent: "Zuletzt benutzt"
+  favorites_empty: "Tippe auf den Stern, um eine Währung als Favorit zu merken."
+  add_favorite: "%{code} zu Favoriten hinzufügen"
+  remove_favorite: "%{code} aus Favoriten entfernen"
+  favorite_error: "Favoriten konnten nicht gespeichert werden."
+  load_error: "Favoriten konnten nicht geladen werden."
 
 language:
   de: "Deutsch"
@@ -257,3 +263,32 @@ licenses:
   texts: "Lizenztexte"
   missing_title: "Lizenzliste fehlt"
   missing_text: "Die Liste der Drittanbieter-Lizenzen ist in diesem Build leer."
+
+converter:
+  amount: "Betrag"
+  from: "Ausgangswährung"
+  to: "Zielwährung"
+  swap: "Währungen tauschen"
+  rate_line: "1 %{base} = %{rate} %{quote}"
+  rate_meta: "Kurs vom %{date} · abgerufen %{age}"
+  rate_date: "Kurs vom %{date}"
+  same_currency: "Gleiche Währung – kein Kurs nötig."
+  stale_offline: "Offline – es gilt der letzte bekannte Kurs. Er kann vom heutigen Kurs abweichen."
+  stale_old: "Dieser Kurs ist älter als einen Tag und kann vom heutigen Kurs abweichen."
+  no_rate_title: "Kein Kurs verfügbar"
+  no_rate_text: "Für %{from} → %{to} ist noch kein Kurs gespeichert. Sobald Internet verfügbar ist, werden Kurse automatisch geladen."
+  rate_error: "Kurs konnte nicht gelesen werden."
+  load_error: "Letzte Auswahl konnte nicht geladen werden."
+  save_error: "Auswahl konnte nicht gespeichert werden."
+
+number:
+  decimal_separator: ","
+  group_separator: "."
+  symbol_before: "false"
+
+age:
+  just_now: "gerade eben"
+  minutes: "vor %{count} Min."
+  hours: "vor %{count} Std."
+  day: "vor 1 Tag"
+  days: "vor %{count} Tagen"

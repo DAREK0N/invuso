@@ -1,3 +1,4 @@
+use invuso_core::domain::Currency;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::db::{new_id, now_ms};
@@ -9,6 +10,13 @@ const DEVICE_ID: &str = "device_id";
 pub const HOME_CURRENCY: &str = "home_currency";
 /// ISO 639-1 code of the language receipts are translated into (SET-02).
 pub const TARGET_LANGUAGE: &str = "target_language";
+/// Favorite currencies, shown first in the currency picker (UI-15).
+pub const FAVORITE_CURRENCY_LIST: &str = "favorite_currencies";
+/// Currencies picked last, newest first (UI-15).
+pub const RECENT_CURRENCY_LIST: &str = "recent_currencies";
+/// Last selection of the currency converter (FX-05).
+pub const CONVERTER_FROM: &str = "converter_from";
+pub const CONVERTER_TO: &str = "converter_to";
 
 impl Db {
     /// Value of a global setting (idee.md 4.1 `Settings`).
@@ -18,6 +26,34 @@ impl Db {
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), StorageError> {
         self.with(|conn| set(conn, key, value))
+    }
+
+    /// A currency stored under `key`; `None` if unset or no longer valid.
+    pub fn currency_setting(&self, key: &str) -> Result<Option<Currency>, StorageError> {
+        Ok(self
+            .setting(key)?
+            .and_then(|code| Currency::from_code(&code).ok()))
+    }
+
+    /// A list of currencies stored under `key`, in stored order; `None` if
+    /// it was never saved (an empty list is a saved choice). Unknown codes
+    /// are skipped.
+    pub fn currency_list(&self, key: &str) -> Result<Option<Vec<Currency>>, StorageError> {
+        Ok(self.setting(key)?.map(|stored| {
+            stored
+                .split(',')
+                .filter_map(|code| Currency::from_code(code).ok())
+                .collect()
+        }))
+    }
+
+    pub fn set_currency_list(
+        &self,
+        key: &str,
+        currencies: &[Currency],
+    ) -> Result<(), StorageError> {
+        let codes: Vec<&str> = currencies.iter().map(|c| c.code()).collect();
+        self.set_setting(key, &codes.join(","))
     }
 }
 
@@ -58,6 +94,32 @@ mod tests {
         db.set_setting(HOME_CURRENCY, "EUR").unwrap();
         db.set_setting(HOME_CURRENCY, "JPY").unwrap();
         assert_eq!(db.setting(HOME_CURRENCY).unwrap().as_deref(), Some("JPY"));
+    }
+
+    #[test]
+    fn currency_settings_round_trip() {
+        let db = Db::open_in_memory().unwrap();
+        let cur = |code| Currency::from_code(code).unwrap();
+        assert_eq!(db.currency_list(RECENT_CURRENCY_LIST).unwrap(), None);
+        db.set_currency_list(RECENT_CURRENCY_LIST, &[cur("JPY"), cur("EUR")])
+            .unwrap();
+        assert_eq!(
+            db.currency_list(RECENT_CURRENCY_LIST).unwrap(),
+            Some(vec![cur("JPY"), cur("EUR")])
+        );
+        db.set_currency_list(FAVORITE_CURRENCY_LIST, &[]).unwrap();
+        assert_eq!(
+            db.currency_list(FAVORITE_CURRENCY_LIST).unwrap(),
+            Some(vec![])
+        );
+
+        db.set_setting(CONVERTER_FROM, "jpy").unwrap();
+        assert_eq!(
+            db.currency_setting(CONVERTER_FROM).unwrap(),
+            Some(cur("JPY"))
+        );
+        db.set_setting(CONVERTER_TO, "XYZ").unwrap();
+        assert_eq!(db.currency_setting(CONVERTER_TO).unwrap(), None);
     }
 
     #[test]

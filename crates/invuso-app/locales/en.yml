@@ -92,6 +92,12 @@ currency_picker:
   favorites: "Favorites"
   all: "All currencies"
   no_results: "No currency found"
+  recent: "Recently used"
+  favorites_empty: "Tap the star to keep a currency as a favorite."
+  add_favorite: "Add %{code} to favorites"
+  remove_favorite: "Remove %{code} from favorites"
+  favorite_error: "Favorites could not be saved."
+  load_error: "Favorites could not be loaded."
 
 language:
   de: "German"
@@ -257,3 +263,32 @@ licenses:
   texts: "License texts"
   missing_title: "License list missing"
   missing_text: "The list of third-party licenses is empty in this build."
+
+converter:
+  amount: "Amount"
+  from: "From currency"
+  to: "To currency"
+  swap: "Swap currencies"
+  rate_line: "1 %{base} = %{rate} %{quote}"
+  rate_meta: "Rate of %{date} · fetched %{age}"
+  rate_date: "Rate of %{date}"
+  same_currency: "Same currency – no rate needed."
+  stale_offline: "Offline – the last known rate is used. It may differ from today's rate."
+  stale_old: "This rate is more than a day old and may differ from today's rate."
+  no_rate_title: "No rate available"
+  no_rate_text: "There is no saved rate for %{from} → %{to} yet. Rates load automatically once the internet is available."
+  rate_error: "The rate could not be read."
+  load_error: "The last selection could not be loaded."
+  save_error: "The selection could not be saved."
+
+number:
+  decimal_separator: "."
+  group_separator: ","
+  symbol_before: "true"
+
+age:
+  just_now: "just now"
+  minutes: "%{count} min ago"
+  hours: "%{count} h ago"
+  day: "1 day ago"
+  days: "%{count} days ago"

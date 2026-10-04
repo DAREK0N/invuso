@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 use dioxus::router::components::HistoryProvider;
 
 mod components;
+mod format;
 mod layouts;
 mod platform;
 mod preferences;
@@ -136,6 +137,7 @@ fn AppRoot(db: Db) -> Element {
     use_context_provider(|| db);
     use_context_provider(state::DataRevision::new);
     use_context_provider(state::Toaster::new);
+    use_context_provider(state::RateStatus::new);
     services::rates::use_rate_refresh();
 
     match has_me {

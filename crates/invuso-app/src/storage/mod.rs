@@ -25,3 +25,4 @@ pub use groups::NewGroup;
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;
+pub use settings::{CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, RECENT_CURRENCY_LIST};

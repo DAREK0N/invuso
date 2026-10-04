@@ -4,7 +4,7 @@
 
 use invuso_core::domain::{Currency, PaymentMethodKind};
 
-/// Shown first in the currency picker, in this order.
+/// Favorites of the currency picker until the user changes them.
 pub const FAVORITE_CURRENCIES: [&str; 5] = ["EUR", "USD", "JPY", "CHF", "GBP"];
 
 /// Target languages for receipt translations, as ISO 639-1 codes.
@@ -184,12 +184,49 @@ pub fn default_home_currency() -> Currency {
     Currency::from_code("EUR").expect("EUR is a valid ISO 4217 currency")
 }
 
-/// Favorites as currencies, for the picker.
-pub fn favorite_currencies() -> Vec<Currency> {
+/// The default favorites as currencies.
+pub fn default_favorite_currencies() -> Vec<Currency> {
     FAVORITE_CURRENCIES
         .iter()
         .filter_map(|code| Currency::from_code(code).ok())
         .collect()
+}
+
+/// How many recently picked currencies the picker remembers.
+pub const RECENT_CURRENCY_LIMIT: usize = 5;
+
+/// `recent` with `picked` moved to the front, without duplicates and cut
+/// to [`RECENT_CURRENCY_LIMIT`].
+pub fn with_recent(recent: &[Currency], picked: Currency) -> Vec<Currency> {
+    std::iter::once(picked)
+        .chain(recent.iter().copied().filter(|&c| c != picked))
+        .take(RECENT_CURRENCY_LIMIT)
+        .collect()
+}
+
+/// Adds `currency` to the end of the favorites, or removes it if it is one.
+pub fn toggle_favorite(favorites: &[Currency], currency: Currency) -> Vec<Currency> {
+    if favorites.contains(&currency) {
+        favorites
+            .iter()
+            .copied()
+            .filter(|&c| c != currency)
+            .collect()
+    } else {
+        favorites.iter().copied().chain([currency]).collect()
+    }
+}
+
+/// Preselection of the converter without a saved one: the first favorite
+/// that is not the home currency, converted into the home currency.
+pub fn default_converter_pair(home: Currency, favorites: &[Currency]) -> (Currency, Currency) {
+    let from = favorites
+        .iter()
+        .chain(default_favorite_currencies().iter())
+        .copied()
+        .find(|&c| c != home)
+        .unwrap_or(home);
+    (from, home)
 }
 
 /// Onboarding suggestion: the system language if it is a supported target
@@ -279,7 +316,51 @@ mod tests {
 
     #[test]
     fn favorites_are_valid_currencies() {
-        assert_eq!(favorite_currencies().len(), FAVORITE_CURRENCIES.len());
+        assert_eq!(
+            default_favorite_currencies().len(),
+            FAVORITE_CURRENCIES.len()
+        );
         assert_eq!(default_home_currency().code(), "EUR");
+    }
+
+    fn cur(code: &str) -> Currency {
+        Currency::from_code(code).unwrap()
+    }
+
+    #[test]
+    fn recent_currencies_move_to_front_and_stay_short() {
+        let recent = with_recent(&[], cur("JPY"));
+        assert_eq!(recent, vec![cur("JPY")]);
+        let recent = with_recent(&[cur("EUR"), cur("JPY"), cur("USD")], cur("JPY"));
+        assert_eq!(recent, vec![cur("JPY"), cur("EUR"), cur("USD")]);
+        let full = ["EUR", "USD", "GBP", "CHF", "THB"].map(cur);
+        let recent = with_recent(&full, cur("JPY"));
+        assert_eq!(recent.len(), RECENT_CURRENCY_LIMIT);
+        assert_eq!(recent[0], cur("JPY"));
+        assert!(!recent.contains(&cur("THB")));
+    }
+
+    #[test]
+    fn toggles_favorites() {
+        let favorites = toggle_favorite(&[cur("EUR")], cur("JPY"));
+        assert_eq!(favorites, vec![cur("EUR"), cur("JPY")]);
+        assert_eq!(toggle_favorite(&favorites, cur("EUR")), vec![cur("JPY")]);
+    }
+
+    #[test]
+    fn converter_starts_from_a_foreign_favorite() {
+        let favorites = [cur("EUR"), cur("JPY")];
+        assert_eq!(
+            default_converter_pair(cur("EUR"), &favorites),
+            (cur("JPY"), cur("EUR"))
+        );
+        assert_eq!(
+            default_converter_pair(cur("JPY"), &favorites),
+            (cur("EUR"), cur("JPY"))
+        );
+        assert_eq!(
+            default_converter_pair(cur("EUR"), &[]),
+            (cur("USD"), cur("EUR"))
+        );
     }
 }

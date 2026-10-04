@@ -34,6 +34,35 @@ impl Default for DataRevision {
     }
 }
 
+/// Whether the last attempt to refresh exchange rates reached no provider,
+/// i.e. the app is offline as far as rates go (FX-03). Set by the rate
+/// refresh, read by screens that show a rate.
+#[derive(Clone, Copy, PartialEq)]
+pub struct RateStatus(Signal<bool>);
+
+impl RateStatus {
+    /// Must be called inside a component, like any `Signal::new`.
+    pub fn new() -> Self {
+        Self(Signal::new(false))
+    }
+
+    pub fn offline(&self) -> bool {
+        *self.0.read()
+    }
+
+    pub fn set_offline(&mut self, offline: bool) {
+        if *self.0.peek() != offline {
+            self.0.set(offline);
+        }
+    }
+}
+
+impl Default for RateStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Button of a toast, e.g. "Undo".
 #[derive(Clone)]
 pub struct ToastAction {

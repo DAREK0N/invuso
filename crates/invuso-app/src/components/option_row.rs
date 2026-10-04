@@ -1,10 +1,16 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::{Icon, icons::ld_icons::LdCheck};
 
-/// One selectable entry of a picker list: short code, name and a check
-/// mark when selected.
+/// One selectable entry of a picker list: short code, name, an optional
+/// muted detail (e.g. a currency symbol) and a check mark when selected.
 #[component]
-pub fn OptionRow(code: String, name: String, selected: bool, onclick: EventHandler<()>) -> Element {
+pub fn OptionRow(
+    code: String,
+    name: String,
+    selected: bool,
+    onclick: EventHandler<()>,
+    #[props(default)] detail: Option<String>,
+) -> Element {
     let colors = if selected {
         "bg-cerulean-800 text-floral-white-50"
     } else {
@@ -20,6 +26,9 @@ pub fn OptionRow(code: String, name: String, selected: bool, onclick: EventHandl
             onclick: move |_| onclick.call(()),
             span { class: "w-12 shrink-0 text-sm font-semibold tabular-nums text-cerulean-300", "{code}" }
             span { class: "flex-1 truncate text-base", "{name}" }
+            if let Some(detail) = &detail {
+                span { class: "shrink-0 text-sm text-floral-white-400", "{detail}" }
+            }
             if selected {
                 Icon { icon: LdCheck, class: "h-5 w-5 shrink-0 text-cerulean-300" }
             }
