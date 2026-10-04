@@ -11,22 +11,10 @@ pub fn data_dir() -> Result<PathBuf, String> {
     {
         android::files_dir()
     }
+    // Android is the only app target; host builds exist for tests and CI
+    // only, and the web version will bring its own storage.
     #[cfg(not(target_os = "android"))]
     {
-        desktop_data_dir()
+        Err("unsupported platform: no app data directory".to_string())
     }
-}
-
-/// Desktop is a development target only; mirrors the usual per-user
-/// application data locations.
-#[cfg(not(target_os = "android"))]
-fn desktop_data_dir() -> Result<PathBuf, String> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("XDG_DATA_HOME"))
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
-        })
-        .ok_or_else(|| "no user data directory found".to_string())?;
-    Ok(base.join("invuso"))
 }

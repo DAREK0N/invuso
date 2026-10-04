@@ -1,6 +1,6 @@
 [package]
 name = "invuso-app"
-description = "Invuso Dioxus app (Android, desktop for development)."
+description = "Invuso Dioxus app (Android)."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,8 +20,6 @@ jni.workspace = true
 ndk-context.workspace = true
 
 [features]
-default = ["desktop"]
+default = ["mobile"]
 # Android build (`dx serve --platform android`).
 mobile = ["dioxus/mobile"]
-# Local development with hot reload (`dx serve --platform desktop`).
-desktop = ["dioxus/desktop"]

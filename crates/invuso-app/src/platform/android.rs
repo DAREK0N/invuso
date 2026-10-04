@@ -5,7 +5,6 @@
 //! provides; no Kotlin code is needed.
 
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use jni::objects::{JObject, JString};
 use jni::signature::RuntimeMethodSignature;
@@ -49,7 +48,7 @@ pub fn files_dir() -> Result<PathBuf, String> {
             .and_then(|value| value.l())
             .map_err(|e| e.to_string())?;
         let path = env.cast_local::<JString>(path).map_err(|e| e.to_string())?;
-        let path: String = env.get_string(&path).map_err(|e| e.to_string())?.into();
+        let path = path.try_to_string(env).map_err(|e| e.to_string())?;
 
         Ok(PathBuf::from(path))
     })
