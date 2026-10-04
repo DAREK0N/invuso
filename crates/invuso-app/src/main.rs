@@ -8,6 +8,7 @@ mod components;
 mod layouts;
 mod platform;
 mod preferences;
+mod services;
 mod state;
 mod storage;
 mod views;
@@ -77,6 +78,8 @@ pub enum Route {
         SettingsLanguages {},
         #[route("/settings/data")]
         SettingsData {},
+        #[route("/settings/licenses")]
+        SettingsLicenses {},
     #[end_layout]
 
     #[layout(FocusShell)]
@@ -133,6 +136,7 @@ fn AppRoot(db: Db) -> Element {
     use_context_provider(|| db);
     use_context_provider(state::DataRevision::new);
     use_context_provider(state::Toaster::new);
+    services::rates::use_rate_refresh();
 
     match has_me {
         // The router has no hook for its very first route, so the history it

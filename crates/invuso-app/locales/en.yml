@@ -61,6 +61,7 @@ page:
   settings_appearance: "Appearance"
   settings_languages: "Language packs"
   settings_data: "Backup & export"
+  settings_licenses: "About & licenses"
   onboarding: "Welcome"
   not_found: "Page not found"
 
@@ -102,6 +103,7 @@ language:
 
 settings:
   manage_section: "Manage"
+  about_section: "About Invuso"
 
 people:
   add: "Add person"
@@ -243,3 +245,15 @@ group_icon:
   briefcase: "Work"
   party_popper: "Party"
   heart: "Heart"
+
+rates:
+  refresh_failed: "Exchange rates could not be updated. The last saved rates are used."
+
+licenses:
+  app_version: "%{name} version %{version}"
+  intro: "Invuso is built on open-source software. Here are all included components with their licenses."
+  components: "Bundled components"
+  crates: "Rust libraries (%{count})"
+  texts: "License texts"
+  missing_title: "License list missing"
+  missing_text: "The list of third-party licenses is empty in this build."

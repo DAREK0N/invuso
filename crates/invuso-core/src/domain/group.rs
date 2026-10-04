@@ -89,7 +89,7 @@ fn optional_date(date: Option<&str>) -> Result<Option<String>, GroupError> {
 }
 
 /// `YYYY-MM-DD` with a day that exists in that month (Gregorian calendar).
-fn is_iso_date(date: &str) -> bool {
+pub fn is_iso_date(date: &str) -> bool {
     let bytes = date.as_bytes();
     let digits_at = |range: std::ops::Range<usize>| bytes[range].iter().all(u8::is_ascii_digit);
     if bytes.len() != 10

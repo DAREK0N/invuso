@@ -61,6 +61,7 @@ page:
   settings_appearance: "Darstellung"
   settings_languages: "Sprachpakete"
   settings_data: "Backup & Export"
+  settings_licenses: "Über & Lizenzen"
   onboarding: "Willkommen"
   not_found: "Seite nicht gefunden"
 
@@ -102,6 +103,7 @@ language:
 
 settings:
   manage_section: "Verwaltung"
+  about_section: "Über Invuso"
 
 people:
   add: "Person hinzufügen"
@@ -243,3 +245,15 @@ group_icon:
   briefcase: "Arbeit"
   party_popper: "Feier"
   heart: "Herz"
+
+rates:
+  refresh_failed: "Wechselkurse konnten nicht aktualisiert werden. Es gelten die zuletzt gespeicherten Kurse."
+
+licenses:
+  app_version: "%{name} Version %{version}"
+  intro: "Invuso baut auf Open-Source-Software auf. Hier stehen alle enthaltenen Komponenten mit ihren Lizenzen."
+  components: "Gebündelte Komponenten"
+  crates: "Rust-Bibliotheken (%{count})"
+  texts: "Lizenztexte"
+  missing_title: "Lizenzliste fehlt"
+  missing_text: "Die Liste der Drittanbieter-Lizenzen ist in diesem Build leer."

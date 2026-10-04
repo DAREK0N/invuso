@@ -2,11 +2,13 @@ use dioxus::prelude::*;
 
 use super::PlaceholderPage;
 
+mod licenses;
 mod payment_methods;
 mod people;
 mod person_detail;
 mod profile;
 
+pub use licenses::SettingsLicenses;
 pub use payment_methods::SettingsPaymentMethods;
 pub(crate) use people::PersonFormSheet;
 pub use people::SettingsPeople;

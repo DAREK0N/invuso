@@ -18,6 +18,15 @@ pub enum FxError {
         quote: Currency,
         amount: Currency,
     },
+    #[error("cannot chain {first_base}→{first_quote} with {second_base}→{second_quote}")]
+    ChainMismatch {
+        first_base: Currency,
+        first_quote: Currency,
+        second_base: Currency,
+        second_quote: Currency,
+    },
+    #[error("rate overflow")]
+    Overflow,
     #[error(transparent)]
     Money(#[from] MoneyError),
 }
@@ -78,6 +87,29 @@ pub fn convert(amount: Money, rate: &Rate) -> Result<Money, FxError> {
         .checked_mul(rate.value)
         .ok_or(MoneyError::Overflow)?;
     Ok(Money::from_decimal(converted, rate.quote)?)
+}
+
+/// Cross rate through a shared currency, e.g. `JPY→EUR` then `EUR→CHF`
+/// gives `JPY→CHF`. Archived rates are all quoted against EUR, so every
+/// other pair goes through it.
+pub fn chain(first: &Rate, second: &Rate) -> Result<Rate, FxError> {
+    if first.quote != second.base {
+        return Err(FxError::ChainMismatch {
+            first_base: first.base,
+            first_quote: first.quote,
+            second_base: second.base,
+            second_quote: second.quote,
+        });
+    }
+    let value = first
+        .value
+        .checked_mul(second.value)
+        .ok_or(FxError::Overflow)?;
+    if first.base == second.quote {
+        // A→B→A: exactly 1 by definition, whatever rounding the inverse had.
+        return Rate::new(first.base, first.base, Decimal::ONE);
+    }
+    Rate::new(first.base, second.quote, value)
 }
 
 /// Picks the rate for `date` from `(date, rate)` entries: the one of that
@@ -167,6 +199,35 @@ mod tests {
             Rate::new(cur("EUR"), cur("EUR"), d("1.1")),
             Err(FxError::SelfRateNotOne)
         );
+    }
+
+    #[test]
+    fn chains_through_eur() {
+        let eur_jpy = Rate::new(cur("EUR"), cur("JPY"), d("176.99")).unwrap();
+        let eur_chf = Rate::new(cur("EUR"), cur("CHF"), d("0.9279")).unwrap();
+        let jpy_chf = chain(&eur_jpy.inverse(), &eur_chf).unwrap();
+        assert_eq!(jpy_chf.base(), cur("JPY"));
+        assert_eq!(jpy_chf.quote(), cur("CHF"));
+        // 10 000 ¥ = 56.50 € = 52.43 CHF (52.42669… rounds up).
+        let chf = convert(Money::new(10_000, cur("JPY")), &jpy_chf).unwrap();
+        assert_eq!(chf, Money::new(5_243, cur("CHF")));
+    }
+
+    #[test]
+    fn chain_back_to_start_is_exactly_one() {
+        let eur_jpy = Rate::new(cur("EUR"), cur("JPY"), d("176.99")).unwrap();
+        let round_trip = chain(&eur_jpy, &eur_jpy.inverse()).unwrap();
+        assert_eq!(round_trip.value(), Decimal::ONE);
+    }
+
+    #[test]
+    fn chain_rejects_unconnected_rates() {
+        let eur_jpy = Rate::new(cur("EUR"), cur("JPY"), d("176.99")).unwrap();
+        let eur_chf = Rate::new(cur("EUR"), cur("CHF"), d("0.9279")).unwrap();
+        assert!(matches!(
+            chain(&eur_jpy, &eur_chf),
+            Err(FxError::ChainMismatch { .. })
+        ));
     }
 
     #[test]

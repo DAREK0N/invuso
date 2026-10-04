@@ -97,7 +97,7 @@ pub(super) fn new_id() -> String {
 }
 
 /// Current time as Unix milliseconds (`created_at`, `updated_at`, `deleted_at`).
-pub(super) fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
