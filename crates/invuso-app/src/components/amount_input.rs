@@ -2,9 +2,7 @@ use dioxus::prelude::*;
 use invuso_core::domain::Currency;
 
 use crate::components::CurrencyButton;
-use crate::format::{
-    NumberFormat, amount_edit, clean_amount_input, currency_symbol, display_amount_text,
-};
+use crate::format::{NumberFormat, amount_keystroke, currency_symbol, display_amount_text};
 
 /// Amount field with its currency (UI-06). Only valid amounts for the
 /// currency get through: digits and one decimal separator, at most the
@@ -21,6 +19,10 @@ pub fn AmountInput(
     oninput: EventHandler<String>,
     on_currency_click: EventHandler<()>,
     #[props(default)] currency_label: String,
+    /// Focuses the field when it appears, so the keyboard opens right away
+    /// (idee.md 7.3: the number pad first).
+    #[props(default)]
+    autofocus: bool,
 ) -> Element {
     // When a keystroke is rejected or rewritten (e.g. a separator added),
     // the parent's text may stay the same and this component would not
@@ -70,17 +72,19 @@ pub fn AmountInput(
                     placeholder: "0",
                     aria_label: "{label}",
                     value: "{shown}",
+                    onmounted: move |event: MountedEvent| async move {
+                        if autofocus {
+                            // Focusing can only fail if the element is gone.
+                            let _ = event.data().set_focus(true).await;
+                        }
+                    },
                     oninput: move |event| {
-                        let raw = event.value();
-                        let edit = amount_edit(&typed, &raw, format);
-                        match clean_amount_input(&edit, currency, format) {
-                            Some(text) => {
-                                if display_amount_text(&text, format) != raw {
-                                    *corrections.write() += 1;
-                                }
-                                oninput.call(text);
-                            }
-                            None => *corrections.write() += 1,
+                        let (text, redraw) = amount_keystroke(&typed, &event.value(), currency, format);
+                        if redraw {
+                            *corrections.write() += 1;
+                        }
+                        if let Some(text) = text {
+                            oninput.call(text);
                         }
                     },
                 }

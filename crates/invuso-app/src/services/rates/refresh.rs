@@ -37,10 +37,6 @@ pub fn refresh_latest(
 
 /// Fetches and archives the rates of a past day, for back-dated expenses
 /// (FX-09).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "back-dated expenses (AP-11) fetch missing days")
-)]
 pub fn refresh_on_date(
     db: &Db,
     primary: &dyn RateProvider,

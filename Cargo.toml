@@ -30,3 +30,6 @@ serde = { version = "1.0.229", features = ["derive"] }
 # `raw_value` keeps rates as their literal text, so they reach `Decimal`
 # without passing through f64.
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+# Local date, time and UTC offset of new expenses (AP-11); already in the
+# tree through dioxus, `local-offset` reads the device's time zone.
+time = { version = "0.3.55", features = ["local-offset"] }

@@ -19,6 +19,18 @@ pub enum SplitMode {
     Exact(BTreeMap<PersonId, i64>),
 }
 
+impl SplitMode {
+    /// Stable code of the mode, stored as `Expense.split_mode`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Equal(_) => "equal",
+            Self::Weights(_) => "weights",
+            Self::Percent(_) => "percent",
+            Self::Exact(_) => "exact",
+        }
+    }
+}
+
 /// Each person's share of `total` minor units.
 pub fn split(total: i64, mode: &SplitMode) -> Result<BTreeMap<PersonId, i64>, SplitError> {
     match mode {

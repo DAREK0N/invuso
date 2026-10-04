@@ -2,7 +2,7 @@
 //! idee.md 7.5), for people (PER-01), payment methods (PAY-01) and groups
 //! (GRP-01).
 
-use invuso_core::domain::{Currency, PaymentMethodKind};
+use invuso_core::domain::{Category, Currency, PaymentMethodKind};
 
 /// Favorites of the currency picker until the user changes them.
 pub const FAVORITE_CURRENCIES: [&str; 5] = ["EUR", "USD", "JPY", "CHF", "GBP"];
@@ -107,6 +107,25 @@ pub fn payment_kind_name(kind: PaymentMethodKind) -> String {
         PaymentMethodKind::BankTransfer => t!("payment_kind.bank_transfer").to_string(),
         PaymentMethodKind::IcCard => t!("payment_kind.ic_card").to_string(),
         PaymentMethodKind::Other => t!("payment_kind.other").to_string(),
+    }
+}
+
+/// Display name of a category: default categories store a key that is
+/// translated, the user's own ones their name (EXP-09).
+pub fn category_name(category: &Category) -> String {
+    if !category.is_default {
+        return category.name.clone();
+    }
+    match category.name.as_str() {
+        "food" => t!("category.food").to_string(),
+        "groceries" => t!("category.groceries").to_string(),
+        "transport" => t!("category.transport").to_string(),
+        "lodging" => t!("category.lodging").to_string(),
+        "activities" => t!("category.activities").to_string(),
+        "shopping" => t!("category.shopping").to_string(),
+        "health" => t!("category.health").to_string(),
+        "other" => t!("category.other").to_string(),
+        other => other.to_string(),
     }
 }
 

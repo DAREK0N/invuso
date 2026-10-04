@@ -196,6 +196,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | num-rational | 0.4.2 | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | Copyright (c) 2018, Daniel Wagner-Hall |
+| num_threads | 0.1.7 | MIT OR Apache-2.0 | Copyright 2021 Jacob Pratt; Copyright (c) 2021 Jacob Pratt |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | Copyright (c) Aleksey Kladov |
 | openssl | 0.10.81 | Apache-2.0 | Copyright 2011-2017 Google Inc. |
 | openssl-probe | 0.2.1 | MIT OR Apache-2.0 | Copyright (c) 2014 Alex Crichton |

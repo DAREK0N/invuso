@@ -5,7 +5,10 @@ use super::StorageError;
 /// Schema migrations in order; migration `n` (1-based) brings the database
 /// to `PRAGMA user_version = n`. Existing entries must never be edited —
 /// schema changes always get a new file (AGENTS.md 7.4).
-const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../migrations/0001_initial.sql"),
+    include_str!("../../migrations/0002_default_categories.sql"),
+];
 
 /// Applies every migration the database has not seen yet, each in its own
 /// transaction.

@@ -232,6 +232,43 @@ pub fn amount_edit(shown: &str, raw: &str, format: NumberFormat) -> String {
     )
 }
 
+/// One keystroke in an amount field: the new canonical text, or `None` to
+/// keep the old one, and whether the field must be redrawn because it does
+/// not show what the user typed (rejected or regrouped input).
+pub fn amount_keystroke(
+    shown: &str,
+    raw: &str,
+    currency: Currency,
+    format: NumberFormat,
+) -> (Option<String>, bool) {
+    let edit = amount_edit(shown, raw, format);
+    match clean_amount_input(&edit, currency, format) {
+        Some(text) => {
+            let redraw = display_amount_text(&text, format) != raw;
+            (Some(text), redraw)
+        }
+        None => (None, true),
+    }
+}
+
+/// Canonical text of an amount, to prefill a field: `2000 EUR` → `20`,
+/// `1550 EUR` → `15,50`. Negative amounts have no canonical text.
+pub fn amount_text(money: Money, format: NumberFormat) -> String {
+    let minor = money.amount_minor().max(0).unsigned_abs();
+    let exponent = money.currency().exponent();
+    let scale = 10_u64.pow(exponent);
+    let (integer, fraction) = (minor / scale, minor % scale);
+    if fraction == 0 {
+        integer.to_string()
+    } else {
+        format!(
+            "{integer}{}{fraction:0width$}",
+            format.decimal,
+            width = exponent as usize
+        )
+    }
+}
+
 /// The amount of canonical text from [`clean_amount_input`]; `None` while
 /// nothing is entered.
 pub fn parse_amount(text: &str, currency: Currency, format: NumberFormat) -> Option<Money> {
@@ -451,5 +488,37 @@ mod tests {
         let text = clean_amount_input("1234.5", eur, DE).unwrap();
         let amount = parse_amount(&text, eur, DE).unwrap();
         assert_eq!(format_money(amount, DE), "1.234,50\u{a0}€");
+    }
+
+    #[test]
+    fn amount_text_round_trips_through_parse() {
+        let eur = Currency::from_code("EUR").unwrap();
+        let jpy = Currency::from_code("JPY").unwrap();
+        for (minor, currency, text) in [
+            (2_000, eur, "20"),
+            (1_550, eur, "15,50"),
+            (5, eur, "0,05"),
+            (3_000, jpy, "3000"),
+        ] {
+            let money = Money::new(minor, currency);
+            assert_eq!(amount_text(money, DE), text);
+            assert_eq!(parse_amount(text, currency, DE), Some(money));
+        }
+        assert_eq!(amount_text(Money::new(1_550, eur), EN), "15.50");
+    }
+
+    #[test]
+    fn keystrokes_are_kept_rejected_or_redrawn() {
+        let eur = Currency::from_code("EUR").unwrap();
+        assert_eq!(
+            amount_keystroke("12", "123", eur, DE),
+            (Some("123".into()), false)
+        );
+        // Grouping appears: the field must show "1.234".
+        assert_eq!(
+            amount_keystroke("123", "1234", eur, DE),
+            (Some("1234".into()), true)
+        );
+        assert_eq!(amount_keystroke("1,23", "1,234", eur, DE), (None, true));
     }
 }

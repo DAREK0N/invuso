@@ -18,7 +18,7 @@ use crate::storage::NewExchangeRate;
 
 pub use currency_api::CurrencyApi;
 pub use frankfurter::Frankfurter;
-pub use refresh::use_rate_refresh;
+pub use refresh::{refresh_on_date, use_rate_refresh};
 
 #[derive(Debug, Error)]
 pub enum RateError {

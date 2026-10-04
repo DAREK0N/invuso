@@ -12,6 +12,11 @@ use super::{Db, StorageError};
 /// through it (idee.md 10.3: Frankfurter and its fallback quote EUR).
 const PIVOT: &str = "EUR";
 
+/// `source` of a cross rate an expense was converted with (AP-11). Such
+/// rows only keep the exact rate of that expense (FX-04); lookups skip
+/// them, so they never hide newer rates of the legs they were made of.
+pub const CROSS_SOURCE: &str = "cross";
+
 /// A rate as a provider reported it: `1 base = value quote` on `rate_date`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewExchangeRate {
@@ -44,6 +49,25 @@ pub struct RateQuote {
     /// The archived rates it is made of: none for the same currency, two
     /// for a cross rate.
     pub legs: Vec<ExchangeRate>,
+}
+
+/// A rate picked for a day by [`Db::rate_near`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NearRate {
+    pub quote: RateQuote,
+    /// At least one leg is from a day after the requested one, because the
+    /// archive had nothing on or before it.
+    pub later: bool,
+}
+
+/// Which archived rate a lookup wants.
+#[derive(Debug, Clone, Copy)]
+enum Pick<'a> {
+    /// That day's, otherwise the closest earlier one (idee.md 8.4).
+    OnOrBefore(&'a str),
+    /// Like `OnOrBefore`, otherwise the closest later one.
+    Near(&'a str),
+    Latest,
 }
 
 const COLUMNS: &str = "id, base, quote, rate, rate_date, fetched_at, source";
@@ -129,7 +153,26 @@ impl Db {
         if !is_iso_date(date) {
             return Err(StorageError::InvalidInput("rate date must be YYYY-MM-DD"));
         }
-        self.with(|conn| pick_quote(conn, base, quote, Some(date)))
+        self.with(|conn| pick_quote(conn, base, quote, Pick::OnOrBefore(date)))
+    }
+
+    /// Like [`Db::rate_on`], but when the archive has nothing that old, each
+    /// leg falls back to the closest later rate (user decision in AP-11 for
+    /// back-dated expenses while offline).
+    pub fn rate_near(
+        &self,
+        base: Currency,
+        quote: Currency,
+        date: &str,
+    ) -> Result<Option<NearRate>, StorageError> {
+        if !is_iso_date(date) {
+            return Err(StorageError::InvalidInput("rate date must be YYYY-MM-DD"));
+        }
+        let picked = self.with(|conn| pick_quote(conn, base, quote, Pick::Near(date)))?;
+        Ok(picked.map(|quote| NearRate {
+            later: quote.legs.iter().any(|leg| leg.rate_date.as_str() > date),
+            quote,
+        }))
     }
 
     /// The newest archived rate, e.g. while offline (FX-03); its date tells
@@ -139,7 +182,44 @@ impl Db {
         base: Currency,
         quote: Currency,
     ) -> Result<Option<RateQuote>, StorageError> {
-        self.with(|conn| pick_quote(conn, base, quote, None))
+        self.with(|conn| pick_quote(conn, base, quote, Pick::Latest))
+    }
+}
+
+/// The id of the archived rate an expense converted with: none for the
+/// same currency, the stored row for a direct rate (read in either
+/// direction), and a new [`CROSS_SOURCE`] row for a cross rate, because an
+/// expense can point at only one rate.
+pub(super) fn rate_id_for_expense(
+    conn: &Connection,
+    device_id: &str,
+    quote: &RateQuote,
+) -> Result<Option<String>, StorageError> {
+    match quote.legs.as_slice() {
+        [] => Ok(None),
+        [leg] => Ok(Some(leg.id.clone())),
+        _ => {
+            let id = new_id();
+            let now = now_ms();
+            conn.execute(
+                "INSERT INTO exchange_rate
+                     (id, base, quote, rate, rate_date, fetched_at, source,
+                      created_at, updated_at, origin_device_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)",
+                params![
+                    id,
+                    quote.rate.base().code(),
+                    quote.rate.quote().code(),
+                    quote.rate.value().to_string(),
+                    quote.rate_date,
+                    quote.fetched_at,
+                    CROSS_SOURCE,
+                    now,
+                    device_id
+                ],
+            )?;
+            Ok(Some(id))
+        }
     }
 }
 
@@ -147,7 +227,7 @@ fn pick_quote(
     conn: &Connection,
     base: Currency,
     quote: Currency,
-    date: Option<&str>,
+    pick: Pick<'_>,
 ) -> Result<Option<RateQuote>, StorageError> {
     if base == quote {
         return Ok(Some(RateQuote {
@@ -157,7 +237,7 @@ fn pick_quote(
             legs: Vec::new(),
         }));
     }
-    if let Some((rate, stored)) = pick_leg(conn, base, quote, date)? {
+    if let Some((rate, stored)) = pick_leg(conn, base, quote, pick)? {
         return Ok(Some(RateQuote {
             rate,
             rate_date: Some(stored.rate_date.clone()),
@@ -170,8 +250,8 @@ fn pick_quote(
         return Ok(None);
     }
     let (Some((to_pivot, first)), Some((from_pivot, second))) = (
-        pick_leg(conn, base, pivot, date)?,
-        pick_leg(conn, pivot, quote, date)?,
+        pick_leg(conn, base, pivot, pick)?,
+        pick_leg(conn, pivot, quote, pick)?,
     ) else {
         return Ok(None);
     };
@@ -190,23 +270,34 @@ fn pick_leg(
     conn: &Connection,
     from: Currency,
     to: Currency,
-    date: Option<&str>,
+    pick: Pick<'_>,
 ) -> Result<Option<(Rate, ExchangeRate)>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {COLUMNS} FROM exchange_rate
-         WHERE deleted_at IS NULL
+         WHERE deleted_at IS NULL AND source <> ?3
            AND ((base = ?1 AND quote = ?2) OR (base = ?2 AND quote = ?1))"
     ))?;
     let rows = statement
-        .query_map([from.code(), to.code()], rate_from_row)?
+        .query_map([from.code(), to.code(), CROSS_SOURCE], rate_from_row)?
         .collect::<Result<Vec<_>, _>>()?;
     let keyed: Vec<_> = rows
         .into_iter()
         .map(|r| ((r.rate_date.clone(), r.fetched_at), r))
         .collect();
-    let best = match date {
-        Some(date) => fx::rate_for_date(&keyed, &(date.to_string(), i64::MAX)),
-        None => keyed.iter().max_by(|a, b| a.0.cmp(&b.0)).map(|(_, r)| r),
+    let on_or_before = |date: &str| fx::rate_for_date(&keyed, &(date.to_string(), i64::MAX));
+    let best = match pick {
+        Pick::OnOrBefore(date) => on_or_before(date),
+        // Closest later day; on that day the newest fetch.
+        Pick::Near(date) => on_or_before(date).or_else(|| {
+            keyed
+                .iter()
+                .filter(|((day, _), _)| day.as_str() > date)
+                .min_by(|((a_day, a_at), _), ((b_day, b_at), _)| {
+                    a_day.cmp(b_day).then(b_at.cmp(a_at))
+                })
+                .map(|(_, r)| r)
+        }),
+        Pick::Latest => keyed.iter().max_by(|a, b| a.0.cmp(&b.0)).map(|(_, r)| r),
     };
     Ok(best.map(|stored| {
         let rate = if stored.rate.base() == from {
@@ -390,6 +481,54 @@ mod tests {
         assert_eq!(
             db.archived_quotes("frankfurter").unwrap(),
             vec![cur("JPY"), cur("USD")]
+        );
+    }
+
+    #[test]
+    fn near_falls_back_to_the_closest_later_rate_per_leg() {
+        let db = Db::open_in_memory().unwrap();
+        archive(
+            &db,
+            1,
+            &[
+                eur_to("JPY", "170", "2026-10-02"),
+                eur_to("CHF", "0.93", "2026-10-05"),
+                eur_to("CHF", "0.94", "2026-10-07"),
+            ],
+        );
+        archive(&db, 2, &[eur_to("CHF", "0.95", "2026-10-05")]);
+
+        let on_day = db
+            .rate_near(cur("JPY"), cur("EUR"), "2026-10-03")
+            .unwrap()
+            .unwrap();
+        assert!(!on_day.later);
+        assert_eq!(on_day.quote.rate_date.as_deref(), Some("2026-10-02"));
+
+        // CHF has nothing on or before the 3rd: the 5th, newest fetch.
+        let near = db
+            .rate_near(cur("EUR"), cur("CHF"), "2026-10-03")
+            .unwrap()
+            .unwrap();
+        assert!(near.later);
+        assert_eq!(near.quote.rate.value(), Decimal::from_str("0.95").unwrap());
+        assert_eq!(
+            db.rate_on(cur("EUR"), cur("CHF"), "2026-10-03").unwrap(),
+            None
+        );
+
+        // Cross rate: the JPY leg from before, the CHF leg from after.
+        let cross = db
+            .rate_near(cur("JPY"), cur("CHF"), "2026-10-03")
+            .unwrap()
+            .unwrap();
+        assert!(cross.later);
+        assert_eq!(cross.quote.legs[0].rate_date, "2026-10-02");
+        assert_eq!(cross.quote.legs[1].rate_date, "2026-10-05");
+
+        assert_eq!(
+            db.rate_near(cur("EUR"), cur("USD"), "2026-10-03").unwrap(),
+            None
         );
     }
 }

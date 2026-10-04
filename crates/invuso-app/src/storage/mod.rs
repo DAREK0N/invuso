@@ -8,8 +8,10 @@
     expect(dead_code, reason = "repositories are wired up by the M1 screens")
 )]
 
+mod categories;
 mod db;
 mod exchange_rates;
+mod expenses;
 mod group_members;
 mod groups;
 mod migrations;
@@ -20,9 +22,13 @@ mod settings;
 
 pub(crate) use db::now_ms;
 pub use db::{Db, StorageError};
-pub use exchange_rates::NewExchangeRate;
+pub use exchange_rates::{NearRate, NewExchangeRate};
+pub use expenses::{NewExpense, NewExpensePayment};
 pub use groups::NewGroup;
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;
-pub use settings::{CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, RECENT_CURRENCY_LIST};
+pub use settings::{
+    CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY,
+    LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST,
+};

@@ -4,6 +4,7 @@ use dioxus::history::{History, MemoryHistory};
 use dioxus::prelude::*;
 use dioxus::router::components::HistoryProvider;
 
+mod clock;
 mod components;
 mod format;
 mod layouts;

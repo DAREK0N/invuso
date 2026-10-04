@@ -19,6 +19,8 @@ pub enum StorageError {
     InvalidInput(&'static str),
     #[error("invalid payment method: {0}")]
     PaymentMethod(#[from] invuso_core::domain::PaymentMethodError),
+    #[error("invalid expense: {0}")]
+    Expense(#[from] invuso_core::domain::ExpenseError),
     #[error("invalid group: {0}")]
     Group(#[from] invuso_core::domain::GroupError),
     #[error("the person is already a member of the group")]

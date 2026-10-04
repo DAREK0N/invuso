@@ -2,10 +2,9 @@ use dioxus::prelude::*;
 
 use super::PlaceholderPage;
 
-#[component]
-pub fn ExpenseNew() -> Element {
-    rsx! { PlaceholderPage { title: t!("page.expense_new").to_string(), show_back: true } }
-}
+mod form;
+
+pub use form::ExpenseNew;
 
 #[component]
 pub fn ExpenseDetail(id: String) -> Element {
