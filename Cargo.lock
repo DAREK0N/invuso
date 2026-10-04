@@ -2235,6 +2235,7 @@ dependencies = [
  "rust-i18n",
  "sys-locale",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
 ]
 

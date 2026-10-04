@@ -10,6 +10,7 @@ pub struct NewPerson {
     pub name: String,
     pub color: String,
     pub is_me: bool,
+    pub note: Option<String>,
 }
 
 const COLUMNS: &str = "id, name, color, avatar_path, is_me, note";
@@ -23,7 +24,7 @@ impl Db {
             color: new.color,
             avatar_path: None,
             is_me: new.is_me,
-            note: None,
+            note: normalized_note(new.note),
         };
         self.with(|conn| insert(conn, self.device_id(), &person))?;
         Ok(person)
@@ -67,6 +68,7 @@ impl Db {
                 conn,
                 &Person {
                     name,
+                    note: normalized_note(person.note.clone()),
                     ..person.clone()
                 },
             )
@@ -77,13 +79,39 @@ impl Db {
         Ok(())
     }
 
-    /// Soft delete: the row stays for history and sync (idee.md 4).
+    /// Soft delete: the row stays for history, sync and undo (idee.md 4).
+    /// "Ich" cannot be deleted (PER-02).
     pub fn delete_person(&self, id: &PersonId) -> Result<(), StorageError> {
+        self.with(|conn| {
+            let is_me: Option<bool> = conn
+                .query_row(
+                    "SELECT is_me FROM person WHERE id = ?1 AND deleted_at IS NULL",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match is_me {
+                None => Err(StorageError::NotFound),
+                Some(true) => Err(StorageError::CannotDeleteMe),
+                Some(false) => {
+                    let now = now_ms();
+                    conn.execute(
+                        "UPDATE person SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1",
+                        params![id.as_str(), now],
+                    )?;
+                    Ok(())
+                }
+            }
+        })
+    }
+
+    /// Undoes [`Db::delete_person`] (undo toast, UI-11).
+    pub fn restore_person(&self, id: &PersonId) -> Result<(), StorageError> {
         let changed = self.with(|conn| {
-            let now = now_ms();
             Ok(conn.execute(
-                "UPDATE person SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
-                params![id.as_str(), now],
+                "UPDATE person SET deleted_at = NULL, updated_at = ?2
+                 WHERE id = ?1 AND deleted_at IS NOT NULL",
+                params![id.as_str(), now_ms()],
             )?)
         })?;
         if changed == 0 {
@@ -99,13 +127,14 @@ pub(super) fn insert(
     person: &Person,
 ) -> Result<(), StorageError> {
     conn.execute(
-        "INSERT INTO person (id, name, color, is_me, created_at, updated_at, origin_device_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+        "INSERT INTO person (id, name, color, is_me, note, created_at, updated_at, origin_device_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
         params![
             person.id.as_str(),
             person.name,
             person.color,
             person.is_me,
+            person.note,
             now_ms(),
             device_id
         ],
@@ -148,6 +177,11 @@ pub(super) fn valid_name(name: &str) -> Result<String, StorageError> {
     Ok(trimmed.to_string())
 }
 
+/// Blank notes are stored as `NULL`, so "no note" has one representation.
+fn normalized_note(note: Option<String>) -> Option<String> {
+    note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
+}
+
 fn person_from_row(row: &Row<'_>) -> rusqlite::Result<Person> {
     Ok(Person {
         id: PersonId::new(row.get::<_, String>(0)?),
@@ -168,6 +202,7 @@ mod tests {
             name: name.into(),
             color: "cerulean".into(),
             is_me,
+            note: None,
         }
     }
 
@@ -238,5 +273,65 @@ mod tests {
             db.create_person(new("   ", false)),
             Err(StorageError::InvalidInput(_))
         ));
+    }
+
+    #[test]
+    fn me_cannot_be_deleted() {
+        let db = Db::open_in_memory().unwrap();
+        let me = db.create_person(new("Me", true)).unwrap();
+        assert!(matches!(
+            db.delete_person(&me.id),
+            Err(StorageError::CannotDeleteMe)
+        ));
+        assert_eq!(db.me().unwrap(), Some(me));
+    }
+
+    #[test]
+    fn restore_undoes_delete() {
+        let db = Db::open_in_memory().unwrap();
+        let ben = db.create_person(new("Ben", false)).unwrap();
+        assert!(matches!(
+            db.restore_person(&ben.id),
+            Err(StorageError::NotFound)
+        ));
+
+        db.delete_person(&ben.id).unwrap();
+        db.restore_person(&ben.id).unwrap();
+        assert_eq!(db.person(&ben.id).unwrap(), Some(ben));
+    }
+
+    #[test]
+    fn soft_deleted_row_stays() {
+        let db = Db::open_in_memory().unwrap();
+        let ben = db.create_person(new("Ben", false)).unwrap();
+        db.delete_person(&ben.id).unwrap();
+        let deleted_at: Option<i64> = db
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT deleted_at FROM person WHERE id = ?1",
+                    [ben.id.as_str()],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert!(deleted_at.is_some());
+    }
+
+    #[test]
+    fn blank_note_is_stored_as_none() {
+        let db = Db::open_in_memory().unwrap();
+        let ben = db
+            .create_person(NewPerson {
+                note: Some("  Fahrer ".into()),
+                ..new("Ben", false)
+            })
+            .unwrap();
+        assert_eq!(ben.note.as_deref(), Some("Fahrer"));
+        db.update_person(&Person {
+            note: Some("   ".into()),
+            ..ben.clone()
+        })
+        .unwrap();
+        assert_eq!(db.person(&ben.id).unwrap().unwrap().note, None);
     }
 }

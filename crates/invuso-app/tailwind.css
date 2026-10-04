@@ -99,6 +99,55 @@
     --color-pale-oak-800: #463b20;
     --color-pale-oak-900: #231e10;
     --color-pale-oak-950: #18150b;
+
+    /* Further Meduso scales, used for person colors (idee.md 3.2). */
+    --color-thistle-50: #f6eff2;
+    --color-thistle-100: #ecdfe6;
+    --color-thistle-200: #d9bfcc;
+    --color-thistle-300: #c69fb3;
+    --color-thistle-400: #b47e9a;
+    --color-thistle-500: #a15e81;
+    --color-thistle-600: #814b67;
+    --color-thistle-700: #60394d;
+    --color-thistle-800: #402633;
+    --color-thistle-900: #20131a;
+    --color-thistle-950: #160d12;
+
+    --color-dusty-grape-50: #f0f1f4;
+    --color-dusty-grape-100: #e1e2ea;
+    --color-dusty-grape-200: #c4c5d4;
+    --color-dusty-grape-300: #a6a8bf;
+    --color-dusty-grape-400: #898ba9;
+    --color-dusty-grape-500: #6b6e94;
+    --color-dusty-grape-600: #565876;
+    --color-dusty-grape-700: #404259;
+    --color-dusty-grape-800: #2b2c3b;
+    --color-dusty-grape-900: #15161e;
+    --color-dusty-grape-950: #0f0f15;
+
+    --color-ash-grey-50: #f3f5f0;
+    --color-ash-grey-100: #e7ebe0;
+    --color-ash-grey-200: #cfd6c2;
+    --color-ash-grey-300: #b8c2a3;
+    --color-ash-grey-400: #a0ad85;
+    --color-ash-grey-500: #889966;
+    --color-ash-grey-600: #6d7a52;
+    --color-ash-grey-700: #525c3d;
+    --color-ash-grey-800: #363d29;
+    --color-ash-grey-900: #1b1f14;
+    --color-ash-grey-950: #13150e;
+
+    --color-slate-grey-50: #f0f3f4;
+    --color-slate-grey-100: #e2e8e9;
+    --color-slate-grey-200: #c5d1d3;
+    --color-slate-grey-300: #a8babd;
+    --color-slate-grey-400: #8ba3a7;
+    --color-slate-grey-500: #6e8c91;
+    --color-slate-grey-600: #587074;
+    --color-slate-grey-700: #425457;
+    --color-slate-grey-800: #2c383a;
+    --color-slate-grey-900: #161c1d;
+    --color-slate-grey-950: #0f1414;
 }
 
 :root {
@@ -171,6 +220,19 @@ html:has(#invuso-sheet-backdrop) {
 
 .app-content-inset {
     padding-bottom: calc(6.5rem + var(--safe-area-bottom));
+}
+
+/* Toasts float just above the BottomNav (4rem high, 0.5rem off the edge). */
+.app-toast-bottom {
+    bottom: calc(5.25rem + var(--safe-area-bottom));
+}
+
+/* Long-press opens our own menu (UI-09), not text selection or the
+   WebView's callout. */
+.no-callout {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .app-focus-content-inset {

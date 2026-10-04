@@ -14,6 +14,10 @@ common:
   close: "Close"
   next: "Next"
   save: "Save"
+  cancel: "Cancel"
+  edit: "Edit"
+  delete: "Delete"
+  undo: "Undo"
 
 add_sheet:
   title: "Add"
@@ -50,6 +54,7 @@ page:
   rate_history: "Rate history"
   settings: "Settings"
   settings_people: "People"
+  person_detail: "Person"
   settings_payment_methods: "Payment methods"
   settings_categories: "Categories"
   settings_appearance: "Appearance"
@@ -93,3 +98,38 @@ language:
   fr: "French"
   es: "Spanish"
   it: "Italian"
+
+settings:
+  manage_section: "Manage"
+
+people:
+  add: "Add person"
+  me_badge: "Me"
+  long_press_hint: "Long-press to edit or delete."
+  empty_title: "No people yet"
+  empty_text: "Add the people you share expenses with."
+  load_error_title: "People cannot be loaded"
+  new_title: "New person"
+  edit_title: "Edit person"
+  name_placeholder: "Person's name"
+  color: "Color"
+  note: "Note"
+  note_placeholder: "Optional, e.g. room number"
+  no_note: "No note"
+  me_not_deletable: "“Me” cannot be deleted."
+  delete_title: "Delete person?"
+  delete_text: "%{name} will disappear from the list. You can undo this right afterwards."
+  delete_error: "Deleting failed."
+  deleted: "%{name} deleted"
+  restore_error: "Restoring failed."
+  not_found_title: "Person not found"
+  not_found_text: "This person no longer exists."
+
+color:
+  cerulean: "Petrol"
+  muted_teal: "Green"
+  pale_oak: "Sand"
+  thistle: "Rose"
+  dusty_grape: "Violet"
+  ash_grey: "Olive"
+  slate_grey: "Slate"

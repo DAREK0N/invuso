@@ -19,6 +19,8 @@ pub enum StorageError {
     InvalidInput(&'static str),
     #[error("record not found")]
     NotFound,
+    #[error("\"Ich\" cannot be deleted")]
+    CannotDeleteMe,
     #[error("database lock poisoned")]
     Poisoned,
 }

@@ -1,13 +1,15 @@
 use dioxus::prelude::*;
 
 use crate::Route;
-use crate::components::{BottomNav, RouterBackTarget};
+use crate::components::{BottomNav, RouterBackTarget, ToastHost};
 
-/// Frame for all main screens: content plus the floating BottomNav.
+/// Frame for all main screens: content plus the floating BottomNav and the
+/// toast above it.
 #[component]
 pub fn AppShell() -> Element {
     rsx! {
         main { class: "min-h-screen app-content-inset", Outlet::<Route> {} }
+        ToastHost {}
         BottomNav {}
         RouterBackTarget {}
     }

@@ -2,14 +2,13 @@ use dioxus::prelude::*;
 
 use super::PlaceholderPage;
 
+mod people;
+mod person_detail;
 mod profile;
 
+pub use people::SettingsPeople;
+pub use person_detail::PersonDetail;
 pub use profile::Settings;
-
-#[component]
-pub fn SettingsPeople() -> Element {
-    rsx! { PlaceholderPage { title: t!("page.settings_people").to_string(), show_back: true } }
-}
 
 #[component]
 pub fn SettingsPaymentMethods() -> Element {

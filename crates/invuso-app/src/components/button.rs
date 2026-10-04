@@ -8,9 +8,11 @@ pub enum ButtonVariant {
     Primary,
     /// Secondary actions next to a primary one.
     Secondary,
+    /// Destructive actions such as deleting.
+    Danger,
 }
 
-/// Large, touch-friendly button (UI-03, so far Primary and Secondary).
+/// Large, touch-friendly button (UI-03, so far Primary, Secondary, Danger).
 /// `class` adds layout classes such as `w-full` or `flex-1`.
 #[component]
 pub fn Button(
@@ -25,6 +27,7 @@ pub fn Button(
         ButtonVariant::Secondary => {
             "bg-jet-black-800 text-floral-white-100 active:bg-jet-black-700"
         }
+        ButtonVariant::Danger => "bg-watermelon-700 text-floral-white-50 active:bg-watermelon-800",
     };
 
     rsx! {

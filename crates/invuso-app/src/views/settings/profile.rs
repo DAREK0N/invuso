@@ -4,10 +4,13 @@ use dioxus_free_icons::{
     icons::ld_icons::{LdChevronRight, LdCircleAlert, LdCircleUser},
 };
 
+use crate::Route;
 use crate::components::{
-    BottomSheet, Button, CurrencyPicker, EmptyState, LanguagePicker, TextField, TopBar,
+    AvatarEntry, AvatarStack, BottomSheet, Button, CurrencyPicker, EmptyState, ErrorBanner,
+    LanguagePicker, TextField, TopBar,
 };
 use crate::preferences::language_name;
+use crate::state::DataRevision;
 use crate::storage::{Db, Profile};
 
 /// Which profile value a bottom sheet is editing.
@@ -18,17 +21,20 @@ enum Editing {
     TargetLanguage,
 }
 
-/// Settings start page. So far only the profile section: name of "Ich",
-/// home currency and target language (SET-01..03).
+/// Settings start page: the profile (name of "Ich", home currency, target
+/// language; SET-01..03) and links to the management subpages (SET-06).
 #[component]
 pub fn Settings() -> Element {
     let db = use_context::<Db>();
     let mut profile = use_signal(|| db.profile().map_err(|e| e.to_string()));
     let mut editing = use_signal(|| None::<Editing>);
+    let mut revision = use_context::<DataRevision>();
 
     let on_saved = move |saved: Profile| {
         profile.set(Ok(Some(saved)));
         editing.set(None);
+        // The name of "Ich" also shows in the people list.
+        revision.bump();
     };
     let on_close = move |_| editing.set(None);
 
@@ -86,6 +92,50 @@ pub fn Settings() -> Element {
                     None => rsx! {},
                 }
             },
+        }
+        ManageSection {}
+    }
+}
+
+/// Links to the management subpages; so far only people (SET-06).
+#[component]
+fn ManageSection() -> Element {
+    let db = use_context::<Db>();
+    let revision = use_context::<DataRevision>();
+    let nav = use_navigator();
+    let people = use_memo(move || {
+        revision.track();
+        db.people()
+            .map(|people| {
+                people
+                    .into_iter()
+                    .map(|person| AvatarEntry {
+                        name: person.name,
+                        color: person.color,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            // The people page shows the error; here the row just stays bare.
+            .unwrap_or_default()
+    });
+
+    rsx! {
+        section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",
+            h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
+                {t!("settings.manage_section").to_string()}
+            }
+            div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                button {
+                    class: "flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left active:bg-jet-black-800 transition-colors ease-apple",
+                    r#type: "button",
+                    onclick: move |_| {
+                        nav.push(Route::SettingsPeople {});
+                    },
+                    span { class: "flex-1 text-base text-floral-white-50", {t!("page.settings_people").to_string()} }
+                    AvatarStack { people: people() }
+                    Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                }
+            }
         }
     }
 }
@@ -169,8 +219,8 @@ fn HomeCurrencySheet(
 
     rsx! {
         BottomSheet { title: t!("profile.home_currency").to_string(), on_close,
-            div { class: "max-h-[70vh] overflow-y-auto overscroll-contain px-3 pt-2",
-                SheetError { error: error() }
+            div { class: "flex max-h-[70vh] flex-col gap-2 overflow-y-auto overscroll-contain px-3 pt-2",
+                ErrorBanner { error: error() }
                 CurrencyPicker {
                     selected: profile.home_currency,
                     on_select: move |home_currency| {
@@ -196,8 +246,8 @@ fn TargetLanguageSheet(
 
     rsx! {
         BottomSheet { title: t!("profile.target_language").to_string(), on_close,
-            div { class: "max-h-[70vh] overflow-y-auto overscroll-contain px-3 pt-2",
-                SheetError { error: error() }
+            div { class: "flex max-h-[70vh] flex-col gap-2 overflow-y-auto overscroll-contain px-3 pt-2",
+                ErrorBanner { error: error() }
                 LanguagePicker {
                     selected: profile.target_language.clone(),
                     on_select: move |target_language| {
@@ -207,17 +257,6 @@ fn TargetLanguageSheet(
                         }
                     },
                 }
-            }
-        }
-    }
-}
-
-#[component]
-fn SheetError(error: Option<String>) -> Element {
-    rsx! {
-        if let Some(error) = error {
-            p { class: "mb-2 rounded-2xl bg-watermelon-900 px-4 py-3 text-sm text-watermelon-200", role: "alert",
-                "{error}"
             }
         }
     }

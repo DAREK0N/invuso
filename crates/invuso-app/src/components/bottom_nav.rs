@@ -31,6 +31,7 @@ pub fn BottomNav() -> Element {
         route,
         Route::Settings {}
             | Route::SettingsPeople {}
+            | Route::PersonDetail { .. }
             | Route::SettingsPaymentMethods {}
             | Route::SettingsCategories {}
             | Route::SettingsAppearance {}

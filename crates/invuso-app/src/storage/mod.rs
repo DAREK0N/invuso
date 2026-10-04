@@ -15,4 +15,5 @@ mod profile;
 mod settings;
 
 pub use db::{Db, StorageError};
+pub use people::NewPerson;
 pub use profile::Profile;

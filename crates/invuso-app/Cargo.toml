@@ -14,6 +14,8 @@ rusqlite.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 sys-locale.workspace = true
+# Toast timer; Dioxus mobile runs inside a tokio runtime.
+tokio.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Only to ask Android for the app's private files directory (platform/).

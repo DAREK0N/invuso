@@ -1,5 +1,5 @@
 //! Choices and defaults for the profile settings (SET-01, SET-02,
-//! idee.md 7.5).
+//! idee.md 7.5) and for people (PER-01).
 
 use invuso_core::domain::Currency;
 
@@ -11,6 +11,50 @@ pub const TARGET_LANGUAGES: [&str; 6] = ["de", "en", "ja", "fr", "es", "it"];
 
 /// Suggested when the system language is not a supported target language.
 const FALLBACK_TARGET_LANGUAGE: &str = "de";
+
+/// Colors a person can have, as design-token scale names (idee.md 3.2).
+/// The positive/negative scales are left out so an avatar never reads as
+/// a balance.
+pub const PERSON_COLORS: [&str; 7] = [
+    "cerulean",
+    "muted-teal",
+    "pale-oak",
+    "thistle",
+    "dusty-grape",
+    "ash-grey",
+    "slate-grey",
+];
+
+/// Preselected color for a new person: the one fewest people have, ties
+/// broken by palette order, so a group of people starts out distinguishable.
+pub fn suggested_person_color<'a>(used: impl IntoIterator<Item = &'a str>) -> &'static str {
+    let mut counts = [0_usize; PERSON_COLORS.len()];
+    for color in used {
+        if let Some(index) = PERSON_COLORS.iter().position(|&c| c == color) {
+            counts[index] += 1;
+        }
+    }
+    let (index, _) = counts
+        .iter()
+        .enumerate()
+        .min_by_key(|&(index, count)| (*count, index))
+        .unwrap_or((0, &0));
+    PERSON_COLORS[index]
+}
+
+/// Display name of a person color in the current app language.
+pub fn color_name(color: &str) -> String {
+    match color {
+        "cerulean" => t!("color.cerulean").to_string(),
+        "muted-teal" => t!("color.muted_teal").to_string(),
+        "pale-oak" => t!("color.pale_oak").to_string(),
+        "thistle" => t!("color.thistle").to_string(),
+        "dusty-grape" => t!("color.dusty_grape").to_string(),
+        "ash-grey" => t!("color.ash_grey").to_string(),
+        "slate-grey" => t!("color.slate_grey").to_string(),
+        other => other.to_string(),
+    }
+}
 
 /// Suggested home currency during onboarding.
 pub fn default_home_currency() -> Currency {
@@ -65,6 +109,21 @@ mod tests {
         assert_eq!(suggested_target_language(Some("zh-Hans-CN")), "de");
         assert_eq!(suggested_target_language(Some("")), "de");
         assert_eq!(suggested_target_language(None), "de");
+    }
+
+    #[test]
+    fn suggests_least_used_person_color() {
+        assert_eq!(suggested_person_color([]), "cerulean");
+        assert_eq!(suggested_person_color(["cerulean"]), "muted-teal");
+        assert_eq!(
+            suggested_person_color(["cerulean", "pale-oak", "unknown"]),
+            "muted-teal"
+        );
+        let all_once = PERSON_COLORS;
+        assert_eq!(suggested_person_color(all_once), "cerulean");
+        let mut all_but_last_twice = PERSON_COLORS.to_vec();
+        all_but_last_twice.extend(&PERSON_COLORS[..PERSON_COLORS.len() - 1]);
+        assert_eq!(suggested_person_color(all_but_last_twice), "slate-grey");
     }
 
     #[test]

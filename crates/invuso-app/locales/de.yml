@@ -14,6 +14,10 @@ common:
   close: "Schließen"
   next: "Weiter"
   save: "Speichern"
+  cancel: "Abbrechen"
+  edit: "Bearbeiten"
+  delete: "Löschen"
+  undo: "Rückgängig"
 
 add_sheet:
   title: "Hinzufügen"
@@ -50,6 +54,7 @@ page:
   rate_history: "Kurs-Archiv"
   settings: "Einstellungen"
   settings_people: "Personen"
+  person_detail: "Person"
   settings_payment_methods: "Zahlungsmethoden"
   settings_categories: "Kategorien"
   settings_appearance: "Darstellung"
@@ -93,3 +98,38 @@ language:
   fr: "Französisch"
   es: "Spanisch"
   it: "Italienisch"
+
+settings:
+  manage_section: "Verwaltung"
+
+people:
+  add: "Person hinzufügen"
+  me_badge: "Ich"
+  long_press_hint: "Lange drücken für Bearbeiten und Löschen."
+  empty_title: "Noch keine Personen"
+  empty_text: "Lege Personen an, mit denen du Ausgaben teilst."
+  load_error_title: "Personen können nicht geladen werden"
+  new_title: "Neue Person"
+  edit_title: "Person bearbeiten"
+  name_placeholder: "Name der Person"
+  color: "Farbe"
+  note: "Notiz"
+  note_placeholder: "Optional, z. B. Zimmernummer"
+  no_note: "Keine Notiz"
+  me_not_deletable: "„Ich“ kann nicht gelöscht werden."
+  delete_title: "Person löschen?"
+  delete_text: "%{name} verschwindet aus der Liste. Du kannst das direkt danach rückgängig machen."
+  delete_error: "Löschen fehlgeschlagen."
+  deleted: "%{name} gelöscht"
+  restore_error: "Wiederherstellen fehlgeschlagen."
+  not_found_title: "Person nicht gefunden"
+  not_found_text: "Diese Person gibt es nicht mehr."
+
+color:
+  cerulean: "Petrol"
+  muted_teal: "Grün"
+  pale_oak: "Sand"
+  thistle: "Rosé"
+  dusty_grape: "Violett"
+  ash_grey: "Oliv"
+  slate_grey: "Schiefer"

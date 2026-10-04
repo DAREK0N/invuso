@@ -8,6 +8,7 @@ mod components;
 mod layouts;
 mod platform;
 mod preferences;
+mod state;
 mod storage;
 mod views;
 
@@ -63,6 +64,8 @@ pub enum Route {
         Settings {},
         #[route("/settings/people")]
         SettingsPeople {},
+        #[route("/settings/people/:id")]
+        PersonDetail { id: String },
         #[route("/settings/payment-methods")]
         SettingsPaymentMethods {},
         #[route("/settings/categories")]
@@ -121,12 +124,14 @@ fn App() -> Element {
     }
 }
 
-/// Provides the database to every screen and starts the router on the
-/// screen [`start_route`] picks.
+/// Provides the database and the shared state to every screen and starts
+/// the router on the screen [`start_route`] picks.
 #[component]
 fn AppRoot(db: Db) -> Element {
     let has_me = use_hook(|| db.me().map(|me| me.is_some()).map_err(|e| e.to_string()));
     use_context_provider(|| db);
+    use_context_provider(state::DataRevision::new);
+    use_context_provider(state::Toaster::new);
 
     match has_me {
         // The router has no hook for its very first route, so the history it
