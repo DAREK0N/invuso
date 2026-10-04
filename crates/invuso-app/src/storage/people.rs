@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use invuso_core::domain::{Person, PersonId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -52,6 +54,23 @@ impl Db {
             let people = statement
                 .query_map([], person_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
+            Ok(people)
+        })
+    }
+
+    /// The people with these ids, also those deleted since, so figures
+    /// that still count them keep a name (idee.md 1.4).
+    pub fn people_any<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a PersonId>,
+    ) -> Result<BTreeMap<PersonId, Person>, StorageError> {
+        self.with(|conn| {
+            let mut people = BTreeMap::new();
+            for id in ids {
+                if let Some(person) = person_any(conn, id)? {
+                    people.insert(id.clone(), person);
+                }
+            }
             Ok(people)
         })
     }

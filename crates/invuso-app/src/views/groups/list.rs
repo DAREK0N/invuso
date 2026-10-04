@@ -3,26 +3,34 @@ use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{LdChevronRight, LdCircleAlert, LdPencil, LdPlus, LdTrash2, LdUsers},
 };
-use invuso_core::domain::Group;
+use invuso_core::domain::{Group, Money};
 
-use super::{DeleteGroupSheet, group_subtitle};
+use super::DeleteGroupSheet;
 use crate::Route;
 use crate::components::{
-    AvatarEntry, AvatarStack, BottomSheet, Button, EmptyState, GroupIcon, MenuRow, TopBar,
+    AvatarEntry, AvatarStack, BottomSheet, Button, EmptyState, GroupIcon, MenuRow, MoneyText,
+    TopBar,
 };
+use crate::preferences::period_text;
+use crate::services::summary::group_summary;
 use crate::state::DataRevision;
 use crate::storage::{Db, StorageError};
 
-/// A group with the avatars of its members, as the list shows it.
+/// A group with its total, the own balance and the avatars of its
+/// members, as the list shows it.
 #[derive(Debug, Clone, PartialEq)]
 struct GroupEntry {
     group: Group,
     members: Vec<AvatarEntry>,
+    /// Total spent in the base currency (GRP-10).
+    total: Money,
+    /// Balance of "Ich", if a member or still part of an expense (PER-02).
+    own: Option<Money>,
 }
 
-/// `/groups`: every group with icon, color and member avatars (GRP-01,
-/// GRP-02 without totals and balance). Tap opens the group, long-press a
-/// menu (UI-09).
+/// `/groups`: every group with icon, color, total, own balance and member
+/// avatars (GRP-01, GRP-02). Tap opens the group, long-press a menu
+/// (UI-09).
 #[component]
 pub fn GroupList() -> Element {
     let db = use_context::<Db>();
@@ -102,9 +110,15 @@ pub fn GroupList() -> Element {
 }
 
 fn load(db: &Db) -> Result<Vec<GroupEntry>, StorageError> {
+    let me = db.me()?.map(|person| person.id);
     db.groups()?
         .into_iter()
         .map(|group| {
+            let summary = group_summary(db, &group)?;
+            let own = me
+                .as_ref()
+                .and_then(|me| summary.people.get(me))
+                .map(|totals| Money::new(totals.balance, group.base_currency));
             let members = db
                 .group_members(&group.id)?
                 .into_iter()
@@ -113,17 +127,28 @@ fn load(db: &Db) -> Result<Vec<GroupEntry>, StorageError> {
                     color: member.person.color,
                 })
                 .collect();
-            Ok(GroupEntry { group, members })
+            Ok(GroupEntry {
+                group,
+                members,
+                total: summary.total,
+                own,
+            })
         })
         .collect()
 }
 
-/// List row: group icon, name, base currency and period, member avatars.
+/// List row: group icon, name, total and period, own balance and member
+/// avatars.
 #[component]
 fn GroupRow(entry: GroupEntry, on_long_press: EventHandler<Group>) -> Element {
     let nav = use_navigator();
-    let GroupEntry { group, members } = entry;
-    let subtitle = group_subtitle(&group);
+    let GroupEntry {
+        group,
+        members,
+        total,
+        own,
+    } = entry;
+    let period = period_text(group.start_date.as_deref(), group.end_date.as_deref());
     let id = group.id.as_str().to_string();
 
     rsx! {
@@ -143,9 +168,19 @@ fn GroupRow(entry: GroupEntry, on_long_press: EventHandler<Group>) -> Element {
             GroupIcon { icon: group.icon.clone(), color: group.color.clone() }
             span { class: "flex min-w-0 flex-1 flex-col",
                 span { class: "truncate text-base text-floral-white-50", "{group.name}" }
-                span { class: "truncate text-sm text-floral-white-400", "{subtitle}" }
+                span { class: "flex min-w-0 items-center gap-1 text-sm text-floral-white-400",
+                    MoneyText { amount: total }
+                    if let Some(period) = period {
+                        span { class: "truncate", "· {period}" }
+                    }
+                }
             }
-            AvatarStack { people: members, max: 3 }
+            span { class: "flex shrink-0 flex-col items-end gap-1",
+                if let Some(own) = own {
+                    MoneyText { amount: own, signed: true, class: "text-sm font-semibold" }
+                }
+                AvatarStack { people: members, max: 3 }
+            }
             Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
         }
     }

@@ -369,31 +369,93 @@ impl Db {
 
     /// One expense with its payments and split.
     pub fn expense(&self, id: &ExpenseId) -> Result<Option<Expense>, StorageError> {
-        self.with(|conn| {
-            let row = conn
-                .query_row(
-                    "SELECT group_id, title, category_id, occurred_at, total_minor, currency,
-                            fx_rate_id, total_base_minor, base_currency, split_mode, source
-                     FROM expense WHERE id = ?1 AND deleted_at IS NULL",
-                    [id.as_str()],
-                    |row| {
-                        Ok((
-                            row.get::<_, Option<String>>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                            row.get::<_, String>(3)?,
-                            row.get::<_, i64>(4)?,
-                            row.get::<_, String>(5)?,
-                            row.get::<_, Option<String>>(6)?,
-                            row.get::<_, i64>(7)?,
-                            row.get::<_, String>(8)?,
-                            row.get::<_, String>(9)?,
-                            row.get::<_, String>(10)?,
-                        ))
-                    },
-                )
-                .optional()?;
-            let Some((
+        self.with(|conn| Ok(load_expenses(conn, "e.id = ?1", id.as_str())?.pop()))
+    }
+
+    /// Every expense of the group with payments and split, for its totals
+    /// and balances (GRP-10..14). Three queries, however many expenses.
+    pub fn group_expenses(&self, group: &GroupId) -> Result<Vec<Expense>, StorageError> {
+        self.with(|conn| load_expenses(conn, "e.group_id = ?1", group.as_str()))
+    }
+}
+
+/// Loads the expenses matching `filter` (a condition on `expense e` with
+/// one parameter) with their payments and splits, oldest first.
+fn load_expenses(
+    conn: &Connection,
+    filter: &str,
+    param: &str,
+) -> Result<Vec<Expense>, StorageError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT e.id, e.group_id, e.title, e.category_id, e.occurred_at, e.total_minor,
+                e.currency, e.fx_rate_id, e.total_base_minor, e.base_currency, e.split_mode,
+                e.source
+         FROM expense e WHERE {filter} AND e.deleted_at IS NULL
+         ORDER BY e.occurred_date, substr(e.occurred_at, 12, 8), e.created_at, e.id"
+    ))?;
+    let rows = statement
+        .query_map([param], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut statement = conn.prepare(&format!(
+        "SELECT s.expense_id, s.person_id, s.weight, s.percent, s.amount_minor
+         FROM expense_share s JOIN expense e ON e.id = s.expense_id
+         WHERE {filter} AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+         ORDER BY s.person_id"
+    ))?;
+    let mut shares: BTreeMap<String, Vec<ShareRow>> = BTreeMap::new();
+    for row in statement.query_map([param], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            (row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?),
+        ))
+    })? {
+        let (expense, share) = row?;
+        shares.entry(expense).or_default().push(share);
+    }
+
+    let mut statement = conn.prepare(&format!(
+        "SELECT p.expense_id, p.person_id, p.payment_method_id, p.amount_minor
+         FROM expense_payment p JOIN expense e ON e.id = p.expense_id
+         WHERE {filter} AND e.deleted_at IS NULL AND p.deleted_at IS NULL
+         ORDER BY p.created_at, p.id"
+    ))?;
+    // Amounts stay bare until the expense's currency is known.
+    let mut payments: BTreeMap<String, Vec<(PersonId, Option<PaymentMethodId>, i64)>> =
+        BTreeMap::new();
+    for row in statement.query_map([param], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            (
+                PersonId::new(row.get::<_, String>(1)?),
+                row.get::<_, Option<String>>(2)?.map(PaymentMethodId::new),
+                row.get::<_, i64>(3)?,
+            ),
+        ))
+    })? {
+        let (expense, payment) = row?;
+        payments.entry(expense).or_default().push(payment);
+    }
+
+    rows.into_iter()
+        .map(
+            |(
+                id,
                 group_id,
                 title,
                 category_id,
@@ -405,55 +467,35 @@ impl Db {
                 base_currency,
                 split_mode,
                 source,
-            )) = row
-            else {
-                return Ok(None);
-            };
-            let currency = stored_currency(&currency)?;
-            let base_currency = stored_currency(&base_currency)?;
-
-            let mut statement = conn.prepare(
-                "SELECT person_id, weight, percent, amount_minor FROM expense_share
-                 WHERE expense_id = ?1 AND deleted_at IS NULL ORDER BY person_id",
-            )?;
-            let shares = statement
-                .query_map([id.as_str()], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                })?
-                .collect::<Result<Vec<ShareRow>, _>>()?;
-            let split = stored_split(&split_mode, shares)?;
-
-            let mut statement = conn.prepare(
-                "SELECT person_id, payment_method_id, amount_minor FROM expense_payment
-                 WHERE expense_id = ?1 AND deleted_at IS NULL ORDER BY created_at, id",
-            )?;
-            let payments = statement
-                .query_map([id.as_str()], |row| {
-                    Ok(ExpensePayment {
-                        person_id: PersonId::new(row.get::<_, String>(0)?),
-                        payment_method_id: row
-                            .get::<_, Option<String>>(1)?
-                            .map(PaymentMethodId::new),
-                        amount: Money::new(row.get(2)?, currency),
+            )| {
+                let currency = stored_currency(&currency)?;
+                let split = stored_split(&split_mode, shares.remove(&id).unwrap_or_default())?;
+                let payments = payments
+                    .remove(&id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(person_id, payment_method_id, amount)| ExpensePayment {
+                        person_id,
+                        payment_method_id,
+                        amount: Money::new(amount, currency),
                     })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-
-            Ok(Some(Expense {
-                id: id.clone(),
-                group_id: group_id.map(GroupId::new),
-                title,
-                category_id: category_id.map(CategoryId::new),
-                occurred_at,
-                total: Money::new(total_minor, currency),
-                fx_rate_id,
-                total_in_base: Money::new(total_base_minor, base_currency),
-                split,
-                source: ExpenseSource::from_code(&source)?,
-                payments,
-            }))
-        })
-    }
+                    .collect();
+                Ok(Expense {
+                    id: ExpenseId::new(id),
+                    group_id: group_id.map(GroupId::new),
+                    title,
+                    category_id: category_id.map(CategoryId::new),
+                    occurred_at,
+                    total: Money::new(total_minor, currency),
+                    fx_rate_id,
+                    total_in_base: Money::new(total_base_minor, stored_currency(&base_currency)?),
+                    split,
+                    source: ExpenseSource::from_code(&source)?,
+                    payments,
+                })
+            },
+        )
+        .collect()
 }
 
 /// Checks what needs no database and returns the trimmed title.

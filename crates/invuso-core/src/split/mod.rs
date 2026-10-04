@@ -10,12 +10,14 @@ mod balance;
 mod items;
 mod mode;
 mod settle;
+mod summary;
 
 pub use allocate::{allocate, rescale};
 pub use balance::{ExpenseEntry, PersonTotals, SettlementEntry, balances};
 pub use items::{ItemLine, split_by_items};
 pub use mode::{SplitMode, split};
 pub use settle::{Transfer, simplify_debts};
+pub use summary::{GroupSummary, summarize};
 
 use thiserror::Error;
 

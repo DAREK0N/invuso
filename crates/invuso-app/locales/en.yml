@@ -133,6 +133,10 @@ people:
   restore_error: "Restoring failed."
   not_found_title: "Person not found"
   not_found_text: "This person no longer exists."
+  groups: "Groups"
+  total_balance: "Total balance"
+  no_groups: "Not in any group."
+  balances_error_title: "Balances cannot be calculated"
 
 color:
   cerulean: "Petrol"
@@ -236,6 +240,24 @@ group:
   deleted: "%{name} deleted"
   restore_error: "Restoring failed."
   expenses: "Expenses"
+
+summary:
+  total: "Total spent"
+  you_get: "You get %{amount}"
+  you_owe: "You owe %{amount}"
+  you_even: "You are settled up"
+  skipped: "Not counted because stored in another base currency: %{count}"
+  no_expenses: "No expenses yet. Once there are some, you will see here who owes whom."
+  who_owes_whom: "Who owes whom"
+  all_settled: "Everyone is settled up."
+  paid_most: "Who paid most"
+  owes_most: "Who owes most"
+  per_person: "Per person"
+  paid: "Paid %{amount}"
+  consumed: "Share %{amount}"
+  former_member: "no longer in the group"
+  transfer: "%{from} to %{to}"
+  load_error_title: "Overview cannot be calculated"
 
 member:
   add: "Add person"

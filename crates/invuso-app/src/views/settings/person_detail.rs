@@ -1,22 +1,24 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdCircleAlert, LdPencil, LdTrash2, LdUserX},
+    icons::ld_icons::{LdChevronRight, LdCircleAlert, LdPencil, LdTrash2, LdUserX},
 };
 use invuso_core::domain::PersonId;
 
 use super::people::{DeletePersonSheet, PersonFormSheet};
 use crate::Route;
 use crate::components::{
-    Avatar, AvatarSize, Button, ButtonVariant, EmptyState, TopBar, color_classes,
+    Avatar, AvatarSize, Button, ButtonVariant, CardSection, EmptyState, ErrorBanner, GroupIcon,
+    MoneyText, TopBar, color_classes,
 };
 use crate::preferences::color_name;
+use crate::services::summary::{PersonGroupBalance, person_balances, total_by_currency};
 use crate::state::DataRevision;
 use crate::storage::Db;
 
-/// `/settings/people/:id`: name, color and note of a person with edit and
-/// delete (PER-01, PER-03 without groups and balances, which come with the
-/// group overview).
+/// `/settings/people/:id`: name, color and note of a person, the groups with
+/// the person's balance in each and in total, edit and delete (PER-01,
+/// PER-03 without expenses and preferred payment methods).
 #[component]
 pub fn PersonDetail(id: String) -> Element {
     let db = use_context::<Db>();
@@ -27,9 +29,15 @@ pub fn PersonDetail(id: String) -> Element {
     let mut delete_error = use_signal(|| None::<String>);
 
     let person_id = use_memo(use_reactive!(|id| PersonId::new(id)));
+    let balances_db = db.clone();
     let person = use_memo(move || {
         revision.track();
         db.person(&person_id()).map_err(|e| e.to_string())
+    });
+    let balances = use_memo(move || {
+        revision.track();
+        person_balances(&balances_db, &person_id())
+            .map_err(|e| format!("{} {e}", t!("people.balances_error_title")))
     });
 
     rsx! {
@@ -73,6 +81,10 @@ pub fn PersonDetail(id: String) -> Element {
                                 None => rsx! { span { class: "text-floral-white-500", {t!("people.no_note").to_string()} } },
                             }
                         }
+                    }
+                    match &*balances.read() {
+                        Ok(balances) => rsx! { GroupBalances { balances: balances.clone() } },
+                        Err(message) => rsx! { ErrorBanner { error: Some(message.clone()) } },
                     }
                     div { class: "flex flex-col gap-3 pt-2",
                         Button {
@@ -136,6 +148,53 @@ fn DetailRow(label: String, children: Element) -> Element {
         div { class: "flex min-h-14 flex-col justify-center gap-0.5 border-b border-jet-black-800 px-4 py-2 last:border-b-0",
             span { class: "text-sm text-floral-white-400", "{label}" }
             span { class: "text-base text-floral-white-50", {children} }
+        }
+    }
+}
+
+/// The person's balance in each group and summed per currency (PER-03).
+#[component]
+fn GroupBalances(balances: Vec<PersonGroupBalance>) -> Element {
+    let nav = use_navigator();
+    let totals = total_by_currency(&balances);
+
+    rsx! {
+        CardSection { title: t!("people.groups").to_string(),
+            if balances.is_empty() {
+                p { class: "px-4 py-4 text-base text-floral-white-300", {t!("people.no_groups").to_string()} }
+            }
+            for entry in balances {
+                button {
+                    key: "{entry.group.id.as_str()}",
+                    class: "flex min-h-16 w-full items-center gap-3 border-b border-jet-black-800 px-4 py-2 text-left last:border-b-0 active:bg-jet-black-800 transition-colors ease-apple",
+                    r#type: "button",
+                    onclick: {
+                        let id = entry.group.id.as_str().to_string();
+                        move |_| {
+                            nav.push(Route::GroupOverview { id: id.clone() });
+                        }
+                    },
+                    GroupIcon { icon: entry.group.icon.clone(), color: entry.group.color.clone() }
+                    span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", "{entry.group.name}" }
+                    MoneyText { amount: entry.balance(), signed: true, class: "text-base font-semibold" }
+                    Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                }
+            }
+        }
+        if !totals.is_empty() {
+            div { class: "flex min-h-14 items-center gap-3 rounded-2xl border border-jet-black-800 bg-jet-black-900 px-4 py-2",
+                span { class: "flex-1 text-base text-floral-white-50", {t!("people.total_balance").to_string()} }
+                span { class: "flex flex-col items-end",
+                    for total in totals {
+                        MoneyText {
+                            key: "{total.currency().code()}",
+                            amount: total,
+                            signed: true,
+                            class: "text-base font-semibold",
+                        }
+                    }
+                }
+            }
         }
     }
 }

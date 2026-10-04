@@ -1,22 +1,40 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdCircleAlert, LdTrash2},
+    icons::ld_icons::{LdArrowRight, LdCircleAlert, LdPlus, LdTrash2, LdTriangleAlert},
 };
-use invuso_core::domain::{GroupId, GroupMember};
+use invuso_core::domain::{Group, GroupId, GroupMember, Money, Person, PersonId};
+use invuso_core::split::GroupSummary;
 
 use super::form::GroupNotFound;
 use super::{DeleteGroupSheet, group_subtitle};
 use crate::Route;
 use crate::components::{
-    AvatarEntry, AvatarStack, Button, ButtonVariant, EmptyState, GroupIcon, LinkRow, TopBar,
+    Avatar, AvatarEntry, AvatarSize, AvatarStack, Button, ButtonVariant, CardSection, EmptyState,
+    GroupIcon, LinkRow, MoneyText, TopBar,
 };
+use crate::format::{NumberFormat, format_money};
+use crate::services::summary::group_summary;
 use crate::state::DataRevision;
-use crate::storage::Db;
+use crate::storage::{Db, StorageError};
 
-/// `/groups/:id`: for now the head of the group (name, members) with links
-/// to its expenses (timeline, GRP-20), members and editing; totals and
-/// balances follow with GRP-10..14.
+/// Everything the overview shows of one group.
+#[derive(Debug, Clone, PartialEq)]
+struct Overview {
+    group: Group,
+    members: Vec<GroupMember>,
+    summary: GroupSummary,
+    /// Everyone in `summary`, also people removed from the group or deleted
+    /// since, who still count with their expenses.
+    people: BTreeMap<PersonId, Person>,
+    me: Option<PersonId>,
+}
+
+/// `/groups/:id`: total spent, own balance, who owes whom, who paid and who
+/// owes most, and everyone's paid / share / balance (GRP-10..14, SPL-03,
+/// SPL-04), with links to the expenses (GRP-20), members and editing.
 #[component]
 pub fn GroupOverview(id: String) -> Element {
     let db = use_context::<Db>();
@@ -28,13 +46,7 @@ pub fn GroupOverview(id: String) -> Element {
     let group_id = use_memo(use_reactive!(|id| GroupId::new(id)));
     let data = use_memo(move || {
         revision.track();
-        let id = group_id();
-        let Some(group) = db.group(&id).map_err(|e| e.to_string())? else {
-            return Ok(None);
-        };
-        let members = db.group_members(&id).map_err(|e| e.to_string())?;
-        let expense_count = db.group_expense_count(&id).map_err(|e| e.to_string())?;
-        Ok::<_, String>(Some((group, members, expense_count)))
+        load(&db, &group_id()).map_err(|e| e.to_string())
     });
 
     rsx! {
@@ -42,84 +54,362 @@ pub fn GroupOverview(id: String) -> Element {
         match &*data.read() {
             Err(message) => rsx! {
                 EmptyState {
-                    title: t!("group.load_error_title").to_string(),
+                    title: t!("summary.load_error_title").to_string(),
                     text: message.clone(),
                     Icon { icon: LdCircleAlert, class: "h-8 w-8" }
                 }
             },
             Ok(None) => rsx! { GroupNotFound {} },
-            Ok(Some((group, members, expense_count))) => rsx! {
-                div { class: "mx-4 flex flex-col gap-4 pt-6 safe-area-x",
-                    div { class: "flex flex-col items-center gap-3 text-center",
-                        GroupIcon { icon: group.icon.clone(), color: group.color.clone(), large: true }
-                        h2 { class: "text-2xl font-semibold break-words text-floral-white-50", "{group.name}" }
-                        p { class: "text-sm text-floral-white-400", {group_subtitle(group)} }
-                    }
-                    div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
-                        LinkRow {
-                            label: t!("group.expenses").to_string(),
-                            onclick: {
-                                let id = group.id.as_str().to_string();
-                                move |_| {
-                                    nav.push(Route::GroupTimeline { id: id.clone() });
-                                }
-                            },
-                            span { class: "text-sm tabular-nums text-floral-white-400", "{expense_count}" }
+            Ok(Some(overview)) => {
+                let group = overview.group.clone();
+                rsx! {
+                    div { class: "mx-4 flex flex-col gap-5 pt-6 safe-area-x",
+                        div { class: "flex flex-col items-center gap-3 text-center",
+                            GroupIcon { icon: group.icon.clone(), color: group.color.clone(), large: true }
+                            h2 { class: "text-2xl font-semibold break-words text-floral-white-50", "{group.name}" }
+                            p { class: "text-sm text-floral-white-400", {group_subtitle(&group)} }
                         }
-                        LinkRow {
-                            label: t!("page.group_members").to_string(),
-                            onclick: {
-                                let id = group.id.as_str().to_string();
-                                move |_| {
-                                    nav.push(Route::GroupMembers {
-                                        id: id.clone(),
-                                        setup: false,
-                                    });
+                        Totals { overview: overview.clone() }
+                        div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                            LinkRow {
+                                label: t!("group.expenses").to_string(),
+                                onclick: {
+                                    let id = group.id.as_str().to_string();
+                                    move |_| {
+                                        nav.push(Route::GroupTimeline { id: id.clone() });
+                                    }
+                                },
+                                span { class: "text-sm tabular-nums text-floral-white-400",
+                                    "{overview.summary.expense_count + overview.summary.skipped_count}"
                                 }
-                            },
-                            AvatarStack { people: avatars(members), max: 3 }
-                        }
-                        LinkRow {
-                            label: t!("common.edit").to_string(),
-                            onclick: {
-                                let id = group.id.as_str().to_string();
-                                move |_| {
-                                    nav.push(Route::GroupEdit { id: id.clone() });
-                                }
-                            },
-                        }
-                    }
-                    Button {
-                        variant: ButtonVariant::Danger,
-                        class: "w-full",
-                        onclick: move |_| {
-                            delete_error.set(None);
-                            confirm_delete.set(true);
-                        },
-                        Icon { icon: LdTrash2, class: "h-5 w-5" }
-                        {t!("group.delete").to_string()}
-                    }
-                }
-                if confirm_delete() {
-                    DeleteGroupSheet {
-                        group: group.clone(),
-                        error: delete_error(),
-                        on_deleted: move |_| {
-                            confirm_delete.set(false);
-                            // The undo toast stays visible on the list.
-                            if nav.can_go_back() {
-                                nav.go_back();
-                            } else {
-                                nav.replace(Route::GroupList {});
                             }
-                        },
-                        on_error: move |message| delete_error.set(Some(message)),
-                        on_close: move |_| confirm_delete.set(false),
+                            LinkRow {
+                                label: t!("page.group_members").to_string(),
+                                onclick: {
+                                    let id = group.id.as_str().to_string();
+                                    move |_| {
+                                        nav.push(Route::GroupMembers {
+                                            id: id.clone(),
+                                            setup: false,
+                                        });
+                                    }
+                                },
+                                AvatarStack { people: avatars(&overview.members), max: 3 }
+                            }
+                            LinkRow {
+                                label: t!("common.edit").to_string(),
+                                onclick: {
+                                    let id = group.id.as_str().to_string();
+                                    move |_| {
+                                        nav.push(Route::GroupEdit { id: id.clone() });
+                                    }
+                                },
+                            }
+                        }
+                        if overview.summary.expense_count > 0 {
+                            Balances { overview: overview.clone() }
+                        }
+                        Button {
+                            variant: ButtonVariant::Danger,
+                            class: "w-full",
+                            onclick: move |_| {
+                                delete_error.set(None);
+                                confirm_delete.set(true);
+                            },
+                            Icon { icon: LdTrash2, class: "h-5 w-5" }
+                            {t!("group.delete").to_string()}
+                        }
+                    }
+                    if confirm_delete() {
+                        DeleteGroupSheet {
+                            group,
+                            error: delete_error(),
+                            on_deleted: move |_| {
+                                confirm_delete.set(false);
+                                // The undo toast stays visible on the list.
+                                if nav.can_go_back() {
+                                    nav.go_back();
+                                } else {
+                                    nav.replace(Route::GroupList {});
+                                }
+                            },
+                            on_error: move |message| delete_error.set(Some(message)),
+                            on_close: move |_| confirm_delete.set(false),
+                        }
                     }
                 }
-            },
+            }
         }
     }
+}
+
+fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
+    let Some(group) = db.group(id)? else {
+        return Ok(None);
+    };
+    let members = db.group_members(id)?;
+    let summary = group_summary(db, &group)?;
+    let people = db.people_any(summary.people.keys())?;
+    let me = db.me()?.map(|person| person.id);
+    Ok(Some(Overview {
+        group,
+        members,
+        summary,
+        people,
+        me,
+    }))
+}
+
+/// Total spent in large type and the own balance (GRP-10, PER-02), or the
+/// way to the first expense while there is none.
+#[component]
+fn Totals(overview: Overview) -> Element {
+    let nav = use_navigator();
+    let summary = &overview.summary;
+    let base = overview.group.base_currency;
+    let own = overview
+        .me
+        .as_ref()
+        .and_then(|me| summary.people.get(me))
+        .map(|totals| Money::new(totals.balance, base));
+    let group_id = overview.group.id.as_str().to_string();
+
+    rsx! {
+        div { class: "flex flex-col items-center gap-1 rounded-2xl border border-jet-black-800 bg-jet-black-900 px-4 py-5 text-center",
+            span { class: "text-sm text-floral-white-400", {t!("summary.total").to_string()} }
+            MoneyText { amount: summary.total, class: "text-4xl font-semibold text-floral-white-50" }
+            if summary.expense_count > 0 {
+                if let Some(own) = own {
+                    OwnBalance { balance: own }
+                }
+            } else {
+                p { class: "mt-2 text-sm text-floral-white-400", {t!("summary.no_expenses").to_string()} }
+                Button {
+                    class: "mt-3 w-full",
+                    onclick: move |_| {
+                        nav.push(Route::ExpenseNew { group: group_id.clone() });
+                    },
+                    Icon { icon: LdPlus, class: "h-5 w-5" }
+                    {t!("timeline.add").to_string()}
+                }
+            }
+            if summary.skipped_count > 0 {
+                p { class: "mt-3 flex items-start gap-2 text-left text-sm text-pale-oak-300",
+                    Icon { icon: LdTriangleAlert, class: "mt-0.5 h-4 w-4 shrink-0" }
+                    {t!("summary.skipped", count = summary.skipped_count).to_string()}
+                }
+            }
+        }
+    }
+}
+
+/// "Du bekommst 42,10 €" / "Du schuldest 12,00 €" / "Du bist ausgeglichen",
+/// colored like a balance (idee.md 3.2).
+#[component]
+fn OwnBalance(balance: Money) -> Element {
+    let amount = format_money(abs(balance), NumberFormat::current());
+    let (text, color) = match balance.amount_minor().signum() {
+        1 => (
+            t!("summary.you_get", amount = amount),
+            "text-muted-teal-300",
+        ),
+        -1 => (
+            t!("summary.you_owe", amount = amount),
+            "text-watermelon-300",
+        ),
+        _ => (t!("summary.you_even"), "text-floral-white-300"),
+    };
+    rsx! {
+        p { class: "mt-1 text-base font-medium tabular-nums {color}", "{text}" }
+    }
+}
+
+/// Who owes whom, the two rankings and everyone's figures.
+#[component]
+fn Balances(overview: Overview) -> Element {
+    let summary = &overview.summary;
+    let base = overview.group.base_currency;
+    let members: BTreeSet<PersonId> = overview
+        .members
+        .iter()
+        .map(|member| member.person.id.clone())
+        .collect();
+    let line = |person: &PersonId, amount: i64| PersonLine {
+        id: person.clone(),
+        person: overview.people.get(person).cloned(),
+        former: !members.contains(person),
+        amount: Money::new(amount, base),
+    };
+    let paid: Vec<PersonLine> = summary
+        .paid_ranking()
+        .iter()
+        .map(|(person, amount)| line(person, *amount))
+        .collect();
+    let owes: Vec<PersonLine> = summary
+        .balance_ranking()
+        .iter()
+        .map(|(person, amount)| line(person, *amount))
+        .collect();
+    let transfers: Vec<TransferLine> = summary
+        .transfers
+        .iter()
+        .map(|transfer| TransferLine {
+            from: overview.people.get(&transfer.from).cloned(),
+            to: overview.people.get(&transfer.to).cloned(),
+            amount: Money::new(transfer.amount_minor, base),
+        })
+        .collect();
+    let per_person: Vec<(PersonLine, Money, Money)> = summary
+        .people
+        .iter()
+        .map(|(person, totals)| {
+            (
+                line(person, totals.balance),
+                Money::new(totals.paid, base),
+                Money::new(totals.consumed, base),
+            )
+        })
+        .collect();
+
+    rsx! {
+        CardSection { title: t!("summary.who_owes_whom").to_string(),
+            if transfers.is_empty() {
+                p { class: "px-4 py-4 text-base text-floral-white-300", {t!("summary.all_settled").to_string()} }
+            }
+            for (index, transfer) in transfers.into_iter().enumerate() {
+                TransferRow { key: "{index}", line: transfer }
+            }
+        }
+        CardSection { title: t!("summary.paid_most").to_string(),
+            for (index, line) in paid.into_iter().enumerate() {
+                RankRow { key: "{line.id.as_str()}", rank: index + 1, line, signed: false }
+            }
+        }
+        CardSection { title: t!("summary.owes_most").to_string(),
+            for (index, line) in owes.into_iter().enumerate() {
+                RankRow { key: "{line.id.as_str()}", rank: index + 1, line, signed: true }
+            }
+        }
+        CardSection { title: t!("summary.per_person").to_string(),
+            for (line, paid, consumed) in per_person {
+                PersonFiguresRow { key: "{line.id.as_str()}", line, paid, consumed }
+            }
+        }
+    }
+}
+
+/// A person with an amount, as the rankings and figures show them.
+#[derive(Debug, Clone, PartialEq)]
+struct PersonLine {
+    id: PersonId,
+    /// `None` if the person cannot be found at all.
+    person: Option<Person>,
+    /// Still counts with past expenses, but has left the group.
+    former: bool,
+    amount: Money,
+}
+
+impl PersonLine {
+    fn name_and_color(&self) -> (String, String) {
+        person_label(self.person.as_ref())
+    }
+}
+
+/// One payment of the simplified debts: "Anna an Ben 23,40 €" (SPL-04).
+#[derive(Debug, Clone, PartialEq)]
+struct TransferLine {
+    from: Option<Person>,
+    to: Option<Person>,
+    amount: Money,
+}
+
+#[component]
+fn TransferRow(line: TransferLine) -> Element {
+    let (from, from_color) = person_label(line.from.as_ref());
+    let (to, to_color) = person_label(line.to.as_ref());
+    let label = t!("summary.transfer", from = from.clone(), to = to.clone()).to_string();
+
+    rsx! {
+        div {
+            class: "flex min-h-16 items-center gap-2 border-b border-jet-black-800 px-4 py-2 last:border-b-0",
+            aria_label: "{label}",
+            Avatar { name: from.clone(), color: from_color, size: AvatarSize::Sm }
+            span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", "{from}" }
+            Icon { icon: LdArrowRight, class: "h-4 w-4 shrink-0 text-floral-white-500" }
+            Avatar { name: to.clone(), color: to_color, size: AvatarSize::Sm }
+            span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", "{to}" }
+            MoneyText { amount: line.amount, class: "shrink-0 text-base font-semibold text-floral-white-100" }
+        }
+    }
+}
+
+/// Place, person and amount in a ranking (GRP-11, GRP-12).
+#[component]
+fn RankRow(rank: usize, line: PersonLine, signed: bool) -> Element {
+    let (name, color) = line.name_and_color();
+    // A signed amount takes its color from the balance.
+    let amount_class = if signed {
+        "text-base font-semibold"
+    } else {
+        "text-base font-semibold text-floral-white-100"
+    };
+    rsx! {
+        div { class: "flex min-h-14 items-center gap-3 border-b border-jet-black-800 px-4 py-2 last:border-b-0",
+            span { class: "w-5 shrink-0 text-right text-sm tabular-nums text-floral-white-500", "{rank}" }
+            Avatar { name: name.clone(), color, size: AvatarSize::Sm }
+            PersonName { name, former: line.former }
+            MoneyText { amount: line.amount, signed, class: amount_class }
+        }
+    }
+}
+
+/// Paid, share and balance of one person (GRP-14).
+#[component]
+fn PersonFiguresRow(line: PersonLine, paid: Money, consumed: Money) -> Element {
+    let (name, color) = line.name_and_color();
+    let format = NumberFormat::current();
+    // One line each: side by side they get cut off on narrow phones.
+    let paid = t!("summary.paid", amount = format_money(paid, format)).to_string();
+    let consumed = t!("summary.consumed", amount = format_money(consumed, format)).to_string();
+    rsx! {
+        div { class: "flex min-h-16 items-center gap-3 border-b border-jet-black-800 px-4 py-2 last:border-b-0",
+            Avatar { name: name.clone(), color, size: AvatarSize::Md }
+            span { class: "flex min-w-0 flex-1 flex-col",
+                PersonName { name, former: line.former }
+                span { class: "truncate text-sm tabular-nums text-floral-white-400", "{paid}" }
+                span { class: "truncate text-sm tabular-nums text-floral-white-400", "{consumed}" }
+            }
+            MoneyText { amount: line.amount, signed: true, class: "text-base font-semibold" }
+        }
+    }
+}
+
+/// Name, with a note if the person has left the group.
+#[component]
+fn PersonName(name: String, former: bool) -> Element {
+    rsx! {
+        span { class: "flex min-w-0 flex-1 flex-col",
+            span { class: "truncate text-base text-floral-white-50", "{name}" }
+            if former {
+                span { class: "truncate text-sm text-floral-white-500", {t!("summary.former_member").to_string()} }
+            }
+        }
+    }
+}
+
+/// Name and color of a person, or a stand-in if the person is unknown.
+fn person_label(person: Option<&Person>) -> (String, String) {
+    match person {
+        Some(person) => (person.name.clone(), person.color.clone()),
+        None => (
+            t!("expense_detail.unknown_person").to_string(),
+            String::new(),
+        ),
+    }
+}
+
+fn abs(money: Money) -> Money {
+    Money::new(money.amount_minor().saturating_abs(), money.currency())
 }
 
 fn avatars(members: &[GroupMember]) -> Vec<AvatarEntry> {

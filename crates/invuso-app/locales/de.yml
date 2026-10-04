@@ -133,6 +133,10 @@ people:
   restore_error: "Wiederherstellen fehlgeschlagen."
   not_found_title: "Person nicht gefunden"
   not_found_text: "Diese Person gibt es nicht mehr."
+  groups: "Gruppen"
+  total_balance: "Gesamtsaldo"
+  no_groups: "In keiner Gruppe."
+  balances_error_title: "Salden können nicht berechnet werden"
 
 color:
   cerulean: "Petrol"
@@ -236,6 +240,24 @@ group:
   deleted: "%{name} gelöscht"
   restore_error: "Wiederherstellen fehlgeschlagen."
   expenses: "Ausgaben"
+
+summary:
+  total: "Gesamtausgaben"
+  you_get: "Du bekommst %{amount}"
+  you_owe: "Du schuldest %{amount}"
+  you_even: "Du bist ausgeglichen"
+  skipped: "Nicht mitgezählt, weil in einer anderen Basiswährung gespeichert: %{count}"
+  no_expenses: "Noch keine Ausgaben. Sobald welche erfasst sind, siehst du hier, wer wem was schuldet."
+  who_owes_whom: "Wer schuldet wem"
+  all_settled: "Alles ausgeglichen."
+  paid_most: "Wer hat am meisten bezahlt"
+  owes_most: "Wer schuldet am meisten"
+  per_person: "Je Person"
+  paid: "Bezahlt %{amount}"
+  consumed: "Verbraucht %{amount}"
+  former_member: "nicht mehr in der Gruppe"
+  transfer: "%{from} an %{to}"
+  load_error_title: "Übersicht kann nicht berechnet werden"
 
 member:
   add: "Person hinzufügen"

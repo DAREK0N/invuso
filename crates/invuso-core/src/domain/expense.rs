@@ -4,7 +4,7 @@ use std::fmt;
 use thiserror::Error;
 
 use super::{GroupId, Money, PaymentMethodId, PersonId, is_iso_date};
-use crate::split::{SplitError, SplitMode, rescale, split};
+use crate::split::{ExpenseEntry, SplitError, SplitMode, rescale, split};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExpenseError {
@@ -157,6 +157,15 @@ impl Expense {
             .map(|p| (p.person_id.clone(), p.amount.amount_minor()))
             .collect();
         Ok(rescale(self.total_in_base.amount_minor(), &paid)?)
+    }
+
+    /// Payments and shares in the base currency, as balances need them
+    /// (idee.md 8.3).
+    pub fn entry(&self) -> Result<ExpenseEntry, ExpenseError> {
+        Ok(ExpenseEntry {
+            payments: self.payments_in_base()?,
+            shares: self.shares_in_base()?,
+        })
     }
 }
 
