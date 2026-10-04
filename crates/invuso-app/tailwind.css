@@ -203,8 +203,9 @@ html:has(#invuso-sheet-backdrop) {
 @layer components {
     .glass {
         background: color-mix(in srgb, var(--color-jet-black-900) 70%, transparent);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
+        /* Not a literal `backdrop-filter: blur(…)`: dx's CSS optimizer drops
+           that declaration from the bundle; the utility's var() form survives. */
+        @apply backdrop-blur-lg;
         border: 1px solid color-mix(in srgb, var(--color-cerulean-400) 12%, transparent);
     }
 }

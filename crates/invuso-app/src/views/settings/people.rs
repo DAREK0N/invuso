@@ -178,7 +178,7 @@ fn PersonMenu(
 /// Bottom sheet to create (`person: None`) or edit a person: name, color
 /// and note (PER-01).
 #[component]
-pub(super) fn PersonFormSheet(
+pub(crate) fn PersonFormSheet(
     person: Option<Person>,
     on_saved: EventHandler<Person>,
     on_close: EventHandler<()>,

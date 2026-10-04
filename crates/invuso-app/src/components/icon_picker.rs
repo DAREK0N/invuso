@@ -1,25 +1,51 @@
 use dioxus::prelude::*;
 
-use crate::components::{PaymentIconGlyph, color_classes};
-use crate::preferences::{PAYMENT_ICONS, payment_icon_name};
+use crate::components::{GroupIconGlyph, PaymentIconGlyph, color_classes};
+use crate::preferences::{GROUP_ICONS, PAYMENT_ICONS, group_icon_name, payment_icon_name};
 
-/// Row of round icon buttons for payment methods, drawn in the method's
-/// `color` so the preview matches the list.
+/// Which icons an [`IconPicker`] offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IconSet {
+    #[default]
+    Payment,
+    Group,
+}
+
+impl IconSet {
+    fn icons(self) -> &'static [&'static str] {
+        match self {
+            Self::Payment => &PAYMENT_ICONS,
+            Self::Group => &GROUP_ICONS,
+        }
+    }
+
+    fn name(self, icon: &str) -> String {
+        match self {
+            Self::Payment => payment_icon_name(icon),
+            Self::Group => group_icon_name(icon),
+        }
+    }
+}
+
+/// Row of round icon buttons for payment methods or groups, drawn in the
+/// item's `color` so the preview matches the list.
 #[component]
 pub fn IconPicker(
     label: String,
     selected: String,
     color: String,
     on_select: EventHandler<String>,
+    #[props(default)] set: IconSet,
 ) -> Element {
     rsx! {
         div { class: "flex flex-col gap-2",
             span { class: "text-sm font-medium text-floral-white-300", "{label}" }
             div { class: "flex flex-wrap gap-2", role: "radiogroup", aria_label: "{label}",
-                for icon in PAYMENT_ICONS {
+                for &icon in set.icons() {
                     IconOption {
                         key: "{icon}",
                         icon,
+                        set,
                         color: color.clone(),
                         selected: selected == icon,
                         onclick: move |_| on_select.call(icon.to_string()),
@@ -33,6 +59,7 @@ pub fn IconPicker(
 #[component]
 fn IconOption(
     icon: &'static str,
+    set: IconSet,
     color: String,
     selected: bool,
     onclick: EventHandler<()>,
@@ -52,9 +79,12 @@ fn IconOption(
             r#type: "button",
             role: "radio",
             aria_checked: if selected { "true" } else { "false" },
-            aria_label: payment_icon_name(icon),
+            aria_label: set.name(icon),
             onclick: move |_| onclick.call(()),
-            PaymentIconGlyph { icon: icon.to_string() }
+            match set {
+                IconSet::Payment => rsx! { PaymentIconGlyph { icon: icon.to_string() } },
+                IconSet::Group => rsx! { GroupIconGlyph { icon: icon.to_string() } },
+            }
         }
     }
 }

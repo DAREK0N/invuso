@@ -11,6 +11,7 @@ dioxus.workspace = true
 dioxus-free-icons.workspace = true
 rust-i18n.workspace = true
 rusqlite.workspace = true
+rust_decimal.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 sys-locale.workspace = true

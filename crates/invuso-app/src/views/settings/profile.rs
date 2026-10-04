@@ -7,7 +7,7 @@ use dioxus_free_icons::{
 use crate::Route;
 use crate::components::{
     AvatarEntry, AvatarStack, BottomSheet, Button, CurrencyPicker, EmptyState, ErrorBanner,
-    LanguagePicker, TextField, TopBar,
+    LanguagePicker, LinkRow, TextField, TopBar,
 };
 use crate::preferences::language_name;
 use crate::state::DataRevision;
@@ -133,14 +133,14 @@ fn ManageSection() -> Element {
                 {t!("settings.manage_section").to_string()}
             }
             div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
-                ManageRow {
+                LinkRow {
                     label: t!("page.settings_people").to_string(),
                     onclick: move |_| {
                         nav.push(Route::SettingsPeople {});
                     },
                     AvatarStack { people: people() }
                 }
-                ManageRow {
+                LinkRow {
                     label: t!("page.settings_payment_methods").to_string(),
                     onclick: move |_| {
                         nav.push(Route::SettingsPaymentMethods {});
@@ -150,21 +150,6 @@ fn ManageSection() -> Element {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Row linking to a management subpage; `children` is a summary on the right.
-#[component]
-fn ManageRow(label: String, onclick: EventHandler<()>, children: Element) -> Element {
-    rsx! {
-        button {
-            class: "flex min-h-14 w-full items-center gap-3 border-b border-jet-black-800 px-4 py-2 text-left last:border-b-0 active:bg-jet-black-800 transition-colors ease-apple",
-            r#type: "button",
-            onclick: move |_| onclick.call(()),
-            span { class: "flex-1 text-base text-floral-white-50", "{label}" }
-            {children}
-            Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
         }
     }
 }

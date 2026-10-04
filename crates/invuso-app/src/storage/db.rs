@@ -19,10 +19,16 @@ pub enum StorageError {
     InvalidInput(&'static str),
     #[error("invalid payment method: {0}")]
     PaymentMethod(#[from] invuso_core::domain::PaymentMethodError),
+    #[error("invalid group: {0}")]
+    Group(#[from] invuso_core::domain::GroupError),
+    #[error("the person is already a member of the group")]
+    AlreadyMember,
     #[error("record not found")]
     NotFound,
     #[error("\"Ich\" cannot be deleted")]
     CannotDeleteMe,
+    #[error("\"Ich\" cannot leave a group")]
+    CannotRemoveMe,
     #[error("database lock poisoned")]
     Poisoned,
 }

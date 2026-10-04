@@ -1,5 +1,6 @@
 //! Choices and defaults for the profile settings (SET-01, SET-02,
-//! idee.md 7.5), for people (PER-01) and for payment methods (PAY-01).
+//! idee.md 7.5), for people (PER-01), payment methods (PAY-01) and groups
+//! (GRP-01).
 
 use invuso_core::domain::{Currency, PaymentMethodKind};
 
@@ -109,6 +110,75 @@ pub fn payment_kind_name(kind: PaymentMethodKind) -> String {
     }
 }
 
+/// Icons a group can have, as keys stored in the database; drawn by
+/// `components::GroupIconGlyph`.
+pub const GROUP_ICONS: [&str; 12] = [
+    "users",
+    "plane",
+    "luggage",
+    "tree-palm",
+    "mountain",
+    "tent",
+    "home",
+    "utensils",
+    "car",
+    "briefcase",
+    "party-popper",
+    "heart",
+];
+
+/// Icon preselected for a new group.
+pub const DEFAULT_GROUP_ICON: &str = "users";
+
+/// Accessible name of a group icon in the current app language.
+pub fn group_icon_name(icon: &str) -> String {
+    match icon {
+        "users" => t!("group_icon.users").to_string(),
+        "plane" => t!("group_icon.plane").to_string(),
+        "luggage" => t!("group_icon.luggage").to_string(),
+        "tree-palm" => t!("group_icon.tree_palm").to_string(),
+        "mountain" => t!("group_icon.mountain").to_string(),
+        "tent" => t!("group_icon.tent").to_string(),
+        "home" => t!("group_icon.home").to_string(),
+        "utensils" => t!("group_icon.utensils").to_string(),
+        "car" => t!("group_icon.car").to_string(),
+        "briefcase" => t!("group_icon.briefcase").to_string(),
+        "party-popper" => t!("group_icon.party_popper").to_string(),
+        "heart" => t!("group_icon.heart").to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// A stored `YYYY-MM-DD` date in the app language's usual form; anything
+/// else is shown as stored.
+pub fn display_date(iso: &str) -> String {
+    match (iso.get(0..4), iso.get(5..7), iso.get(8..10)) {
+        (Some(y), Some(m), Some(d)) if iso.len() == 10 => {
+            t!("date.format", y = y, m = m, d = d).to_string()
+        }
+        _ => iso.to_string(),
+    }
+}
+
+/// "01.03.2026 – 14.03.2026", "ab …", "bis …"; `None` without any date.
+pub fn period_text(start: Option<&str>, end: Option<&str>) -> Option<String> {
+    match (start, end) {
+        (Some(start), Some(end)) => Some(
+            t!(
+                "group.period_range",
+                start = display_date(start),
+                end = display_date(end)
+            )
+            .to_string(),
+        ),
+        (Some(start), None) => {
+            Some(t!("group.period_from", start = display_date(start)).to_string())
+        }
+        (None, Some(end)) => Some(t!("group.period_until", end = display_date(end)).to_string()),
+        (None, None) => None,
+    }
+}
+
 /// Suggested home currency during onboarding.
 pub fn default_home_currency() -> Currency {
     Currency::from_code("EUR").expect("EUR is a valid ISO 4217 currency")
@@ -184,6 +254,27 @@ mod tests {
         for kind in PaymentMethodKind::ALL {
             assert!(PAYMENT_ICONS.contains(&default_payment_icon(kind)));
         }
+    }
+
+    #[test]
+    fn default_group_icon_is_offered() {
+        assert!(GROUP_ICONS.contains(&DEFAULT_GROUP_ICON));
+    }
+
+    #[test]
+    fn formats_dates_and_periods() {
+        rust_i18n::set_locale("de");
+        assert_eq!(display_date("2026-03-01"), "01.03.2026");
+        assert_eq!(display_date("garbage"), "garbage");
+        assert_eq!(
+            period_text(Some("2026-03-01"), Some("2026-03-14")).as_deref(),
+            Some("01.03.2026 – 14.03.2026")
+        );
+        assert_eq!(
+            period_text(None, Some("2026-03-14")).as_deref(),
+            Some("bis 14.03.2026")
+        );
+        assert_eq!(period_text(None, None), None);
     }
 
     #[test]

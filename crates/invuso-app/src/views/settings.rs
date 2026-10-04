@@ -8,6 +8,7 @@ mod person_detail;
 mod profile;
 
 pub use payment_methods::SettingsPaymentMethods;
+pub(crate) use people::PersonFormSheet;
 pub use people::SettingsPeople;
 pub use person_detail::PersonDetail;
 pub use profile::Settings;

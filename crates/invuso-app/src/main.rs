@@ -40,8 +40,9 @@ pub enum Route {
         GroupOverview { id: String },
         #[route("/groups/:id/timeline")]
         GroupTimeline { id: String },
-        #[route("/groups/:id/members")]
-        GroupMembers { id: String },
+        // `setup` marks the step right after creating the group (AP-08).
+        #[route("/groups/:id/members?:setup")]
+        GroupMembers { id: String, setup: bool },
         #[route("/groups/:id/settle")]
         GroupSettle { id: String },
         #[route("/groups/:id/edit")]
@@ -182,6 +183,22 @@ mod tests {
     fn first_start_goes_to_onboarding() {
         assert_eq!(start_route(false), Route::Onboarding {});
         assert_eq!(start_route(false).to_string(), "/onboarding");
+    }
+
+    #[test]
+    fn members_route_marks_the_setup_step() {
+        let setup = Route::GroupMembers {
+            id: "g1".into(),
+            setup: true,
+        };
+        assert_eq!(setup.to_string().parse::<Route>().ok(), Some(setup));
+        assert_eq!(
+            "/groups/g1/members".parse::<Route>().ok(),
+            Some(Route::GroupMembers {
+                id: "g1".into(),
+                setup: false
+            })
+        );
     }
 
     #[test]

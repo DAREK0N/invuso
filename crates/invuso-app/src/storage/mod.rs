@@ -9,6 +9,8 @@
 )]
 
 mod db;
+mod group_members;
+mod groups;
 mod migrations;
 mod payment_methods;
 mod people;
@@ -16,6 +18,7 @@ mod profile;
 mod settings;
 
 pub use db::{Db, StorageError};
+pub use groups::NewGroup;
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;
