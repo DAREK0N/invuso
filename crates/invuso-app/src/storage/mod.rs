@@ -10,10 +10,12 @@
 
 mod db;
 mod migrations;
+mod payment_methods;
 mod people;
 mod profile;
 mod settings;
 
 pub use db::{Db, StorageError};
+pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;

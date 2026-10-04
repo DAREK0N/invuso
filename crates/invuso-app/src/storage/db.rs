@@ -17,6 +17,8 @@ pub enum StorageError {
     SchemaTooNew { found: u32, supported: u32 },
     #[error("invalid input: {0}")]
     InvalidInput(&'static str),
+    #[error("invalid payment method: {0}")]
+    PaymentMethod(#[from] invuso_core::domain::PaymentMethodError),
     #[error("record not found")]
     NotFound,
     #[error("\"Ich\" cannot be deleted")]

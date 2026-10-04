@@ -29,10 +29,10 @@ pub fn ToastHost() -> Element {
         if let Some(toast) = toast {
             div {
                 key: "{toast.id}",
-                class: "fixed app-toast-bottom inset-x-0 z-[1050] px-3 safe-area-x animate-fade-in",
+                class: "fixed app-toast-bottom inset-x-0 z-[1050] safe-area-x animate-fade-in",
                 role: "status",
                 aria_live: "polite",
-                div { class: "flex min-h-12 items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-800 py-1 pr-1 pl-4 shadow-xl",
+                div { class: "mx-2 flex min-h-12 items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-800 py-1 pr-1 pl-4 shadow-xl",
                     span { class: "flex-1 text-sm text-floral-white-100", "{toast.message}" }
                     if let Some(action) = toast.action.clone() {
                         button {

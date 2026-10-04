@@ -1,7 +1,7 @@
 //! Choices and defaults for the profile settings (SET-01, SET-02,
-//! idee.md 7.5) and for people (PER-01).
+//! idee.md 7.5), for people (PER-01) and for payment methods (PAY-01).
 
-use invuso_core::domain::Currency;
+use invuso_core::domain::{Currency, PaymentMethodKind};
 
 /// Shown first in the currency picker, in this order.
 pub const FAVORITE_CURRENCIES: [&str; 5] = ["EUR", "USD", "JPY", "CHF", "GBP"];
@@ -53,6 +53,59 @@ pub fn color_name(color: &str) -> String {
         "ash-grey" => t!("color.ash_grey").to_string(),
         "slate-grey" => t!("color.slate_grey").to_string(),
         other => other.to_string(),
+    }
+}
+
+/// Icons a payment method can have, as keys stored in the database; drawn
+/// by `components::PaymentIconGlyph`.
+pub const PAYMENT_ICONS: [&str; 8] = [
+    "banknote",
+    "credit-card",
+    "wallet",
+    "smartphone",
+    "landmark",
+    "train-front",
+    "coins",
+    "piggy-bank",
+];
+
+/// Icon preselected for a kind; the user can pick another one.
+pub fn default_payment_icon(kind: PaymentMethodKind) -> &'static str {
+    match kind {
+        PaymentMethodKind::Cash => "banknote",
+        PaymentMethodKind::CreditCard | PaymentMethodKind::DebitCard => "credit-card",
+        PaymentMethodKind::PayPal => "wallet",
+        PaymentMethodKind::BankTransfer => "landmark",
+        PaymentMethodKind::IcCard => "train-front",
+        PaymentMethodKind::Other => "coins",
+    }
+}
+
+/// Accessible name of a payment icon in the current app language.
+pub fn payment_icon_name(icon: &str) -> String {
+    match icon {
+        "banknote" => t!("payment_icon.banknote").to_string(),
+        "credit-card" => t!("payment_icon.credit_card").to_string(),
+        "wallet" => t!("payment_icon.wallet").to_string(),
+        "smartphone" => t!("payment_icon.smartphone").to_string(),
+        "landmark" => t!("payment_icon.landmark").to_string(),
+        "train-front" => t!("payment_icon.train").to_string(),
+        "coins" => t!("payment_icon.coins").to_string(),
+        "piggy-bank" => t!("payment_icon.piggy_bank").to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Display name of a payment method kind in the current app language.
+pub fn payment_kind_name(kind: PaymentMethodKind) -> String {
+    match kind {
+        PaymentMethodKind::Cash => t!("payment_kind.cash").to_string(),
+        PaymentMethodKind::CreditCard => t!("payment_kind.credit_card").to_string(),
+        PaymentMethodKind::DebitCard => t!("payment_kind.debit_card").to_string(),
+        PaymentMethodKind::PayPal => t!("payment_kind.paypal").to_string(),
+        PaymentMethodKind::BankTransfer => t!("payment_kind.bank_transfer").to_string(),
+        PaymentMethodKind::IcCard => t!("payment_kind.ic_card").to_string(),
+        PaymentMethodKind::Other => t!("payment_kind.other").to_string(),
     }
 }
 
@@ -124,6 +177,13 @@ mod tests {
         let mut all_but_last_twice = PERSON_COLORS.to_vec();
         all_but_last_twice.extend(&PERSON_COLORS[..PERSON_COLORS.len() - 1]);
         assert_eq!(suggested_person_color(all_but_last_twice), "slate-grey");
+    }
+
+    #[test]
+    fn every_kind_suggests_a_known_icon() {
+        for kind in PaymentMethodKind::ALL {
+            assert!(PAYMENT_ICONS.contains(&default_payment_icon(kind)));
+        }
     }
 
     #[test]

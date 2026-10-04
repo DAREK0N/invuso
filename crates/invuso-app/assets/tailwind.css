@@ -266,8 +266,14 @@
   .mx-2 {
     margin-inline: calc(var(--spacing) * 2);
   }
+  .mx-3 {
+    margin-inline: calc(var(--spacing) * 3);
+  }
   .mx-4 {
     margin-inline: calc(var(--spacing) * 4);
+  }
+  .-mt-3 {
+    margin-top: calc(var(--spacing) * -3);
   }
   .-mt-8 {
     margin-top: calc(var(--spacing) * -8);
@@ -407,8 +413,8 @@
   .shrink-0 {
     flex-shrink: 0;
   }
-  .grow {
-    flex-grow: 1;
+  .rotate-180 {
+    rotate: 180deg;
   }
   .resize {
     resize: both;
@@ -509,6 +515,9 @@
   .border-b-0 {
     border-bottom-style: var(--tw-border-style);
     border-bottom-width: 0px;
+  }
+  .border-cerulean-500 {
+    border-color: var(--color-cerulean-500);
   }
   .border-jet-black-700 {
     border-color: var(--color-jet-black-700);
@@ -748,6 +757,9 @@
     --tw-numeric-spacing: tabular-nums;
     font-variant-numeric: var(--tw-ordinal,) var(--tw-slashed-zero,) var(--tw-numeric-figure,) var(--tw-numeric-spacing,) var(--tw-numeric-fraction,);
   }
+  .opacity-70 {
+    opacity: 70%;
+  }
   .shadow-2xl {
     --tw-shadow: 0 25px 50px -12px var(--tw-shadow-color, rgb(0 0 0 / 0.25));
     box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
@@ -799,6 +811,11 @@
   }
   .transition-colors {
     transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+  .transition-transform {
+    transition-property: transform, translate, scale, rotate;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
@@ -867,6 +884,11 @@
   .active\:text-cerulean-300 {
     &:active {
       color: var(--color-cerulean-300);
+    }
+  }
+  .active\:text-floral-white-200 {
+    &:active {
+      color: var(--color-floral-white-200);
     }
   }
   .disabled\:opacity-50 {

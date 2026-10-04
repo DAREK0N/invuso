@@ -97,15 +97,18 @@ pub fn Settings() -> Element {
     }
 }
 
-/// Links to the management subpages; so far only people (SET-06).
+/// Links to the management subpages (SET-06): people, payment methods.
 #[component]
 fn ManageSection() -> Element {
     let db = use_context::<Db>();
     let revision = use_context::<DataRevision>();
     let nav = use_navigator();
+    let people_db = db.clone();
+    // The subpages show load errors; here the rows just stay bare.
     let people = use_memo(move || {
         revision.track();
-        db.people()
+        people_db
+            .people()
             .map(|people| {
                 people
                     .into_iter()
@@ -115,7 +118,12 @@ fn ManageSection() -> Element {
                     })
                     .collect::<Vec<_>>()
             })
-            // The people page shows the error; here the row just stays bare.
+            .unwrap_or_default()
+    });
+    let active_methods = use_memo(move || {
+        revision.track();
+        db.payment_methods()
+            .map(|methods| methods.iter().filter(|m| !m.archived).count())
             .unwrap_or_default()
     });
 
@@ -125,17 +133,38 @@ fn ManageSection() -> Element {
                 {t!("settings.manage_section").to_string()}
             }
             div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
-                button {
-                    class: "flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left active:bg-jet-black-800 transition-colors ease-apple",
-                    r#type: "button",
+                ManageRow {
+                    label: t!("page.settings_people").to_string(),
                     onclick: move |_| {
                         nav.push(Route::SettingsPeople {});
                     },
-                    span { class: "flex-1 text-base text-floral-white-50", {t!("page.settings_people").to_string()} }
                     AvatarStack { people: people() }
-                    Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                }
+                ManageRow {
+                    label: t!("page.settings_payment_methods").to_string(),
+                    onclick: move |_| {
+                        nav.push(Route::SettingsPaymentMethods {});
+                    },
+                    if active_methods() > 0 {
+                        span { class: "text-base tabular-nums text-floral-white-400", "{active_methods}" }
+                    }
                 }
             }
+        }
+    }
+}
+
+/// Row linking to a management subpage; `children` is a summary on the right.
+#[component]
+fn ManageRow(label: String, onclick: EventHandler<()>, children: Element) -> Element {
+    rsx! {
+        button {
+            class: "flex min-h-14 w-full items-center gap-3 border-b border-jet-black-800 px-4 py-2 text-left last:border-b-0 active:bg-jet-black-800 transition-colors ease-apple",
+            r#type: "button",
+            onclick: move |_| onclick.call(()),
+            span { class: "flex-1 text-base text-floral-white-50", "{label}" }
+            {children}
+            Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
         }
     }
 }

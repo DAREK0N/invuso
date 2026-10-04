@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 
 /// Labeled text input with an optional error below it; `multiline` makes
 /// it a text area. `id` links label and input and must be unique on the page.
+/// `inputmode` and `maxlength` apply to single-line inputs, e.g. a numeric
+/// keyboard for card digits.
 #[component]
 pub fn TextField(
     id: String,
@@ -11,6 +13,8 @@ pub fn TextField(
     #[props(default)] placeholder: String,
     #[props(default)] error: Option<String>,
     #[props(default)] multiline: bool,
+    #[props(default)] inputmode: Option<String>,
+    #[props(default)] maxlength: Option<u32>,
 ) -> Element {
     let border = if error.is_some() {
         "border-watermelon-400"
@@ -39,6 +43,8 @@ pub fn TextField(
                     class: "min-h-12 w-full rounded-2xl border bg-jet-black-900 px-4 text-base text-floral-white-50 placeholder:text-floral-white-600 outline-none transition-colors {border}",
                     r#type: "text",
                     autocomplete: "off",
+                    inputmode,
+                    maxlength,
                     value,
                     placeholder,
                     aria_invalid: if error.is_some() { "true" },
