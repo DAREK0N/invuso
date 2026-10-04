@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
+use std::str::FromStr;
 
+use invuso_core::Decimal;
 use invuso_core::domain::{
     CategoryId, Currency, Expense, ExpenseId, ExpensePayment, ExpenseSource, GroupId, Money,
-    PaymentMethodId, PersonId, local_date, validate_occurred_at, validate_participants,
-    validate_payments,
+    PaymentMethodId, PersonId, local_date, validate_occurred_at, validate_payments, validate_split,
 };
 use invuso_core::fx;
 use invuso_core::split::SplitMode;
@@ -23,9 +24,9 @@ pub struct NewExpensePayment {
     pub amount_minor: i64,
 }
 
-/// Input for recording an expense by hand (EXP-01). Split equally between
-/// `participants` (EXP-04, other modes follow in AP-12).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Input for recording an expense by hand (EXP-01) or changing one
+/// (EXP-05).
+#[derive(Debug, Clone, PartialEq)]
 pub struct NewExpense {
     /// `None` for a personal expense (EXP-06).
     pub group_id: Option<GroupId>,
@@ -35,8 +36,26 @@ pub struct NewExpense {
     pub occurred_at: String,
     pub total: Money,
     pub payments: Vec<NewExpensePayment>,
-    pub participants: BTreeSet<PersonId>,
+    /// Who carries the expense and how (EXP-04, idee.md 8.1); exact
+    /// amounts are in the expense's currency.
+    pub split: SplitMode,
 }
+
+/// An expense as a list shows it, until the timeline (GRP-20) exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpenseListEntry {
+    pub id: ExpenseId,
+    pub title: String,
+    pub occurred_at: String,
+    pub total: Money,
+    pub total_in_base: Money,
+}
+
+/// One stored `expense_share` row: person, weight, percent, amount.
+type ShareRow = (String, Option<String>, Option<String>, Option<i64>);
+
+/// The columns of a share row to insert, in the order of [`ShareRow`].
+type ShareValues<'a> = (&'a PersonId, Option<String>, Option<String>, Option<i64>);
 
 impl Db {
     /// Currency an expense is converted into: the group's base currency, or
@@ -54,41 +73,12 @@ impl Db {
         new: NewExpense,
         rate: &RateQuote,
     ) -> Result<Expense, StorageError> {
-        let title = new.title.trim().to_string();
-        if title.is_empty() {
-            return Err(StorageError::InvalidInput("title must not be empty"));
-        }
-        validate_occurred_at(&new.occurred_at)?;
-        let payments: Vec<(PersonId, i64)> = new
-            .payments
-            .iter()
-            .map(|p| (p.person_id.clone(), p.amount_minor))
-            .collect();
-        validate_payments(new.total.amount_minor(), &payments)?;
-        validate_participants(&new.participants)?;
-
+        let title = validate_new(&new)?;
         let id = ExpenseId::new(new_id());
-        let expense = self.with(|conn| {
+        self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
-            let base = base_currency(&tx, new.group_id.as_ref())?;
-            if rate.rate.base() != new.total.currency() || rate.rate.quote() != base {
-                return Err(StorageError::InvalidInput("rate does not fit the expense"));
-            }
-            check_people(&tx, new.group_id.as_ref(), &new)?;
-            for payment in &new.payments {
-                if let Some(method) = &payment.payment_method_id {
-                    check_payment_method(&tx, method)?;
-                }
-            }
-            if let Some(category) = &new.category_id {
-                categories::check_category(&tx, category)?;
-            }
-            let total_in_base = fx::convert(new.total, &rate.rate)
-                .map_err(|_| StorageError::InvalidInput("amount cannot be converted"))?;
-            let fx_rate_id = rate_id_for_expense(&tx, self.device_id(), rate)?;
-            let split = SplitMode::Equal(new.participants.clone());
+            let (base, fx_rate_id) = prepare(&tx, self.device_id(), &new, rate)?;
             let now = now_ms();
-
             tx.execute(
                 "INSERT INTO expense
                      (id, group_id, title, category_id, occurred_at, occurred_date,
@@ -105,40 +95,15 @@ impl Db {
                     new.total.amount_minor(),
                     new.total.currency().code(),
                     fx_rate_id,
-                    total_in_base.amount_minor(),
-                    base.code(),
-                    split.code(),
+                    base.amount_minor(),
+                    base.currency().code(),
+                    new.split.code(),
                     ExpenseSource::Manual.code(),
                     now,
                     self.device_id()
                 ],
             )?;
-            for payment in &new.payments {
-                tx.execute(
-                    "INSERT INTO expense_payment
-                         (id, expense_id, person_id, payment_method_id, amount_minor,
-                          created_at, updated_at, origin_device_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
-                    params![
-                        new_id(),
-                        id.as_str(),
-                        payment.person_id.as_str(),
-                        payment.payment_method_id.as_ref().map(PaymentMethodId::as_str),
-                        payment.amount_minor,
-                        now,
-                        self.device_id()
-                    ],
-                )?;
-            }
-            // Equal split: everyone weighs 1.
-            for person in &new.participants {
-                tx.execute(
-                    "INSERT INTO expense_share
-                         (id, expense_id, person_id, weight, created_at, updated_at, origin_device_id)
-                     VALUES (?1, ?2, ?3, '1', ?4, ?4, ?5)",
-                    params![new_id(), id.as_str(), person.as_str(), now, self.device_id()],
-                )?;
-            }
+            insert_parts(&tx, self.device_id(), &id, &new, now)?;
             // Preselection of the next expense form.
             settings::set(
                 &tx,
@@ -147,34 +112,153 @@ impl Db {
             )?;
             settings::set(&tx, LAST_EXPENSE_CURRENCY, new.total.currency().code())?;
             tx.commit()?;
-
-            Ok(Expense {
-                id: id.clone(),
-                group_id: new.group_id.clone(),
+            Ok(saved(
+                id.clone(),
                 title,
-                category_id: new.category_id.clone(),
-                occurred_at: new.occurred_at.clone(),
-                total: new.total,
+                new,
                 fx_rate_id,
-                total_in_base,
-                split,
-                source: ExpenseSource::Manual,
-                payments: new
-                    .payments
-                    .iter()
-                    .map(|p| ExpensePayment {
-                        person_id: p.person_id.clone(),
-                        payment_method_id: p.payment_method_id.clone(),
-                        amount: Money::new(p.amount_minor, new.total.currency()),
-                    })
-                    .collect(),
-            })
-        })?;
-        Ok(expense)
+                base,
+                ExpenseSource::Manual,
+            ))
+        })
     }
 
-    /// One expense with its payments. Only equal splits exist so far; the
-    /// other modes are read once AP-12 can save them.
+    /// Replaces everything about an expense except its group (moving is
+    /// EXP-11) and its source (EXP-05). The old payments and shares are
+    /// soft-deleted, so history and sync keep them. `rate` works as in
+    /// [`Db::create_expense`]; passing the expense's own archived rate keeps
+    /// it (FX-04).
+    pub fn update_expense(
+        &self,
+        id: &ExpenseId,
+        new: NewExpense,
+        rate: &RateQuote,
+    ) -> Result<Expense, StorageError> {
+        let title = validate_new(&new)?;
+        self.with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let (group_id, source): (Option<String>, String) = tx
+                .query_row(
+                    "SELECT group_id, source FROM expense WHERE id = ?1 AND deleted_at IS NULL",
+                    [id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .ok_or(StorageError::NotFound)?;
+            if group_id.as_deref() != new.group_id.as_ref().map(GroupId::as_str) {
+                return Err(StorageError::InvalidInput(
+                    "an expense cannot change its group",
+                ));
+            }
+            let source = ExpenseSource::from_code(&source)?;
+            let (base, fx_rate_id) = prepare(&tx, self.device_id(), &new, rate)?;
+            let now = now_ms();
+            tx.execute(
+                "UPDATE expense
+                 SET title = ?2, category_id = ?3, occurred_at = ?4, occurred_date = ?5,
+                     total_minor = ?6, currency = ?7, fx_rate_id = ?8, total_base_minor = ?9,
+                     base_currency = ?10, split_mode = ?11, updated_at = ?12
+                 WHERE id = ?1",
+                params![
+                    id.as_str(),
+                    title,
+                    new.category_id.as_ref().map(CategoryId::as_str),
+                    new.occurred_at,
+                    local_date(&new.occurred_at),
+                    new.total.amount_minor(),
+                    new.total.currency().code(),
+                    fx_rate_id,
+                    base.amount_minor(),
+                    base.currency().code(),
+                    new.split.code(),
+                    now
+                ],
+            )?;
+            for table in ["expense_payment", "expense_share"] {
+                tx.execute(
+                    &format!(
+                        "UPDATE {table} SET deleted_at = ?2, updated_at = ?2
+                         WHERE expense_id = ?1 AND deleted_at IS NULL"
+                    ),
+                    params![id.as_str(), now],
+                )?;
+            }
+            insert_parts(&tx, self.device_id(), id, &new, now)?;
+            tx.commit()?;
+            Ok(saved(id.clone(), title, new, fx_rate_id, base, source))
+        })
+    }
+
+    /// Soft delete (EXP-05): payments and shares stay attached to the row,
+    /// so restoring brings the whole expense back (idee.md 4).
+    pub fn delete_expense(&self, id: &ExpenseId) -> Result<(), StorageError> {
+        let changed = self.with(|conn| {
+            Ok(conn.execute(
+                "UPDATE expense SET deleted_at = ?2, updated_at = ?2
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id.as_str(), now_ms()],
+            )?)
+        })?;
+        if changed == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// Undoes [`Db::delete_expense`] (undo toast, UI-11).
+    pub fn restore_expense(&self, id: &ExpenseId) -> Result<(), StorageError> {
+        let changed = self.with(|conn| {
+            Ok(conn.execute(
+                "UPDATE expense SET deleted_at = NULL, updated_at = ?2
+                 WHERE id = ?1 AND deleted_at IS NOT NULL",
+                params![id.as_str(), now_ms()],
+            )?)
+        })?;
+        if changed == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// The group's expenses, newest first.
+    pub fn group_expenses(&self, group: &GroupId) -> Result<Vec<ExpenseListEntry>, StorageError> {
+        self.with(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, title, occurred_at, total_minor, currency, total_base_minor,
+                        base_currency
+                 FROM expense WHERE group_id = ?1 AND deleted_at IS NULL
+                 ORDER BY occurred_date DESC, occurred_at DESC, created_at DESC",
+            )?;
+            let rows = statement
+                .query_map([group.as_str()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(
+                    |(id, title, occurred_at, total, currency, base, base_currency)| {
+                        Ok(ExpenseListEntry {
+                            id: ExpenseId::new(id),
+                            title,
+                            occurred_at,
+                            total: Money::new(total, stored_currency(&currency)?),
+                            total_in_base: Money::new(base, stored_currency(&base_currency)?),
+                        })
+                    },
+                )
+                .collect()
+        })
+    }
+
+    /// One expense with its payments and split.
     pub fn expense(&self, id: &ExpenseId) -> Result<Option<Expense>, StorageError> {
         self.with(|conn| {
             let row = conn
@@ -218,19 +302,17 @@ impl Db {
             };
             let currency = stored_currency(&currency)?;
             let base_currency = stored_currency(&base_currency)?;
-            if split_mode != "equal" {
-                return Err(StorageError::InvalidInput("split mode not supported yet"));
-            }
 
             let mut statement = conn.prepare(
-                "SELECT person_id FROM expense_share
+                "SELECT person_id, weight, percent, amount_minor FROM expense_share
                  WHERE expense_id = ?1 AND deleted_at IS NULL ORDER BY person_id",
             )?;
-            let participants = statement
+            let shares = statement
                 .query_map([id.as_str()], |row| {
-                    Ok(PersonId::new(row.get::<_, String>(0)?))
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                 })?
-                .collect::<Result<BTreeSet<_>, _>>()?;
+                .collect::<Result<Vec<ShareRow>, _>>()?;
+            let split = stored_split(&split_mode, shares)?;
 
             let mut statement = conn.prepare(
                 "SELECT person_id, payment_method_id, amount_minor FROM expense_payment
@@ -257,12 +339,191 @@ impl Db {
                 total: Money::new(total_minor, currency),
                 fx_rate_id,
                 total_in_base: Money::new(total_base_minor, base_currency),
-                split: SplitMode::Equal(participants),
+                split,
                 source: ExpenseSource::from_code(&source)?,
                 payments,
             }))
         })
     }
+}
+
+/// Checks what needs no database and returns the trimmed title.
+fn validate_new(new: &NewExpense) -> Result<String, StorageError> {
+    let title = new.title.trim().to_string();
+    if title.is_empty() {
+        return Err(StorageError::InvalidInput("title must not be empty"));
+    }
+    validate_occurred_at(&new.occurred_at)?;
+    let payments: Vec<(PersonId, i64)> = new
+        .payments
+        .iter()
+        .map(|p| (p.person_id.clone(), p.amount_minor))
+        .collect();
+    validate_payments(new.total.amount_minor(), &payments)?;
+    validate_split(new.total.amount_minor(), &new.split)?;
+    Ok(title)
+}
+
+/// Checks the references of `new` and converts its total: returns the
+/// total in the base currency and the id of the rate it was converted with.
+fn prepare(
+    conn: &Connection,
+    device_id: &str,
+    new: &NewExpense,
+    rate: &RateQuote,
+) -> Result<(Money, Option<String>), StorageError> {
+    let base = base_currency(conn, new.group_id.as_ref())?;
+    if rate.rate.base() != new.total.currency() || rate.rate.quote() != base {
+        return Err(StorageError::InvalidInput("rate does not fit the expense"));
+    }
+    check_people(conn, new.group_id.as_ref(), new)?;
+    for payment in &new.payments {
+        if let Some(method) = &payment.payment_method_id {
+            check_payment_method(conn, method)?;
+        }
+    }
+    if let Some(category) = &new.category_id {
+        categories::check_category(conn, category)?;
+    }
+    let total_in_base = fx::convert(new.total, &rate.rate)
+        .map_err(|_| StorageError::InvalidInput("amount cannot be converted"))?;
+    let fx_rate_id = rate_id_for_expense(conn, device_id, rate)?;
+    Ok((total_in_base, fx_rate_id))
+}
+
+/// Inserts the payments and the shares of `new` for expense `id`.
+fn insert_parts(
+    conn: &Connection,
+    device_id: &str,
+    id: &ExpenseId,
+    new: &NewExpense,
+    now: i64,
+) -> Result<(), StorageError> {
+    for payment in &new.payments {
+        conn.execute(
+            "INSERT INTO expense_payment
+                 (id, expense_id, person_id, payment_method_id, amount_minor,
+                  created_at, updated_at, origin_device_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+            params![
+                new_id(),
+                id.as_str(),
+                payment.person_id.as_str(),
+                payment
+                    .payment_method_id
+                    .as_ref()
+                    .map(PaymentMethodId::as_str),
+                payment.amount_minor,
+                now,
+                device_id
+            ],
+        )?;
+    }
+    // The inputs of the mode, not the computed shares: those follow from
+    // the total and stay exact when it changes (idee.md 4.1 ExpenseShare).
+    let decimal = |value: &Decimal| Some(value.normalize().to_string());
+    let rows: Vec<ShareValues<'_>> = match &new.split {
+        // Equal split: everyone weighs 1.
+        SplitMode::Equal(people) => people
+            .iter()
+            .map(|p| (p, Some("1".to_string()), None, None))
+            .collect(),
+        SplitMode::Weights(weights) => weights
+            .iter()
+            .map(|(p, w)| (p, decimal(w), None, None))
+            .collect(),
+        SplitMode::Percent(percents) => percents
+            .iter()
+            .map(|(p, v)| (p, None, decimal(v), None))
+            .collect(),
+        SplitMode::Exact(amounts) => amounts
+            .iter()
+            .map(|(p, a)| (p, None, None, Some(*a)))
+            .collect(),
+    };
+    for (person, weight, percent, amount) in rows {
+        conn.execute(
+            "INSERT INTO expense_share
+                 (id, expense_id, person_id, weight, percent, amount_minor,
+                  created_at, updated_at, origin_device_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)",
+            params![
+                new_id(),
+                id.as_str(),
+                person.as_str(),
+                weight,
+                percent,
+                amount,
+                now,
+                device_id
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// The expense as just written.
+fn saved(
+    id: ExpenseId,
+    title: String,
+    new: NewExpense,
+    fx_rate_id: Option<String>,
+    total_in_base: Money,
+    source: ExpenseSource,
+) -> Expense {
+    let currency = new.total.currency();
+    Expense {
+        id,
+        group_id: new.group_id,
+        title,
+        category_id: new.category_id,
+        occurred_at: new.occurred_at,
+        total: new.total,
+        fx_rate_id,
+        total_in_base,
+        split: new.split,
+        source,
+        payments: new
+            .payments
+            .into_iter()
+            .map(|p| ExpensePayment {
+                person_id: p.person_id,
+                payment_method_id: p.payment_method_id,
+                amount: Money::new(p.amount_minor, currency),
+            })
+            .collect(),
+    }
+}
+
+/// Rebuilds the split from its stored code and share rows.
+fn stored_split(code: &str, rows: Vec<ShareRow>) -> Result<SplitMode, StorageError> {
+    let mismatch = || StorageError::InvalidInput("stored share does not fit its split mode");
+    let decimal = |text: Option<String>| {
+        text.and_then(|t| Decimal::from_str(&t).ok())
+            .ok_or_else(mismatch)
+    };
+    let people = rows
+        .into_iter()
+        .map(|(person, weight, percent, amount)| (PersonId::new(person), weight, percent, amount));
+    Ok(match code {
+        "equal" => SplitMode::Equal(people.map(|row| row.0).collect()),
+        "weights" => SplitMode::Weights(
+            people
+                .map(|(person, weight, _, _)| Ok((person, decimal(weight)?)))
+                .collect::<Result<_, StorageError>>()?,
+        ),
+        "percent" => SplitMode::Percent(
+            people
+                .map(|(person, _, percent, _)| Ok((person, decimal(percent)?)))
+                .collect::<Result<_, StorageError>>()?,
+        ),
+        "exact" => SplitMode::Exact(
+            people
+                .map(|(person, _, _, amount)| Ok((person, amount.ok_or_else(mismatch)?)))
+                .collect::<Result<_, StorageError>>()?,
+        ),
+        _ => return Err(StorageError::InvalidInput("stored split mode is unknown")),
+    })
 }
 
 fn base_currency(conn: &Connection, group: Option<&GroupId>) -> Result<Currency, StorageError> {
@@ -305,11 +566,12 @@ fn check_people(
                 .collect::<Result<_, _>>()?
         }
     };
+    let participants = new.split.participants();
     let everyone = new
         .payments
         .iter()
         .map(|p| &p.person_id)
-        .chain(new.participants.iter());
+        .chain(participants.iter());
     for person in everyone {
         if !allowed.contains(person.as_str()) {
             return Err(StorageError::InvalidInput(
@@ -339,8 +601,11 @@ mod tests {
     use std::str::FromStr;
 
     use invuso_core::Decimal;
+    use std::collections::BTreeMap;
+
     use invuso_core::domain::{ExpenseError, PaymentMethodKind, Person};
     use invuso_core::fx::Rate;
+    use invuso_core::split::{ExpenseEntry, SplitError, balances};
 
     use super::*;
     use crate::storage::exchange_rates::CROSS_SOURCE;
@@ -413,7 +678,7 @@ mod tests {
                 payment_method_id: None,
                 amount_minor: 3_000,
             }],
-            participants: BTreeSet::from([s.me.id.clone(), s.anna.id.clone()]),
+            split: SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()])),
         }
     }
 
@@ -555,7 +820,7 @@ mod tests {
                 payment_method_id: None,
                 amount_minor: 350,
             }],
-            participants: BTreeSet::from([s.me.id.clone()]),
+            split: SplitMode::Equal(BTreeSet::from([s.me.id.clone()])),
             ..ramen(&s)
         };
         let saved = s.db.create_expense(coffee, &rate).unwrap();
@@ -606,14 +871,14 @@ mod tests {
             ),
             (
                 NewExpense {
-                    participants: BTreeSet::new(),
+                    split: SplitMode::Equal(BTreeSet::new()),
                     ..ramen(&s)
                 },
                 &rate,
             ),
             (
                 NewExpense {
-                    participants: BTreeSet::from([stranger.id.clone()]),
+                    split: SplitMode::Equal(BTreeSet::from([stranger.id.clone()])),
                     ..ramen(&s)
                 },
                 &rate,
@@ -656,5 +921,231 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    fn d(value: &str) -> Decimal {
+        Decimal::from_str(value).unwrap()
+    }
+
+    /// 40 € paid by "Ich", in the EUR group, split by `split`.
+    fn hotel(s: &Setup, split: SplitMode) -> NewExpense {
+        NewExpense {
+            title: "Hotel".into(),
+            total: Money::new(4_000, cur("EUR")),
+            payments: vec![NewExpensePayment {
+                person_id: s.me.id.clone(),
+                payment_method_id: None,
+                amount_minor: 4_000,
+            }],
+            split,
+            ..ramen(s)
+        }
+    }
+
+    fn add_ben(s: &Setup) -> Person {
+        let ben =
+            s.db.create_person(NewPerson {
+                name: "Ben".into(),
+                color: "pale-oak".into(),
+                is_me: false,
+                note: None,
+            })
+            .unwrap();
+        s.db.add_group_member(&s.group, &ben.id).unwrap();
+        ben
+    }
+
+    #[test]
+    fn every_split_mode_is_read_back_as_saved() {
+        let s = setup("EUR");
+        let ben = add_ben(&s);
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let (me, anna) = (s.me.id.clone(), s.anna.id.clone());
+        let modes = [
+            SplitMode::Equal(BTreeSet::from([me.clone(), anna.clone()])),
+            SplitMode::Weights(BTreeMap::from([
+                (me.clone(), d("2")),
+                (anna.clone(), d("1.0")),
+                (ben.id.clone(), d("0.5")),
+            ])),
+            SplitMode::Percent(BTreeMap::from([
+                (me.clone(), d("70")),
+                (anna.clone(), d("30.00")),
+            ])),
+            SplitMode::Exact(BTreeMap::from([
+                (me.clone(), 2_550),
+                (anna.clone(), 1_450),
+                (ben.id.clone(), 0),
+            ])),
+        ];
+        for mode in modes {
+            let saved = s.db.create_expense(hotel(&s, mode.clone()), &rate).unwrap();
+            let read = s.db.expense(&saved.id).unwrap().unwrap();
+            assert_eq!(read.split, mode);
+            assert_eq!(read, saved);
+        }
+    }
+
+    #[test]
+    fn invalid_splits_are_rejected() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let (me, anna) = (s.me.id.clone(), s.anna.id.clone());
+        let percent = SplitMode::Percent(BTreeMap::from([
+            (me.clone(), d("60")),
+            (anna.clone(), d("30")),
+        ]));
+        assert!(matches!(
+            s.db.create_expense(hotel(&s, percent), &rate),
+            Err(StorageError::Expense(ExpenseError::Split(
+                SplitError::PercentNot100(_)
+            )))
+        ));
+        let exact = SplitMode::Exact(BTreeMap::from([(me, 2_000), (anna, 1_999)]));
+        assert!(matches!(
+            s.db.create_expense(hotel(&s, exact), &rate),
+            Err(StorageError::Expense(ExpenseError::Split(
+                SplitError::ExactSumMismatch { .. }
+            )))
+        ));
+    }
+
+    /// Balances of the group computed from what the database holds.
+    fn group_balances(s: &Setup) -> BTreeMap<PersonId, i64> {
+        let entries: Vec<ExpenseEntry> = s
+            .db
+            .group_expenses(&s.group)
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                let expense = s.db.expense(&entry.id).unwrap().unwrap();
+                ExpenseEntry {
+                    payments: expense
+                        .payments
+                        .iter()
+                        .map(|p| (p.person_id.clone(), p.amount.amount_minor()))
+                        .collect(),
+                    shares: validate_split(expense.total.amount_minor(), &expense.split).unwrap(),
+                }
+            })
+            .collect();
+        balances(&entries, &[])
+            .unwrap()
+            .into_iter()
+            .map(|(person, totals)| (person, totals.balance))
+            .collect()
+    }
+
+    #[test]
+    fn editing_replaces_payments_and_shares() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let (me, anna) = (s.me.id.clone(), s.anna.id.clone());
+        let equal = SplitMode::Equal(BTreeSet::from([me.clone(), anna.clone()]));
+        let saved = s.db.create_expense(hotel(&s, equal), &rate).unwrap();
+        assert_eq!(
+            group_balances(&s),
+            BTreeMap::from([(me.clone(), 2_000), (anna.clone(), -2_000)])
+        );
+
+        // Now Anna paid 50 € and carries 70 %.
+        let changed = NewExpense {
+            title: "Hotel Kyoto".into(),
+            total: Money::new(5_000, cur("EUR")),
+            payments: vec![NewExpensePayment {
+                person_id: anna.clone(),
+                payment_method_id: None,
+                amount_minor: 5_000,
+            }],
+            split: SplitMode::Percent(BTreeMap::from([
+                (me.clone(), d("30")),
+                (anna.clone(), d("70")),
+            ])),
+            ..hotel(&s, SplitMode::Equal(BTreeSet::new()))
+        };
+        let updated = s.db.update_expense(&saved.id, changed, &rate).unwrap();
+        assert_eq!(updated.id, saved.id);
+        assert_eq!(updated.total_in_base, Money::new(5_000, cur("EUR")));
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(updated));
+        assert_eq!(
+            group_balances(&s),
+            BTreeMap::from([(me, -1_500), (anna, 1_500)])
+        );
+
+        // The old rows stay as soft-deleted history.
+        let (active, deleted): (i64, i64) =
+            s.db.with(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FILTER (WHERE deleted_at IS NULL),
+                            count(*) FILTER (WHERE deleted_at IS NOT NULL)
+                     FROM expense_share WHERE expense_id = ?1",
+                    [saved.id.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!((active, deleted), (2, 2));
+    }
+
+    #[test]
+    fn editing_keeps_group_and_rejects_invalid_input() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone()]));
+        let saved =
+            s.db.create_expense(hotel(&s, equal.clone()), &rate)
+                .unwrap();
+        let personal = NewExpense {
+            group_id: None,
+            ..hotel(&s, equal.clone())
+        };
+        assert!(matches!(
+            s.db.update_expense(&saved.id, personal, &rate),
+            Err(StorageError::InvalidInput(_))
+        ));
+        let empty = hotel(&s, SplitMode::Equal(BTreeSet::new()));
+        assert!(s.db.update_expense(&saved.id, empty, &rate).is_err());
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(saved));
+        assert!(matches!(
+            s.db.update_expense(&ExpenseId::new("nope"), hotel(&s, equal), &rate),
+            Err(StorageError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn delete_hides_and_restore_brings_back() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()]));
+        let older = NewExpense {
+            occurred_at: "2026-10-01T12:00:00+09:00".into(),
+            ..hotel(&s, equal.clone())
+        };
+        let first = s.db.create_expense(older, &rate).unwrap();
+        let second = s.db.create_expense(hotel(&s, equal), &rate).unwrap();
+        let ids = |s: &Setup| -> Vec<ExpenseId> {
+            s.db.group_expenses(&s.group)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.id)
+                .collect()
+        };
+        assert_eq!(ids(&s), [second.id.clone(), first.id.clone()]);
+
+        s.db.delete_expense(&second.id).unwrap();
+        assert_eq!(ids(&s), std::slice::from_ref(&first.id));
+        assert_eq!(s.db.expense(&second.id).unwrap(), None);
+        assert!(matches!(
+            s.db.delete_expense(&second.id),
+            Err(StorageError::NotFound)
+        ));
+
+        s.db.restore_expense(&second.id).unwrap();
+        assert_eq!(s.db.expense(&second.id).unwrap(), Some(second.clone()));
+        assert_eq!(ids(&s).len(), 2);
+        assert!(matches!(
+            s.db.restore_expense(&second.id),
+            Err(StorageError::NotFound)
+        ));
     }
 }

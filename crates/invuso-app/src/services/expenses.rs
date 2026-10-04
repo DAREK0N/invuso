@@ -1,10 +1,11 @@
-//! Saving an expense with the exchange rate of its day (EXP-07, idee.md 8.4).
+//! Saving an expense with the exchange rate of its day (EXP-07, idee.md 8.4)
+//! and changing it later (EXP-05).
 
-use invuso_core::domain::{Currency, Expense, local_date, validate_occurred_at};
+use invuso_core::domain::{Currency, Expense, ExpenseId, local_date, validate_occurred_at};
 use thiserror::Error;
 
 use super::rates::{RateProvider, refresh_on_date};
-use crate::storage::{Db, NewExpense, StorageError};
+use crate::storage::{Db, NewExpense, RateQuote, StorageError};
 
 #[derive(Debug, Error)]
 pub enum SaveExpenseError {
@@ -26,10 +27,6 @@ pub struct SavedExpense {
 
 /// Picks the rate for the expense's day and saves it. Blocks on the network
 /// when the day has to be fetched, so it must run on a background thread.
-///
-/// Order: the archived rate of the day or the closest earlier one
-/// (idee.md 8.4); if the archive has none, the day is fetched and archived
-/// (FX-09); if that fails too, the closest later archived rate.
 pub fn save_expense(
     db: &Db,
     primary: &dyn RateProvider,
@@ -38,6 +35,59 @@ pub fn save_expense(
 ) -> Result<SavedExpense, SaveExpenseError> {
     validate_occurred_at(&new.occurred_at).map_err(StorageError::from)?;
     let base = db.expense_base_currency(new.group_id.as_ref())?;
+    let (quote, later_rate) = rate_for_day(db, primary, fallback, &new, base)?;
+    let expense = db.create_expense(new, &quote)?;
+    Ok(SavedExpense {
+        expense,
+        later_rate,
+    })
+}
+
+/// Saves the changes to an expense. Same currency on the same day keeps
+/// the archived rate the expense was saved with, so editing the amount or
+/// the split never brings in a newer rate (FX-04); another currency or day
+/// picks the rate like [`save_expense`]. May block on the network.
+pub fn update_expense(
+    db: &Db,
+    primary: &dyn RateProvider,
+    fallback: &dyn RateProvider,
+    id: &ExpenseId,
+    new: NewExpense,
+) -> Result<SavedExpense, SaveExpenseError> {
+    validate_occurred_at(&new.occurred_at).map_err(StorageError::from)?;
+    let old = db.expense(id)?.ok_or(StorageError::NotFound)?;
+    let base = db.expense_base_currency(new.group_id.as_ref())?;
+    let currency = new.total.currency();
+    let unchanged = local_date(&old.occurred_at) == local_date(&new.occurred_at)
+        && old.total.currency() == currency
+        && old.total_in_base.currency() == base;
+    let kept = match (&old.fx_rate_id, unchanged) {
+        (Some(rate_id), true) => db.archived_rate(rate_id, currency, base)?,
+        _ => None,
+    };
+    let (quote, later_rate) = match kept {
+        Some(quote) => (quote, false),
+        None => rate_for_day(db, primary, fallback, &new, base)?,
+    };
+    let expense = db.update_expense(id, new, &quote)?;
+    Ok(SavedExpense {
+        expense,
+        later_rate,
+    })
+}
+
+/// The rate for the expense's day and whether it is from a later day.
+///
+/// Order: the archived rate of the day or the closest earlier one
+/// (idee.md 8.4); if the archive has none, the day is fetched and archived
+/// (FX-09); if that fails too, the closest later archived rate.
+fn rate_for_day(
+    db: &Db,
+    primary: &dyn RateProvider,
+    fallback: &dyn RateProvider,
+    new: &NewExpense,
+    base: Currency,
+) -> Result<(RateQuote, bool), SaveExpenseError> {
     let currency = new.total.currency();
     let date = local_date(&new.occurred_at).to_string();
 
@@ -47,8 +97,8 @@ pub fn save_expense(
         refresh_on_date(db, primary, fallback, &date)?;
         quote = db.rate_on(currency, base, &date)?;
     }
-    let (quote, later_rate) = match quote {
-        Some(quote) => (quote, false),
+    match quote {
+        Some(quote) => Ok((quote, false)),
         None => {
             let near = db
                 .rate_near(currency, base, &date)?
@@ -56,14 +106,9 @@ pub fn save_expense(
                     from: currency,
                     to: base,
                 })?;
-            (near.quote, near.later)
+            Ok((near.quote, near.later))
         }
-    };
-    let expense = db.create_expense(new, &quote)?;
-    Ok(SavedExpense {
-        expense,
-        later_rate,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -75,6 +120,7 @@ mod tests {
     use invuso_core::Decimal;
     use invuso_core::domain::{Money, Person};
     use invuso_core::fx::Rate;
+    use invuso_core::split::SplitMode;
 
     use super::*;
     use crate::services::rates::RateError;
@@ -155,7 +201,7 @@ mod tests {
                 payment_method_id: None,
                 amount_minor: 3_000,
             }],
-            participants: BTreeSet::from([me.id.clone()]),
+            split: SplitMode::Equal(BTreeSet::from([me.id.clone()])),
         }
     }
 
@@ -216,5 +262,63 @@ mod tests {
         };
         let saved = save_expense(&db, &Fake::offline(), &Fake::offline(), coffee).unwrap();
         assert_eq!(saved.expense.fx_rate_id, None);
+    }
+
+    #[test]
+    fn editing_keeps_the_rate_of_the_same_day_and_currency() {
+        let (db, me) = setup();
+        db.archive_rates("frankfurter", 1, &[eur_to("JPY", "160", "2026-10-01")])
+            .unwrap();
+        let (primary, fallback) = (Fake::offline(), Fake::offline());
+        let saved = save_expense(&db, &primary, &fallback, ramen(&me)).unwrap();
+        // A newer rate of the same day arrives afterwards.
+        db.archive_rates("frankfurter", 2, &[eur_to("JPY", "150", "2026-10-03")])
+            .unwrap();
+
+        let dearer = NewExpense {
+            total: Money::new(3_200, cur("JPY")),
+            payments: vec![NewExpensePayment {
+                person_id: me.id.clone(),
+                payment_method_id: None,
+                amount_minor: 3_200,
+            }],
+            occurred_at: "2026-10-03T21:00:00+09:00".into(),
+            ..ramen(&me)
+        };
+        let id = saved.expense.id.clone();
+        let edited = update_expense(&db, &primary, &fallback, &id, dearer).unwrap();
+        assert_eq!(edited.expense.fx_rate_id, saved.expense.fx_rate_id);
+        // 3 200 / 160 = 20 €, not 3 200 / 150.
+        assert_eq!(edited.expense.total_in_base, Money::new(2_000, cur("EUR")));
+
+        // Another day takes that day's rate.
+        let moved = NewExpense {
+            occurred_at: "2026-10-04T12:00:00+09:00".into(),
+            ..ramen(&me)
+        };
+        let edited = update_expense(&db, &primary, &fallback, &id, moved).unwrap();
+        assert_ne!(edited.expense.fx_rate_id, saved.expense.fx_rate_id);
+        assert_eq!(edited.expense.total_in_base, Money::new(2_000, cur("EUR")));
+    }
+
+    #[test]
+    fn editing_into_another_currency_converts_anew() {
+        let (db, me) = setup();
+        db.archive_rates("frankfurter", 1, &[eur_to("JPY", "160", "2026-10-01")])
+            .unwrap();
+        let (primary, fallback) = (Fake::offline(), Fake::offline());
+        let saved = save_expense(&db, &primary, &fallback, ramen(&me)).unwrap();
+        let in_euro = NewExpense {
+            total: Money::new(1_990, cur("EUR")),
+            payments: vec![NewExpensePayment {
+                person_id: me.id.clone(),
+                payment_method_id: None,
+                amount_minor: 1_990,
+            }],
+            ..ramen(&me)
+        };
+        let edited = update_expense(&db, &primary, &fallback, &saved.expense.id, in_euro).unwrap();
+        assert_eq!(edited.expense.fx_rate_id, None);
+        assert_eq!(edited.expense.total_in_base, Money::new(1_990, cur("EUR")));
     }
 }

@@ -29,6 +29,16 @@ impl SplitMode {
             Self::Exact(_) => "exact",
         }
     }
+
+    /// Everyone the expense is split between, including people whose
+    /// weight, percentage or amount is zero.
+    pub fn participants(&self) -> BTreeSet<PersonId> {
+        match self {
+            Self::Equal(people) => people.clone(),
+            Self::Weights(map) | Self::Percent(map) => map.keys().cloned().collect(),
+            Self::Exact(map) => map.keys().cloned().collect(),
+        }
+    }
 }
 
 /// Each person's share of `total` minor units.
@@ -123,6 +133,18 @@ mod tests {
                 actual: 1000
             })
         );
+    }
+
+    #[test]
+    fn participants_of_every_mode() {
+        let both: BTreeSet<_> = [p("anna"), p("ben")].into();
+        assert_eq!(SplitMode::Equal(both.clone()).participants(), both);
+        let weights = [(p("anna"), d("2")), (p("ben"), d("0"))].into();
+        assert_eq!(SplitMode::Weights(weights).participants(), both);
+        let percents = [(p("anna"), d("100")), (p("ben"), d("0"))].into();
+        assert_eq!(SplitMode::Percent(percents).participants(), both);
+        let amounts = [(p("anna"), 5), (p("ben"), 0)].into();
+        assert_eq!(SplitMode::Exact(amounts).participants(), both);
     }
 
     #[test]

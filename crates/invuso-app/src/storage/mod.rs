@@ -22,8 +22,8 @@ mod settings;
 
 pub(crate) use db::now_ms;
 pub use db::{Db, StorageError};
-pub use exchange_rates::{NearRate, NewExchangeRate};
-pub use expenses::{NewExpense, NewExpensePayment};
+pub use exchange_rates::{NearRate, NewExchangeRate, RateQuote};
+pub use expenses::{ExpenseListEntry, NewExpense, NewExpensePayment};
 pub use groups::NewGroup;
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;

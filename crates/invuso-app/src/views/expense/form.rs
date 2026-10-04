@@ -1,32 +1,36 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use dioxus::prelude::*;
+use dioxus::router::Navigator;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdCheck, LdChevronRight, LdCircleAlert, LdPlus, LdTriangleAlert, LdUser, LdX,
+        LdCheck, LdChevronRight, LdCircleAlert, LdPlus, LdTrash2, LdTriangleAlert, LdUser, LdX,
     },
 };
 use invuso_core::Decimal;
 use invuso_core::domain::{
-    Category, CategoryId, Currency, ExpenseError, Group, GroupId, Money, PaymentMethod,
-    PaymentMethodId, Person, PersonId, is_iso_date, validate_participants, validate_payments,
+    Category, Currency, Expense, ExpenseError, ExpenseId, Group, GroupId, GroupMember, Money,
+    PaymentMethod, PaymentMethodId, Person, PersonId, is_iso_date, validate_participants,
+    validate_payments, validate_split,
 };
 use invuso_core::fx;
-use invuso_core::split::{SplitMode, allocate, split};
+use invuso_core::split::allocate;
 
+use super::split::{ShareRow, SplitDraft, SplitKind, split_error_text, sum_hint};
 use crate::Route;
 use crate::clock;
 use crate::components::{
-    AmountInput, Avatar, AvatarSize, BottomSheet, Button, CategoryIconGlyph, Chip,
+    AmountInput, Avatar, AvatarSize, BottomSheet, Button, ButtonVariant, CategoryIconGlyph, Chip,
     CompactAmountInput, CurrencyPicker, DateTimeField, EmptyState, ErrorBanner, GroupIcon,
     MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, TextField, TopBar,
 };
 use crate::format::{NumberFormat, amount_text, fit_amount_text, format_money, parse_amount};
 use crate::preferences::{category_name, default_home_currency, display_date};
-use crate::services::expenses::{SaveExpenseError, save_expense};
+use crate::services::expenses::{SaveExpenseError, save_expense, update_expense};
 use crate::services::rates::{CurrencyApi, Frankfurter};
-use crate::state::{DataRevision, Toaster};
+use crate::state::{DataRevision, ToastAction, Toaster};
 use crate::storage::{
     Db, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, NearRate, NewExpense, NewExpensePayment,
     StorageError,
@@ -42,10 +46,13 @@ struct FormData {
     categories: Vec<Category>,
     /// Active payment methods of everyone.
     methods: Vec<PaymentMethod>,
-    /// Preselected group: the one of the last expense, else the newest.
+    /// Preselected group: the one of the last expense, else the newest;
+    /// when editing, the expense's group.
     group: Option<GroupId>,
     /// Currency of the last expense, if any.
     currency: Option<Currency>,
+    /// The expense being edited (EXP-05); `None` for a new one.
+    existing: Option<Expense>,
 }
 
 /// Someone who paid (part of) the expense (EXP-02, EXP-03).
@@ -68,23 +75,57 @@ enum Sheet {
 }
 
 /// `/expense/new`: records an expense by hand (EXP-01..04, EXP-06, EXP-07;
-/// idee.md 7.3), split equally. Saving leads to the group.
+/// idee.md 7.3). Saving leads to the group.
 #[component]
 pub fn ExpenseNew() -> Element {
     let db = use_context::<Db>();
-    let data = use_hook(|| load(&db).map_err(|e| e.to_string()));
+    let data = use_hook(|| load(&db, None).map_err(|e| e.to_string()));
 
     rsx! {
         TopBar { title: t!("page.expense_new").to_string(), show_back: true }
         match data {
-            Err(message) => rsx! {
+            Err(message) => rsx! { LoadError { message } },
+            Ok(data) => rsx! { ExpenseForm { data } },
+        }
+    }
+}
+
+/// `/expense/:id/edit`: the same form, filled with the saved expense
+/// (EXP-05); also deletes it with undo.
+#[component]
+pub fn ExpenseEdit(id: String) -> Element {
+    let db = use_context::<Db>();
+    // `None` stands for "not found".
+    let data = use_hook(|| {
+        load(&db, Some(&ExpenseId::new(id))).map_err(|e| match e {
+            StorageError::NotFound => None,
+            other => Some(other.to_string()),
+        })
+    });
+
+    rsx! {
+        TopBar { title: t!("page.expense_edit").to_string(), show_back: true }
+        match data {
+            Err(None) => rsx! {
                 EmptyState {
-                    title: t!("expense.load_error_title").to_string(),
-                    text: message,
+                    title: t!("expense.not_found_title").to_string(),
+                    text: t!("expense.not_found_text").to_string(),
                     Icon { icon: LdCircleAlert, class: "h-8 w-8" }
                 }
             },
+            Err(Some(message)) => rsx! { LoadError { message } },
             Ok(data) => rsx! { ExpenseForm { data } },
+        }
+    }
+}
+
+#[component]
+fn LoadError(message: String) -> Element {
+    rsx! {
+        EmptyState {
+            title: t!("expense.load_error_title").to_string(),
+            text: message,
+            Icon { icon: LdCircleAlert, class: "h-8 w-8" }
         }
     }
 }
@@ -95,33 +136,53 @@ fn ExpenseForm(data: FormData) -> Element {
     let revision = use_context::<DataRevision>();
     let toaster = use_context::<Toaster>();
     let nav = use_navigator();
+    let existing = data.existing.clone();
+    let editing = existing.is_some();
 
     let initial_people =
         use_hook(|| people_of(&db, data.group.as_ref(), &data.me).map_err(|e| e.to_string()));
     let start_people = initial_people
         .clone()
-        .unwrap_or_else(|_| vec![data.me.clone()]);
+        .unwrap_or_else(|_| vec![member(data.me.clone())]);
 
-    let mut amount_text_signal = use_signal(String::new);
     let start_currency = data
         .currency
         .unwrap_or_else(|| base_of(&data.groups, data.group.as_ref(), data.home_currency));
+    let mut amount_text_signal = use_signal(|| {
+        let format = NumberFormat::current();
+        existing
+            .as_ref()
+            .map(|e| amount_text(e.total, format))
+            .unwrap_or_default()
+    });
     let mut currency = use_signal(|| start_currency);
-    let mut title = use_signal(String::new);
-    let mut category = use_signal(|| None::<CategoryId>);
-    let (today, now) = use_hook(clock::local_now);
-    let mut date = use_signal(|| today);
-    let mut time = use_signal(|| now);
+    let mut title = use_signal(|| {
+        existing
+            .as_ref()
+            .map(|e| e.title.clone())
+            .unwrap_or_default()
+    });
+    let mut category = use_signal(|| existing.as_ref().and_then(|e| e.category_id.clone()));
+    let (start_date, start_time) = use_hook(|| match &existing {
+        Some(expense) => split_occurred_at(&expense.occurred_at),
+        None => clock::local_now(),
+    });
+    let mut date = use_signal(|| start_date.clone());
+    let mut time = use_signal(|| start_time.clone());
     let mut group = use_signal(|| data.group.clone());
     let mut people = use_signal(|| start_people.clone());
-    let start_payer = default_payer(&start_people, &data.me, &data.methods);
-    let mut payers = use_signal(|| vec![start_payer]);
-    let mut payers_manual = use_signal(|| false);
-    let mut participants = use_signal(|| {
-        start_people
-            .iter()
-            .map(|p| p.id.clone())
-            .collect::<BTreeSet<_>>()
+    let mut payers = use_signal(|| match &existing {
+        Some(expense) => saved_payers(expense, &start_people),
+        None => vec![default_payer(&start_people, &data.me, &data.methods)],
+    });
+    let mut payers_manual = use_signal(|| existing.as_ref().is_some_and(|e| e.payments.len() > 1));
+    let mut split_draft = use_signal(|| match &existing {
+        Some(expense) => SplitDraft::from_mode(
+            &expense.split,
+            expense.total.currency(),
+            NumberFormat::current(),
+        ),
+        None => SplitDraft::equal(start_people.iter().map(|m| m.person.id.clone()).collect()),
     });
     let mut sheet = use_signal(|| None::<Sheet>);
     let mut amount_error = use_signal(|| None::<String>);
@@ -139,6 +200,13 @@ fn ExpenseForm(data: FormData) -> Element {
     let groups = data.groups.clone();
     let home_currency = data.home_currency;
     let base_currency = use_memo(move || base_of(&groups, group().as_ref(), home_currency));
+    let default_weights = use_memo(move || {
+        people
+            .read()
+            .iter()
+            .map(|m| (m.person.id.clone(), m.default_weight))
+            .collect::<BTreeMap<_, _>>()
+    });
 
     let preview_db = db.clone();
     let preview = use_memo(move || {
@@ -162,7 +230,9 @@ fn ExpenseForm(data: FormData) -> Element {
             Ok(list) => {
                 payers.set(vec![default_payer(&list, &me, &methods)]);
                 payers_manual.set(false);
-                participants.set(list.iter().map(|p| p.id.clone()).collect());
+                split_draft.set(SplitDraft::equal(
+                    list.iter().map(|m| m.person.id.clone()).collect(),
+                ));
                 people.set(list);
                 payers_error.set(None);
                 participants_error.set(None);
@@ -180,6 +250,7 @@ fn ExpenseForm(data: FormData) -> Element {
         for payer in payers.write().iter_mut() {
             payer.amount_text = fit_amount_text(&payer.amount_text, new_currency, format);
         }
+        split_draft.write().fit_currency(new_currency, format);
         currency.set(new_currency);
     };
 
@@ -217,6 +288,7 @@ fn ExpenseForm(data: FormData) -> Element {
     });
 
     let save_db = db.clone();
+    let save_existing = existing.clone();
     let save = move |_| {
         let format = NumberFormat::current();
         let cur = currency();
@@ -231,7 +303,14 @@ fn ExpenseForm(data: FormData) -> Element {
             title_error.set(Some(t!("expense.title_required").to_string()));
             valid = false;
         }
-        let occurred_at = clock::occurred_at(&date(), &time());
+        let occurred_at = match &save_existing {
+            // Untouched date and time keep their original offset, e.g. the
+            // one of the trip's time zone.
+            Some(expense) if split_occurred_at(&expense.occurred_at) == (date(), time()) => {
+                Some(expense.occurred_at.clone())
+            }
+            _ => clock::occurred_at(&date(), &time()),
+        };
         if occurred_at.is_none() {
             date_error.set(Some(t!("expense.date_time_invalid").to_string()));
             valid = false;
@@ -255,8 +334,15 @@ fn ExpenseForm(data: FormData) -> Element {
                 valid = false;
             }
         }
-        if validate_participants(&participants.read()).is_err() {
-            participants_error.set(Some(t!("expense.participants_required").to_string()));
+        let split = split_draft
+            .read()
+            .mode(&default_weights.read(), cur, format);
+        let split_check = match total {
+            Some(total) => validate_split(total.amount_minor(), &split).map(|_| ()),
+            None => validate_participants(&split.participants()),
+        };
+        if let Err(error) = split_check {
+            participants_error.set(Some(split_error_text(&error, cur, format)));
             valid = false;
         }
         let (Some(total), Some(occurred_at), true) = (total, occurred_at, valid) else {
@@ -278,39 +364,32 @@ fn ExpenseForm(data: FormData) -> Element {
                     amount_minor: *amount,
                 })
                 .collect(),
-            participants: participants(),
+            split,
         };
         save_error.set(None);
         saving.set(true);
         let worker_db = save_db.clone();
+        let edit_id = save_existing.as_ref().map(|e| e.id.clone());
         let (mut revision, mut toaster) = (revision, toaster);
         spawn(async move {
             // The day's rate may have to be fetched; keep the network off
             // the UI thread.
-            let outcome = tokio::task::spawn_blocking(move || {
-                save_expense(&worker_db, &Frankfurter, &CurrencyApi, new)
+            let editing = edit_id.is_some();
+            let outcome = tokio::task::spawn_blocking(move || match edit_id {
+                Some(id) => update_expense(&worker_db, &Frankfurter, &CurrencyApi, &id, new),
+                None => save_expense(&worker_db, &Frankfurter, &CurrencyApi, new),
             })
             .await;
             match outcome {
                 Ok(Ok(saved)) => {
                     revision.bump();
-                    let message = if saved.later_rate {
-                        t!("expense.saved_later_rate")
-                    } else {
-                        t!("expense.saved")
+                    let message = match (saved.later_rate, editing) {
+                        (true, _) => t!("expense.saved_later_rate"),
+                        (false, true) => t!("expense.updated"),
+                        (false, false) => t!("expense.saved"),
                     };
                     toaster.show(message.to_string(), None);
-                    match saved.expense.group_id {
-                        Some(id) => {
-                            nav.replace(Route::GroupOverview {
-                                id: id.as_str().to_string(),
-                            });
-                        }
-                        None if nav.can_go_back() => nav.go_back(),
-                        None => {
-                            nav.replace(Route::Home {});
-                        }
-                    }
+                    leave(nav, saved.expense.group_id.as_ref(), editing);
                 }
                 Ok(Err(error)) => {
                     saving.set(false);
@@ -324,6 +403,37 @@ fn ExpenseForm(data: FormData) -> Element {
         });
     };
 
+    let delete_db = db.clone();
+    let delete_existing = existing.clone();
+    let delete = move |_| {
+        let Some(expense) = delete_existing.clone() else {
+            return;
+        };
+        let (mut revision, mut toaster) = (revision, toaster);
+        if let Err(e) = delete_db.delete_expense(&expense.id) {
+            save_error.set(Some(format!("{} {e}", t!("expense.delete_error"))));
+            return;
+        }
+        revision.bump();
+        let undo_db = delete_db.clone();
+        let id = expense.id.clone();
+        let undo = move || {
+            let (mut revision, mut toaster) = (revision, toaster);
+            match undo_db.restore_expense(&id) {
+                Ok(()) => revision.bump(),
+                Err(e) => toaster.show(format!("{} {e}", t!("expense.restore_error")), None),
+            }
+        };
+        toaster.show(
+            t!("expense.deleted", title = expense.title).to_string(),
+            Some(ToastAction {
+                label: t!("common.undo").to_string(),
+                run: Rc::new(undo),
+            }),
+        );
+        leave(nav, expense.group_id.as_ref(), true);
+    };
+
     // Values for this render.
     let format = NumberFormat::current();
     let cur = currency();
@@ -333,22 +443,27 @@ fn ExpenseForm(data: FormData) -> Element {
     let manual = payers_manual();
     let amounts = payer_amounts(&payer_list, manual, total_minor, cur, format);
     let paid: i64 = amounts.iter().sum();
-    let selected = participants();
-    let shares = if total_minor > 0 && !selected.is_empty() {
-        split(total_minor, &SplitMode::Equal(selected.clone())).unwrap_or_default()
+    let draft = split_draft();
+    let split = draft.mode(&default_weights.read(), cur, format);
+    let shares = if total_minor > 0 {
+        validate_split(total_minor, &split).unwrap_or_default()
     } else {
         BTreeMap::new()
     };
+    let hint = sum_hint(&split, Money::new(total_minor, cur), format);
+    let selected = draft.participants.clone();
     let current_group = group();
     let group_entry = current_group
         .as_ref()
         .and_then(|id| data.groups.iter().find(|g| &g.id == id))
         .cloned();
-    let candidates: Vec<Person> = people()
-        .into_iter()
+    let members = people();
+    let candidates: Vec<Person> = members
+        .iter()
+        .map(|m| m.person.clone())
         .filter(|p| !payer_list.iter().any(|payer| payer.person.id == p.id))
         .collect();
-    let all_selected = people().iter().all(|p| selected.contains(&p.id));
+    let all_selected = members.iter().all(|m| selected.contains(&m.person.id));
 
     rsx! {
         div { class: "mx-4 flex flex-col gap-5 pt-4 pb-8 safe-area-x",
@@ -359,7 +474,7 @@ fn ExpenseForm(data: FormData) -> Element {
                     currency_label: t!("expense.currency").to_string(),
                     value: amount_text_signal(),
                     currency: cur,
-                    autofocus: true,
+                    autofocus: !editing,
                     oninput: move |text| {
                         amount_text_signal.set(text);
                         amount_error.set(None);
@@ -425,9 +540,13 @@ fn ExpenseForm(data: FormData) -> Element {
             }
             div { class: "flex flex-col gap-2",
                 span { class: "text-sm font-medium text-floral-white-300", {t!("expense.group").to_string()} }
+                // Moving an expense to another group is EXP-11, so editing
+                // shows the group without letting it change.
                 button {
-                    class: "flex min-h-14 w-full items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-900 px-3 text-left active:bg-jet-black-800 transition-colors ease-apple",
+                    class: "flex min-h-14 w-full items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-900 px-3 text-left transition-colors ease-apple",
+                    class: if !editing { "active:bg-jet-black-800" },
                     r#type: "button",
+                    disabled: editing,
                     onclick: move |_| sheet.set(Some(Sheet::Group)),
                     match &group_entry {
                         Some(entry) => rsx! {
@@ -439,7 +558,9 @@ fn ExpenseForm(data: FormData) -> Element {
                             span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", {t!("expense.no_group").to_string()} }
                         },
                     }
-                    Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                    if !editing {
+                        Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                    }
                 }
             }
             section { class: "flex flex-col gap-2",
@@ -493,9 +614,6 @@ fn ExpenseForm(data: FormData) -> Element {
                 div { class: "flex items-center justify-between gap-2",
                     h2 { class: "text-sm font-medium text-floral-white-300",
                         {t!("expense.split_between").to_string()}
-                        if current_group.is_some() {
-                            span { class: "text-floral-white-500", " · {t!(\"expense.split_equal\")}" }
-                        }
                     }
                     if current_group.is_some() {
                         button {
@@ -503,9 +621,10 @@ fn ExpenseForm(data: FormData) -> Element {
                             r#type: "button",
                             onclick: move |_| {
                                 if all_selected {
-                                    participants.set(BTreeSet::new());
+                                    split_draft.write().participants.clear();
                                 } else {
-                                    participants.set(people.read().iter().map(|p| p.id.clone()).collect());
+                                    let everyone = people.read().iter().map(|m| m.person.id.clone()).collect();
+                                    split_draft.write().participants = everyone;
                                     participants_error.set(None);
                                 }
                             },
@@ -518,27 +637,77 @@ fn ExpenseForm(data: FormData) -> Element {
                     }
                 }
                 if current_group.is_some() {
-                    div { class: "overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900 py-1",
-                        PersonPicker {
-                            multiple: true,
-                            options: people()
-                                .into_iter()
-                                .map(|person| PersonOption {
-                                    selected: selected.contains(&person.id),
-                                    detail: shares
-                                        .get(&person.id)
-                                        .map(|share| format_money(Money::new(*share, cur), format)),
-                                    person,
-                                })
-                                .collect::<Vec<_>>(),
-                            on_toggle: move |id: PersonId| {
-                                participants.with_mut(|set| {
-                                    if !set.remove(&id) {
-                                        set.insert(id);
-                                    }
-                                });
-                                participants_error.set(None);
-                            },
+                    div {
+                        class: "flex flex-wrap gap-2",
+                        role: "radiogroup",
+                        aria_label: t!("expense.split_mode").to_string(),
+                        for kind in SplitKind::ALL {
+                            Chip {
+                                key: "{kind:?}",
+                                label: kind.label(),
+                                selected: draft.kind == kind,
+                                onclick: move |_| {
+                                    split_draft.write().kind = kind;
+                                    participants_error.set(None);
+                                },
+                            }
+                        }
+                    }
+                    if draft.kind == SplitKind::Equal {
+                        div { class: "overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900 py-1",
+                            PersonPicker {
+                                multiple: true,
+                                options: members
+                                    .iter()
+                                    .map(|m| PersonOption {
+                                        selected: selected.contains(&m.person.id),
+                                        detail: shares
+                                            .get(&m.person.id)
+                                            .map(|share| format_money(Money::new(*share, cur), format)),
+                                        person: m.person.clone(),
+                                    })
+                                    .collect::<Vec<_>>(),
+                                on_toggle: move |id: PersonId| {
+                                    split_draft.write().toggle(id);
+                                    participants_error.set(None);
+                                },
+                            }
+                        }
+                    } else {
+                        div { class: "overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                            for entry in members.iter().cloned() {
+                                ShareRow {
+                                    key: "{entry.person.id.as_str()}",
+                                    selected: selected.contains(&entry.person.id),
+                                    kind: draft.kind,
+                                    text: draft.text(&entry.person.id, entry.default_weight, format),
+                                    currency: cur,
+                                    share: shares.get(&entry.person.id).map(|share| Money::new(*share, cur)),
+                                    invalid: participants_error().is_some(),
+                                    on_toggle: {
+                                        let id = entry.person.id.clone();
+                                        move |_| {
+                                            split_draft.write().toggle(id.clone());
+                                            participants_error.set(None);
+                                        }
+                                    },
+                                    on_input: {
+                                        let id = entry.person.id.clone();
+                                        move |text| {
+                                            split_draft.write().set_text(id.clone(), text);
+                                            participants_error.set(None);
+                                        }
+                                    },
+                                    person: entry.person,
+                                }
+                            }
+                        }
+                    }
+                    if let Some((text, matches)) = hint {
+                        p {
+                            class: if matches { "px-1 text-sm tabular-nums text-floral-white-400" } else { "px-1 text-sm tabular-nums text-pale-oak-300" },
+                            aria_live: "polite",
+                            "{text}"
                         }
                     }
                 } else {
@@ -557,6 +726,16 @@ fn ExpenseForm(data: FormData) -> Element {
                     {t!("expense.saving").to_string()}
                 } else {
                     {t!("common.save").to_string()}
+                }
+            }
+            if editing {
+                Button {
+                    variant: ButtonVariant::Danger,
+                    class: "w-full",
+                    disabled: saving(),
+                    onclick: delete,
+                    Icon { icon: LdTrash2, class: "h-5 w-5" }
+                    {t!("expense.delete").to_string()}
                 }
             }
         }
@@ -633,6 +812,26 @@ fn ExpenseForm(data: FormData) -> Element {
                 None => rsx! {},
             },
             None => rsx! {},
+        }
+    }
+}
+
+/// After saving or deleting: back to where the edit started, otherwise to
+/// the group (the timeline follows with AP-13) or Home.
+fn leave(nav: Navigator, group: Option<&GroupId>, editing: bool) {
+    if editing && nav.can_go_back() {
+        nav.go_back();
+        return;
+    }
+    match group {
+        Some(id) => {
+            nav.replace(Route::GroupOverview {
+                id: id.as_str().to_string(),
+            });
+        }
+        None if nav.can_go_back() => nav.go_back(),
+        None => {
+            nav.replace(Route::Home {});
         }
     }
 }
@@ -814,13 +1013,25 @@ fn NoGroupIcon() -> Element {
     }
 }
 
-fn load(db: &Db) -> Result<FormData, StorageError> {
+/// Everything the form needs; with `id` also the expense to edit
+/// (`StorageError::NotFound` if it is gone).
+fn load(db: &Db, id: Option<&ExpenseId>) -> Result<FormData, StorageError> {
     let me = db.me()?.ok_or(StorageError::NotFound)?;
     let home_currency = db
         .profile()?
         .map_or_else(default_home_currency, |p| p.home_currency);
     let groups = db.groups()?;
-    let group = preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups);
+    let existing = match id {
+        Some(id) => Some(db.expense(id)?.ok_or(StorageError::NotFound)?),
+        None => None,
+    };
+    let (group, currency) = match &existing {
+        Some(expense) => (expense.group_id.clone(), Some(expense.total.currency())),
+        None => (
+            preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups),
+            db.currency_setting(LAST_EXPENSE_CURRENCY)?,
+        ),
+    };
     let methods = db
         .payment_methods()?
         .into_iter()
@@ -833,7 +1044,8 @@ fn load(db: &Db) -> Result<FormData, StorageError> {
         categories: db.categories()?,
         methods,
         group,
-        currency: db.currency_setting(LAST_EXPENSE_CURRENCY)?,
+        currency,
+        existing,
     })
 }
 
@@ -849,15 +1061,49 @@ fn preselected_group(last: Option<&str>, groups: &[Group]) -> Option<GroupId> {
 
 /// Who can pay and share: the group's members, or only "Ich" for a
 /// personal expense (user decision in AP-11).
-fn people_of(db: &Db, group: Option<&GroupId>, me: &Person) -> Result<Vec<Person>, StorageError> {
+fn people_of(
+    db: &Db,
+    group: Option<&GroupId>,
+    me: &Person,
+) -> Result<Vec<GroupMember>, StorageError> {
     match group {
-        Some(id) => Ok(db
-            .group_members(id)?
-            .into_iter()
-            .map(|member| member.person)
-            .collect()),
-        None => Ok(vec![me.clone()]),
+        Some(id) => db.group_members(id),
+        None => Ok(vec![member(me.clone())]),
     }
+}
+
+/// A person outside any group, weighing 1.
+fn member(person: Person) -> GroupMember {
+    GroupMember {
+        person,
+        default_weight: Decimal::ONE,
+    }
+}
+
+/// `2026-10-03T19:30:00+09:00` → (`2026-10-03`, `19:30`), what the date
+/// and time fields edit.
+fn split_occurred_at(occurred_at: &str) -> (String, String) {
+    (
+        occurred_at.get(0..10).unwrap_or_default().to_string(),
+        occurred_at.get(11..16).unwrap_or_default().to_string(),
+    )
+}
+
+/// The payers of a saved expense, as far as they are still members.
+fn saved_payers(expense: &Expense, people: &[GroupMember]) -> Vec<PayerDraft> {
+    let format = NumberFormat::current();
+    expense
+        .payments
+        .iter()
+        .filter_map(|payment| {
+            let person = people.iter().find(|m| m.person.id == payment.person_id)?;
+            Some(PayerDraft {
+                person: person.person.clone(),
+                method: payment.payment_method_id.clone(),
+                amount_text: amount_text(payment.amount, format),
+            })
+        })
+        .collect()
 }
 
 fn base_of(groups: &[Group], group: Option<&GroupId>, home: Currency) -> Currency {
@@ -867,11 +1113,12 @@ fn base_of(groups: &[Group], group: Option<&GroupId>, home: Currency) -> Currenc
 }
 
 /// "Ich" pays by default, or the first person if "Ich" is not there.
-fn default_payer(people: &[Person], me: &Person, methods: &[PaymentMethod]) -> PayerDraft {
+fn default_payer(people: &[GroupMember], me: &Person, methods: &[PaymentMethod]) -> PayerDraft {
     let person = people
         .iter()
+        .map(|m| &m.person)
         .find(|p| p.id == me.id)
-        .or_else(|| people.first())
+        .or_else(|| people.first().map(|m| &m.person))
         .unwrap_or(me)
         .clone();
     PayerDraft {
@@ -992,6 +1239,15 @@ mod tests {
             Some(GroupId::new("new"))
         );
         assert_eq!(preselected_group(None, &[]), None);
+    }
+
+    #[test]
+    fn occurred_at_splits_into_date_and_time() {
+        assert_eq!(
+            split_occurred_at("2026-10-03T19:30:00+09:00"),
+            ("2026-10-03".to_string(), "19:30".to_string())
+        );
+        assert_eq!(split_occurred_at(""), (String::new(), String::new()));
     }
 
     #[test]

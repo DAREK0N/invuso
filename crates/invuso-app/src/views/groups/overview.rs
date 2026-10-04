@@ -1,21 +1,25 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdCircleAlert, LdTrash2},
+    icons::ld_icons::{LdChevronRight, LdCircleAlert, LdTrash2},
 };
-use invuso_core::domain::{GroupId, GroupMember};
+use invuso_core::domain::{GroupId, GroupMember, local_date};
 
 use super::form::GroupNotFound;
 use super::{DeleteGroupSheet, group_subtitle};
 use crate::Route;
 use crate::components::{
-    AvatarEntry, AvatarStack, Button, ButtonVariant, EmptyState, GroupIcon, LinkRow, TopBar,
+    AvatarEntry, AvatarStack, Button, ButtonVariant, EmptyState, GroupIcon, LinkRow, MoneyText,
+    TopBar,
 };
+use crate::preferences::display_date;
 use crate::state::DataRevision;
-use crate::storage::Db;
+use crate::storage::{Db, ExpenseListEntry};
 
 /// `/groups/:id`: for now the head of the group (name, members) with links
-/// to members and editing; totals and balances follow with GRP-10..14.
+/// to members and editing, and a plain list of its expenses to edit them
+/// (EXP-05); totals and balances follow with GRP-10..14, the timeline
+/// with GRP-20..23.
 #[component]
 pub fn GroupOverview(id: String) -> Element {
     let db = use_context::<Db>();
@@ -32,7 +36,8 @@ pub fn GroupOverview(id: String) -> Element {
             return Ok(None);
         };
         let members = db.group_members(&id).map_err(|e| e.to_string())?;
-        Ok::<_, String>(Some((group, members)))
+        let expenses = db.group_expenses(&id).map_err(|e| e.to_string())?;
+        Ok::<_, String>(Some((group, members, expenses)))
     });
 
     rsx! {
@@ -46,7 +51,7 @@ pub fn GroupOverview(id: String) -> Element {
                 }
             },
             Ok(None) => rsx! { GroupNotFound {} },
-            Ok(Some((group, members))) => rsx! {
+            Ok(Some((group, members, expenses))) => rsx! {
                 div { class: "mx-4 flex flex-col gap-4 pt-6 safe-area-x",
                     div { class: "flex flex-col items-center gap-3 text-center",
                         GroupIcon { icon: group.icon.clone(), color: group.color.clone(), large: true }
@@ -75,6 +80,27 @@ pub fn GroupOverview(id: String) -> Element {
                                     nav.push(Route::GroupEdit { id: id.clone() });
                                 }
                             },
+                        }
+                    }
+                    section { class: "flex flex-col gap-2",
+                        h2 { class: "px-1 text-sm font-medium text-floral-white-300", {t!("group.expenses").to_string()} }
+                        if expenses.is_empty() {
+                            p { class: "px-1 text-sm text-floral-white-400", {t!("group.no_expenses").to_string()} }
+                        } else {
+                            div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                                for entry in expenses.iter().cloned() {
+                                    ExpenseRow {
+                                        key: "{entry.id.as_str()}",
+                                        onclick: {
+                                            let id = entry.id.as_str().to_string();
+                                            move |_| {
+                                                nav.push(Route::ExpenseEdit { id: id.clone() });
+                                            }
+                                        },
+                                        entry,
+                                    }
+                                }
+                            }
                         }
                     }
                     Button {
@@ -106,6 +132,32 @@ pub fn GroupOverview(id: String) -> Element {
                     }
                 }
             },
+        }
+    }
+}
+
+/// One expense of the interim list: title and day, amount in the base
+/// currency and, if different, in its own currency.
+#[component]
+fn ExpenseRow(entry: ExpenseListEntry, onclick: EventHandler<()>) -> Element {
+    let foreign = entry.total.currency() != entry.total_in_base.currency();
+
+    rsx! {
+        button {
+            class: "flex min-h-16 w-full items-center gap-3 border-b border-jet-black-800 px-4 py-2 text-left last:border-b-0 active:bg-jet-black-800 transition-colors ease-apple",
+            r#type: "button",
+            onclick: move |_| onclick.call(()),
+            span { class: "flex min-w-0 flex-1 flex-col",
+                span { class: "truncate text-base text-floral-white-50", "{entry.title}" }
+                span { class: "text-sm text-floral-white-400", {display_date(local_date(&entry.occurred_at))} }
+            }
+            span { class: "flex shrink-0 flex-col items-end",
+                MoneyText { amount: entry.total_in_base, class: "text-base font-semibold text-floral-white-100" }
+                if foreign {
+                    MoneyText { amount: entry.total, class: "text-sm text-floral-white-400" }
+                }
+            }
+            Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
         }
     }
 }

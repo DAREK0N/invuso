@@ -3,7 +3,7 @@ use std::str::FromStr;
 use invuso_core::Decimal;
 use invuso_core::domain::{Currency, is_iso_date};
 use invuso_core::fx::{self, Rate};
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::db::{new_id, now_ms};
 use super::{Db, StorageError};
@@ -183,6 +183,41 @@ impl Db {
         quote: Currency,
     ) -> Result<Option<RateQuote>, StorageError> {
         self.with(|conn| pick_quote(conn, base, quote, Pick::Latest))
+    }
+
+    /// The archived rate with this id (e.g. `Expense.fx_rate_id`), read
+    /// `base → quote`. `None` if it does not exist or is for another pair.
+    /// Lets an edited expense keep the rate it was saved with (FX-04).
+    pub fn archived_rate(
+        &self,
+        id: &str,
+        base: Currency,
+        quote: Currency,
+    ) -> Result<Option<RateQuote>, StorageError> {
+        let stored = self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!("SELECT {COLUMNS} FROM exchange_rate WHERE id = ?1"),
+                    [id],
+                    rate_from_row,
+                )
+                .optional()?)
+        })?;
+        Ok(stored.and_then(|stored| {
+            let rate = if stored.rate.base() == base && stored.rate.quote() == quote {
+                stored.rate
+            } else if stored.rate.base() == quote && stored.rate.quote() == base {
+                stored.rate.inverse()
+            } else {
+                return None;
+            };
+            Some(RateQuote {
+                rate,
+                rate_date: Some(stored.rate_date.clone()),
+                fetched_at: Some(stored.fetched_at),
+                legs: vec![stored],
+            })
+        }))
     }
 }
 

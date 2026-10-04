@@ -1,10 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use thiserror::Error;
 
 use super::{GroupId, Money, PaymentMethodId, PersonId, is_iso_date};
-use crate::split::SplitMode;
+use crate::split::{SplitError, SplitMode, split};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExpenseError {
@@ -20,6 +20,10 @@ pub enum ExpenseError {
     PaymentsMismatch { expected: i64, actual: i64 },
     #[error("nobody shares the expense")]
     NoParticipants,
+    #[error("a share must not be negative")]
+    NegativeShare,
+    #[error(transparent)]
+    Split(#[from] SplitError),
     #[error("`{0}` is not a local date and time with UTC offset")]
     InvalidOccurredAt(String),
     #[error("unknown expense source `{0}`")]
@@ -175,6 +179,23 @@ pub fn validate_participants(participants: &BTreeSet<PersonId>) -> Result<(), Ex
     }
 }
 
+/// Checks how an expense is shared (EXP-04, SPL-01) and returns each
+/// person's share of `total_minor`: someone must take part, percentages
+/// must add up to 100 and exact amounts to the total (idee.md 8.1). Exact
+/// amounts must not be negative; credits belong to line items (8.2).
+pub fn validate_split(
+    total_minor: i64,
+    mode: &SplitMode,
+) -> Result<BTreeMap<PersonId, i64>, ExpenseError> {
+    validate_participants(&mode.participants())?;
+    if let SplitMode::Exact(amounts) = mode
+        && amounts.values().any(|amount| *amount < 0)
+    {
+        return Err(ExpenseError::NegativeShare);
+    }
+    Ok(split(total_minor, mode)?)
+}
+
 /// Checks `occurred_at`: `YYYY-MM-DDTHH:MM:SS` followed by `Z` or `±HH:MM`,
 /// with a real calendar date and time.
 pub fn validate_occurred_at(occurred_at: &str) -> Result<(), ExpenseError> {
@@ -278,6 +299,56 @@ mod tests {
             Err(ExpenseError::NoParticipants)
         );
         assert_eq!(validate_participants(&BTreeSet::from([p("a")])), Ok(()));
+    }
+
+    #[test]
+    fn split_is_checked_with_its_shares() {
+        use rust_decimal::Decimal;
+
+        let both = BTreeSet::from([p("a"), p("b")]);
+        let shares = validate_split(1001, &SplitMode::Equal(both)).unwrap();
+        assert_eq!(shares.values().sum::<i64>(), 1001);
+
+        assert_eq!(
+            validate_split(100, &SplitMode::Equal(BTreeSet::new())),
+            Err(ExpenseError::NoParticipants)
+        );
+        assert_eq!(
+            validate_split(100, &SplitMode::Weights(BTreeMap::new())),
+            Err(ExpenseError::NoParticipants)
+        );
+        assert_eq!(
+            validate_split(
+                100,
+                &SplitMode::Percent(BTreeMap::from([(p("a"), Decimal::from(99))]))
+            ),
+            Err(ExpenseError::Split(SplitError::PercentNot100(
+                Decimal::from(99)
+            )))
+        );
+        assert_eq!(
+            validate_split(
+                100,
+                &SplitMode::Weights(BTreeMap::from([(p("a"), Decimal::ZERO)]))
+            ),
+            Err(ExpenseError::Split(SplitError::ZeroTotalWeight))
+        );
+        // Sums match, but a negative part would hide a credit.
+        assert_eq!(
+            validate_split(
+                100,
+                &SplitMode::Exact(BTreeMap::from([(p("a"), 150), (p("b"), -50)]))
+            ),
+            Err(ExpenseError::NegativeShare)
+        );
+        assert_eq!(
+            validate_split(
+                100,
+                &SplitMode::Exact(BTreeMap::from([(p("a"), 100), (p("b"), 0)]))
+            )
+            .unwrap()[&p("b")],
+            0
+        );
     }
 
     #[test]

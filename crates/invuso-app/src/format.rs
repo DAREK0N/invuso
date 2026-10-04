@@ -133,6 +133,12 @@ pub fn format_rate(rate: Decimal, format: NumberFormat) -> String {
 /// (`,` or `.`, whatever the keyboard offers; shown as the app language's),
 /// at most as many decimals as the currency has. No sign, no grouping.
 pub fn clean_amount_input(raw: &str, currency: Currency, format: NumberFormat) -> Option<String> {
+    clean_number_input(raw, currency.exponent(), format)
+}
+
+/// Like [`clean_amount_input`] for a plain number with at most `decimals`
+/// decimals, e.g. a weight or a percentage (SPL-01).
+pub fn clean_number_input(raw: &str, decimals: u32, format: NumberFormat) -> Option<String> {
     let raw = raw.trim();
     let (integer, fraction) = match raw.find([',', '.']) {
         Some(index) => (&raw[..index], Some(&raw[index + 1..])),
@@ -151,7 +157,7 @@ pub fn clean_amount_input(raw: &str, currency: Currency, format: NumberFormat) -
     match fraction {
         None => Some(integer.to_string()),
         Some(fraction) => {
-            let exponent = currency.exponent() as usize;
+            let exponent = decimals as usize;
             if exponent == 0 || !digits(fraction) || fraction.len() > exponent {
                 return None;
             }
@@ -241,8 +247,32 @@ pub fn amount_keystroke(
     currency: Currency,
     format: NumberFormat,
 ) -> (Option<String>, bool) {
+    keystroke(shown, raw, format, |edit| {
+        clean_amount_input(edit, currency, format)
+    })
+}
+
+/// [`amount_keystroke`] for a plain number with at most `decimals`
+/// decimals.
+pub fn number_keystroke(
+    shown: &str,
+    raw: &str,
+    decimals: u32,
+    format: NumberFormat,
+) -> (Option<String>, bool) {
+    keystroke(shown, raw, format, |edit| {
+        clean_number_input(edit, decimals, format)
+    })
+}
+
+fn keystroke(
+    shown: &str,
+    raw: &str,
+    format: NumberFormat,
+    clean: impl Fn(&str) -> Option<String>,
+) -> (Option<String>, bool) {
     let edit = amount_edit(shown, raw, format);
-    match clean_amount_input(&edit, currency, format) {
+    match clean(&edit) {
         Some(text) => {
             let redraw = display_amount_text(&text, format) != raw;
             (Some(text), redraw)
@@ -292,6 +322,42 @@ pub fn parse_amount(text: &str, currency: Currency, format: NumberFormat) -> Opt
         .checked_mul(10_i64.pow(exponent))?
         .checked_add(number(fraction)?.checked_mul(padding)?)?;
     Some(Money::new(minor, currency))
+}
+
+/// The number of canonical text from [`clean_number_input`]; `None` while
+/// nothing is entered.
+pub fn parse_number(text: &str, format: NumberFormat) -> Option<Decimal> {
+    if text.is_empty() {
+        return None;
+    }
+    let plain = text.replacen(format.decimal, ".", 1);
+    let plain = if plain.starts_with('.') {
+        format!("0{plain}")
+    } else {
+        plain
+    };
+    let plain = plain.strip_suffix('.').unwrap_or(&plain);
+    plain.parse::<Decimal>().ok()
+}
+
+/// Canonical text of a non-negative number, to prefill a field:
+/// `0.5` → `0,5`, `2.00` → `2`.
+pub fn number_text(value: Decimal, format: NumberFormat) -> String {
+    let text = value.abs().normalize().to_string();
+    text.replacen('.', &format.decimal.to_string(), 1)
+}
+
+/// A number for reading, grouped and without trailing zeros: `1.234,5`.
+pub fn format_number(value: Decimal, format: NumberFormat) -> String {
+    let sign = if value.is_sign_negative() && !value.is_zero() {
+        "-"
+    } else {
+        ""
+    };
+    format!(
+        "{sign}{}",
+        display_amount_text(&number_text(value, format), format)
+    )
 }
 
 const MINUTE_MS: i64 = 60 * 1000;
@@ -520,5 +586,29 @@ mod tests {
             (Some("1234".into()), true)
         );
         assert_eq!(amount_keystroke("1,23", "1,234", eur, DE), (None, true));
+    }
+
+    #[test]
+    fn numbers_take_their_own_decimals() {
+        assert_eq!(clean_number_input("33,333", 2, DE), None);
+        assert_eq!(clean_number_input("33.33", 2, DE).as_deref(), Some("33,33"));
+        assert_eq!(clean_number_input("2,5", 0, DE), None);
+        assert_eq!(
+            number_keystroke("1", "12", 2, DE),
+            (Some("12".into()), false)
+        );
+    }
+
+    #[test]
+    fn numbers_round_trip_through_text() {
+        let d = |v: &str| Decimal::from_str(v).unwrap();
+        assert_eq!(parse_number("0,5", DE), Some(d("0.5")));
+        assert_eq!(parse_number("12,", DE), Some(d("12")));
+        assert_eq!(parse_number("1.5", EN), Some(d("1.5")));
+        assert_eq!(parse_number("", DE), None);
+        assert_eq!(number_text(d("2.00"), DE), "2");
+        assert_eq!(number_text(d("0.50"), DE), "0,5");
+        assert_eq!(format_number(d("1234.5"), DE), "1.234,5");
+        assert_eq!(format_number(d("-90"), EN), "-90");
     }
 }

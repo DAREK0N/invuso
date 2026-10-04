@@ -39,7 +39,7 @@ pub use button::{Button, ButtonVariant};
 pub use category_icon::CategoryIconGlyph;
 pub use chip::Chip;
 pub use color_picker::ColorPicker;
-pub use compact_amount_input::CompactAmountInput;
+pub use compact_amount_input::{CompactAmountInput, CompactNumberInput};
 pub use confirm_sheet::ConfirmSheet;
 pub use currency_button::CurrencyButton;
 pub use currency_picker::CurrencyPicker;
