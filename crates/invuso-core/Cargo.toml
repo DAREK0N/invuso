@@ -6,3 +6,6 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+rust_decimal.workspace = true
+thiserror.workspace = true
+iso_currency.workspace = true

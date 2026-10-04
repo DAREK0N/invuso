@@ -396,9 +396,6 @@
   .bg-cerulean-800 {
     background-color: var(--color-cerulean-800);
   }
-  .bg-cerulean-900 {
-    background-color: var(--color-cerulean-900);
-  }
   .bg-floral-white-800 {
     background-color: var(--color-floral-white-800);
   }
@@ -461,9 +458,6 @@
   }
   .text-cerulean-200 {
     color: var(--color-cerulean-200);
-  }
-  .text-cerulean-300 {
-    color: var(--color-cerulean-300);
   }
   .text-cerulean-400 {
     color: var(--color-cerulean-400);

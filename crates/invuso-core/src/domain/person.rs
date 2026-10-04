@@ -1,0 +1,30 @@
+use std::fmt;
+
+/// Identifier of a `Person` (idee.md 4.1).
+///
+/// Ordered, because its order is the stable tie-breaker wherever a rounding
+/// cent or a settlement has to go to "the first" person (idee.md 8.4).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PersonId(pub String);
+
+impl PersonId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PersonId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for PersonId {
+    fn from(id: &str) -> Self {
+        Self::new(id)
+    }
+}
