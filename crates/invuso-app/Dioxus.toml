@@ -1,0 +1,13 @@
+[application]
+name = "Invuso"
+default_platform = "desktop"
+android_main_activity = "android/MainActivity.kt"
+
+[desktop.window]
+title = "Invuso"
+width = 420
+height = 860
+
+[bundle]
+identifier = "com.darekon.invuso"
+publisher = "DAREKON"

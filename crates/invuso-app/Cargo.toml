@@ -1,0 +1,18 @@
+[package]
+name = "invuso-app"
+description = "Invuso Dioxus app (Android, desktop for development)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+dioxus.workspace = true
+dioxus-free-icons.workspace = true
+rust-i18n.workspace = true
+
+[features]
+default = ["desktop"]
+# Android build (`dx serve --platform android`).
+mobile = ["dioxus/mobile"]
+# Local development with hot reload (`dx serve --platform desktop`).
+desktop = ["dioxus/desktop"]

@@ -1,0 +1,53 @@
+app:
+  name: "Invuso"
+
+nav:
+  label: "Hauptnavigation"
+  home: "Home"
+  groups: "Gruppen"
+  add: "Ausgabe hinzufügen"
+  converter: "Währungsrechner"
+  settings: "Einstellungen"
+
+common:
+  back: "Zurück"
+  close: "Schließen"
+
+add_sheet:
+  title: "Hinzufügen"
+  scan: "Kassenzettel scannen"
+  gallery: "Aus Galerie"
+  manual: "Manuell erfassen"
+  cash: "Bargeld abheben / wechseln"
+
+placeholder:
+  title: "Noch nicht verfügbar"
+  text: "Dieser Bereich wird in einem späteren Meilenstein umgesetzt."
+
+page:
+  home: "Home"
+  groups: "Gruppen"
+  group_new: "Neue Gruppe"
+  group_overview: "Gruppe"
+  group_timeline: "Ausgaben"
+  group_members: "Mitglieder"
+  group_settle: "Schulden & Ausgleich"
+  group_edit: "Gruppe bearbeiten"
+  expense_new: "Neue Ausgabe"
+  expense_detail: "Ausgabe"
+  expense_edit: "Ausgabe bearbeiten"
+  scan: "Kassenzettel"
+  receipt_review: "Kassenzettel prüfen"
+  receipts: "Kassenzettel-Archiv"
+  cash: "Bargeld"
+  converter: "Währungsrechner"
+  rate_history: "Kurs-Archiv"
+  settings: "Einstellungen"
+  settings_people: "Personen"
+  settings_payment_methods: "Zahlungsmethoden"
+  settings_categories: "Kategorien"
+  settings_appearance: "Darstellung"
+  settings_languages: "Sprachpakete"
+  settings_data: "Backup & Export"
+  onboarding: "Willkommen"
+  not_found: "Seite nicht gefunden"

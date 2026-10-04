@@ -1,0 +1,8 @@
+[package]
+name = "invuso-core"
+description = "Pure domain logic of Invuso: money, splitting, balances, currency conversion, receipt parsing."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]

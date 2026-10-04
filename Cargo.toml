@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["DAREKON"]
+
+[workspace.dependencies]
+invuso-core = { path = "crates/invuso-core" }
+dioxus = { version = "0.7.10", features = ["router"] }
+dioxus-free-icons = { version = "0.10.0", features = ["lucide"] }
+rust-i18n = "3.1.5"

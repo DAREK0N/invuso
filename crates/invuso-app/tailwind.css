@@ -1,0 +1,220 @@
+@import "tailwindcss";
+
+/* Design tokens (idee.md 3.2). Scales follow Meduso: jet-black = surfaces,
+   floral-white = text, cerulean = accent, muted-teal = positive balance,
+   watermelon / scarlet-fire = negative balance and errors, pale-oak = warnings.
+   Only the Dark theme exists so far; further themes (UI-18) override these
+   scales on :root[data-theme="…"]. */
+@theme {
+    --radius: calc(0.25rem * var(--ui-radius-scale));
+    --radius-xs: calc(0.125rem * var(--ui-radius-scale));
+    --radius-sm: calc(0.25rem * var(--ui-radius-scale));
+    --radius-md: calc(0.375rem * var(--ui-radius-scale));
+    --radius-lg: calc(0.5rem * var(--ui-radius-scale));
+    --radius-xl: calc(0.75rem * var(--ui-radius-scale));
+    --radius-2xl: calc(1rem * var(--ui-radius-scale));
+    --radius-3xl: calc(1.5rem * var(--ui-radius-scale));
+    --radius-4xl: calc(2rem * var(--ui-radius-scale));
+
+    --color-jet-black-50: #eef4f7;
+    --color-jet-black-100: #dde8ee;
+    --color-jet-black-200: #bad2de;
+    --color-jet-black-300: #98bbcd;
+    --color-jet-black-400: #75a5bd;
+    --color-jet-black-500: #538eac;
+    --color-jet-black-600: #42728a;
+    --color-jet-black-700: #325567;
+    --color-jet-black-800: #213945;
+    --color-jet-black-900: #111c22;
+    --color-jet-black-950: #0c1418;
+
+    --color-floral-white-50: #eef5f7;
+    --color-floral-white-100: #dbe8ec;
+    --color-floral-white-200: #c2d7de;
+    --color-floral-white-300: #a5c1cb;
+    --color-floral-white-400: #88a9b6;
+    --color-floral-white-500: #6c909e;
+    --color-floral-white-600: #557583;
+    --color-floral-white-700: #415b66;
+    --color-floral-white-800: #2e414a;
+    --color-floral-white-900: #1c292f;
+    --color-floral-white-950: #131c20;
+
+    --color-cerulean-50: #edf5f7;
+    --color-cerulean-100: #dcebef;
+    --color-cerulean-200: #b8d8e0;
+    --color-cerulean-300: #95c4d0;
+    --color-cerulean-400: #71b1c1;
+    --color-cerulean-500: #4e9db1;
+    --color-cerulean-600: #3e7e8e;
+    --color-cerulean-700: #2f5e6a;
+    --color-cerulean-800: #1f3f47;
+    --color-cerulean-900: #101f23;
+    --color-cerulean-950: #0b1619;
+
+    --color-muted-teal-50: #f0f5f0;
+    --color-muted-teal-100: #e1eae2;
+    --color-muted-teal-200: #c2d6c5;
+    --color-muted-teal-300: #a4c1a7;
+    --color-muted-teal-400: #86ac8a;
+    --color-muted-teal-500: #67986d;
+    --color-muted-teal-600: #537957;
+    --color-muted-teal-700: #3e5b41;
+    --color-muted-teal-800: #293d2c;
+    --color-muted-teal-900: #151e16;
+    --color-muted-teal-950: #0e150f;
+
+    --color-watermelon-50: #fce8ea;
+    --color-watermelon-100: #f9d2d5;
+    --color-watermelon-200: #f4a4ab;
+    --color-watermelon-300: #ee7781;
+    --color-watermelon-400: #e94957;
+    --color-watermelon-500: #e31c2d;
+    --color-watermelon-600: #b61624;
+    --color-watermelon-700: #88111b;
+    --color-watermelon-800: #5b0b12;
+    --color-watermelon-900: #2d0609;
+    --color-watermelon-950: #200406;
+
+    --color-scarlet-fire-50: #ffeae5;
+    --color-scarlet-fire-100: #ffd5cc;
+    --color-scarlet-fire-200: #ffac99;
+    --color-scarlet-fire-300: #ff8266;
+    --color-scarlet-fire-400: #ff5833;
+    --color-scarlet-fire-500: #ff2f00;
+    --color-scarlet-fire-600: #cc2500;
+    --color-scarlet-fire-700: #991c00;
+    --color-scarlet-fire-800: #661300;
+    --color-scarlet-fire-900: #330900;
+    --color-scarlet-fire-950: #240700;
+
+    --color-pale-oak-50: #f7f4ee;
+    --color-pale-oak-100: #efeadc;
+    --color-pale-oak-200: #dfd4b9;
+    --color-pale-oak-300: #cfbf96;
+    --color-pale-oak-400: #bfa973;
+    --color-pale-oak-500: #af9450;
+    --color-pale-oak-600: #8c7640;
+    --color-pale-oak-700: #695930;
+    --color-pale-oak-800: #463b20;
+    --color-pale-oak-900: #231e10;
+    --color-pale-oak-950: #18150b;
+}
+
+:root {
+    color-scheme: dark;
+    --ui-scale: 1;
+    --ui-radius-scale: 1;
+
+    /* System-bar / display-cutout insets. Android WebView only fills
+       env(safe-area-inset-*) from the display cutout, never from the status or
+       navigation bar, so MainActivity.kt pushes the real WindowInsets into
+       these properties on <html>; env() stays as the desktop fallback. */
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-right: env(safe-area-inset-right, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-left: env(safe-area-inset-left, 0px);
+}
+
+@media (max-width: 767px) {
+    :root {
+        --ui-scale: 0.92;
+    }
+}
+
+html {
+    font-size: calc(16px * var(--ui-scale));
+    /* Android WebView stretches the whole root layer on overscroll, which drags
+       the fixed BottomNav along with the content. */
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    /* Not 100vw: with a classic scrollbar (desktop) that would overflow. */
+    min-width: 100%;
+    color: var(--color-floral-white-50);
+    background-color: var(--color-jet-black-950);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overscroll-behavior: none;
+}
+
+/* Freeze the page while a bottom sheet is open. */
+html:has(#invuso-sheet-backdrop) {
+    overflow: hidden;
+}
+
+.ease-apple {
+    transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* In the components layer so utilities (e.g. border-x-0) can override it. */
+@layer components {
+    .glass {
+        background: color-mix(in srgb, var(--color-jet-black-900) 70%, transparent);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid color-mix(in srgb, var(--color-cerulean-400) 12%, transparent);
+    }
+}
+
+/* Fixed chrome sits inside the system bars; content clears it. */
+.app-chrome-bottom {
+    bottom: calc(0.5rem + var(--safe-area-bottom));
+}
+
+.app-header-inset {
+    padding-top: var(--safe-area-top);
+}
+
+.app-content-inset {
+    padding-bottom: calc(6.5rem + var(--safe-area-bottom));
+}
+
+.app-focus-content-inset {
+    padding-bottom: calc(1.5rem + var(--safe-area-bottom));
+}
+
+.safe-area-x {
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+}
+
+@keyframes sheet-in {
+    from {
+        transform: translateY(100%);
+    }
+    to {
+        transform: translateY(0);
+    }
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.animate-sheet-in {
+    animation: sheet-in 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.animate-fade-in {
+    animation: fade-in 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .animate-sheet-in,
+    .animate-fade-in {
+        animation: none !important;
+    }
+
+    * {
+        transition-duration: 0.01ms !important;
+    }
+}

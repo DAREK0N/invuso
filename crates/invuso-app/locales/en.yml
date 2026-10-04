@@ -1,0 +1,53 @@
+app:
+  name: "Invuso"
+
+nav:
+  label: "Main navigation"
+  home: "Home"
+  groups: "Groups"
+  add: "Add expense"
+  converter: "Currency converter"
+  settings: "Settings"
+
+common:
+  back: "Back"
+  close: "Close"
+
+add_sheet:
+  title: "Add"
+  scan: "Scan receipt"
+  gallery: "From gallery"
+  manual: "Enter manually"
+  cash: "Withdraw / exchange cash"
+
+placeholder:
+  title: "Not available yet"
+  text: "This area will be built in a later milestone."
+
+page:
+  home: "Home"
+  groups: "Groups"
+  group_new: "New group"
+  group_overview: "Group"
+  group_timeline: "Expenses"
+  group_members: "Members"
+  group_settle: "Debts & settlement"
+  group_edit: "Edit group"
+  expense_new: "New expense"
+  expense_detail: "Expense"
+  expense_edit: "Edit expense"
+  scan: "Receipt"
+  receipt_review: "Review receipt"
+  receipts: "Receipt archive"
+  cash: "Cash"
+  converter: "Currency converter"
+  rate_history: "Rate history"
+  settings: "Settings"
+  settings_people: "People"
+  settings_payment_methods: "Payment methods"
+  settings_categories: "Categories"
+  settings_appearance: "Appearance"
+  settings_languages: "Language packs"
+  settings_data: "Backup & export"
+  onboarding: "Welcome"
+  not_found: "Page not found"
