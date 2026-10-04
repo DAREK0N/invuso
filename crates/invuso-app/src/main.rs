@@ -1,8 +1,13 @@
+use std::rc::Rc;
+
+use dioxus::history::{History, MemoryHistory};
 use dioxus::prelude::*;
+use dioxus::router::components::HistoryProvider;
 
 mod components;
 mod layouts;
 mod platform;
+mod preferences;
 mod storage;
 mod views;
 
@@ -116,11 +121,37 @@ fn App() -> Element {
     }
 }
 
-/// Provides the database to every screen and starts the router.
+/// Provides the database to every screen and starts the router on the
+/// screen [`start_route`] picks.
 #[component]
 fn AppRoot(db: Db) -> Element {
+    let has_me = use_hook(|| db.me().map(|me| me.is_some()).map_err(|e| e.to_string()));
     use_context_provider(|| db);
-    rsx! { Router::<Route> {} }
+
+    match has_me {
+        // The router has no hook for its very first route, so the history it
+        // reads starts there; `replace` after onboarding then leaves Home as
+        // the only entry and back closes the app.
+        Ok(has_me) => rsx! {
+            HistoryProvider {
+                history: move |_| {
+                    Rc::new(MemoryHistory::with_initial_path(start_route(has_me))) as Rc<dyn History>
+                },
+                Router::<Route> {}
+            }
+        },
+        Err(message) => rsx! { StartupError { message } },
+    }
+}
+
+/// First screen after launch: onboarding until "Ich" exists (idee.md 7.5),
+/// Home afterwards.
+fn start_route(has_me: bool) -> Route {
+    if has_me {
+        Route::Home {}
+    } else {
+        Route::Onboarding {}
+    }
 }
 
 /// Shown instead of the app when the database cannot be opened, so the
@@ -135,5 +166,37 @@ fn StartupError(message: String) -> Element {
                 Icon { icon: LdDatabase, class: "h-8 w-8" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_start_goes_to_onboarding() {
+        assert_eq!(start_route(false), Route::Onboarding {});
+        assert_eq!(start_route(false).to_string(), "/onboarding");
+    }
+
+    #[test]
+    fn later_starts_go_home() {
+        assert_eq!(start_route(true), Route::Home {});
+        assert_eq!(start_route(true).to_string(), "/");
+    }
+
+    #[test]
+    fn onboarding_decision_follows_the_database() {
+        let db = Db::open_in_memory().unwrap();
+        let has_me = |db: &Db| db.me().unwrap().is_some();
+        assert_eq!(start_route(has_me(&db)), Route::Onboarding {});
+
+        db.save_profile(&storage::Profile {
+            name: "Konstantin".into(),
+            home_currency: preferences::default_home_currency(),
+            target_language: "de".into(),
+        })
+        .unwrap();
+        assert_eq!(start_route(has_me(&db)), Route::Home {});
     }
 }

@@ -12,6 +12,8 @@ nav:
 common:
   back: "Back"
   close: "Close"
+  next: "Next"
+  save: "Save"
 
 add_sheet:
   title: "Add"
@@ -55,3 +57,39 @@ page:
   settings_data: "Backup & export"
   onboarding: "Welcome"
   not_found: "Page not found"
+
+onboarding:
+  step: "Step %{current} of %{total}"
+  name_title: "What's your name?"
+  name_text: "In groups you are \"Me\". Balances are shown from your point of view."
+  currency_title: "Your home currency"
+  currency_text: "New groups settle up in this currency by default."
+  language_title: "Your target language"
+  language_text: "Receipts are translated into this language."
+  finish: "Let's go"
+
+profile:
+  section: "Profile"
+  name: "Name"
+  name_placeholder: "Your name"
+  name_required: "Please enter a name."
+  home_currency: "Home currency"
+  target_language: "Target language"
+  save_error: "Saving failed."
+  load_error_title: "Profile cannot be loaded"
+  missing_title: "No profile yet"
+  missing_text: "Restart the app to create your profile."
+
+currency_picker:
+  search: "Search currency"
+  favorites: "Favorites"
+  all: "All currencies"
+  no_results: "No currency found"
+
+language:
+  de: "German"
+  en: "English"
+  ja: "Japanese"
+  fr: "French"
+  es: "Spanish"
+  it: "Italian"

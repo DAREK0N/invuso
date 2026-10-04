@@ -11,6 +11,8 @@
 mod db;
 mod migrations;
 mod people;
+mod profile;
 mod settings;
 
 pub use db::{Db, StorageError};
+pub use profile::Profile;

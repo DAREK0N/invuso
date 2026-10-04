@@ -2,10 +2,9 @@ use dioxus::prelude::*;
 
 use super::PlaceholderPage;
 
-#[component]
-pub fn Settings() -> Element {
-    rsx! { PlaceholderPage { title: t!("page.settings").to_string() } }
-}
+mod profile;
+
+pub use profile::Settings;
 
 #[component]
 pub fn SettingsPeople() -> Element {

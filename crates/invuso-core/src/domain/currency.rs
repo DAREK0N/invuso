@@ -1,5 +1,6 @@
 use std::fmt;
 
+use iso_currency::IntoEnumIterator;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -54,6 +55,27 @@ impl Currency {
     pub fn symbol(&self) -> String {
         self.iso.symbol().to_string()
     }
+
+    /// Currencies a user can pick, sorted by code: everything that carries
+    /// money, minus funds (e.g. `CHE`), special units (e.g. `XDR`) and
+    /// superseded codes (e.g. `HRK`), which nobody pays with any more.
+    pub fn selectable() -> Vec<Self> {
+        let mut all: Vec<Self> = iso_currency::Currency::iter()
+            .filter(|iso| !iso.is_fund() && !iso.is_special() && iso.is_superseded().is_none())
+            .filter_map(|iso| Self::from_code(iso.code()).ok())
+            .collect();
+        all.sort_by_key(|currency| currency.code());
+        all
+    }
+
+    /// Search match on code or name, case-insensitive; an empty query
+    /// matches everything.
+    pub fn matches(&self, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        query.is_empty()
+            || self.code().to_lowercase().contains(&query)
+            || self.name().to_lowercase().contains(&query)
+    }
 }
 
 impl fmt::Debug for Currency {
@@ -97,5 +119,27 @@ mod tests {
             Currency::from_code("XAU"),
             Err(CurrencyError::NoMinorUnit("XAU".into()))
         );
+    }
+
+    #[test]
+    fn selectable_lists_only_current_payment_currencies() {
+        let codes: Vec<_> = Currency::selectable().iter().map(|c| c.code()).collect();
+        for code in ["EUR", "USD", "JPY", "CHF", "GBP", "KWD"] {
+            assert!(codes.contains(&code), "missing {code}");
+        }
+        // special unit, fund, superseded
+        for code in ["XAU", "XDR", "CHE", "CLF", "HRK"] {
+            assert!(!codes.contains(&code), "unexpected {code}");
+        }
+        assert!(codes.is_sorted());
+    }
+
+    #[test]
+    fn matches_code_and_name_case_insensitively() {
+        let jpy = Currency::from_code("JPY").unwrap();
+        assert!(jpy.matches(""));
+        assert!(jpy.matches("  jp "));
+        assert!(jpy.matches("YEN"));
+        assert!(!jpy.matches("euro"));
     }
 }

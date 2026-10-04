@@ -1,5 +1,5 @@
 use invuso_core::domain::{Person, PersonId};
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::db::{new_id, now_ms};
 use super::{Db, StorageError};
@@ -25,22 +25,7 @@ impl Db {
             is_me: new.is_me,
             note: None,
         };
-        self.with(|conn| {
-            let now = now_ms();
-            conn.execute(
-                "INSERT INTO person (id, name, color, is_me, created_at, updated_at, origin_device_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
-                params![
-                    person.id.as_str(),
-                    person.name,
-                    person.color,
-                    person.is_me,
-                    now,
-                    self.device_id()
-                ],
-            )?;
-            Ok(())
-        })?;
+        self.with(|conn| insert(conn, self.device_id(), &person))?;
         Ok(person)
     }
 
@@ -72,33 +57,19 @@ impl Db {
 
     /// The user's own person (PER-02), if onboarding created it already.
     pub fn me(&self) -> Result<Option<Person>, StorageError> {
-        self.with(|conn| {
-            Ok(conn
-                .query_row(
-                    &format!("SELECT {COLUMNS} FROM person WHERE is_me = 1 AND deleted_at IS NULL"),
-                    [],
-                    person_from_row,
-                )
-                .optional()?)
-        })
+        self.with(me)
     }
 
     pub fn update_person(&self, person: &Person) -> Result<(), StorageError> {
         let name = valid_name(&person.name)?;
         let changed = self.with(|conn| {
-            Ok(conn.execute(
-                "UPDATE person SET name = ?2, color = ?3, avatar_path = ?4, is_me = ?5, note = ?6, updated_at = ?7
-                 WHERE id = ?1 AND deleted_at IS NULL",
-                params![
-                    person.id.as_str(),
+            update(
+                conn,
+                &Person {
                     name,
-                    person.color,
-                    person.avatar_path,
-                    person.is_me,
-                    person.note,
-                    now_ms()
-                ],
-            )?)
+                    ..person.clone()
+                },
+            )
         })?;
         if changed == 0 {
             return Err(StorageError::NotFound);
@@ -122,7 +93,54 @@ impl Db {
     }
 }
 
-fn valid_name(name: &str) -> Result<String, StorageError> {
+pub(super) fn insert(
+    conn: &Connection,
+    device_id: &str,
+    person: &Person,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "INSERT INTO person (id, name, color, is_me, created_at, updated_at, origin_device_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+        params![
+            person.id.as_str(),
+            person.name,
+            person.color,
+            person.is_me,
+            now_ms(),
+            device_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// Number of rows changed: 0 when the person does not exist (any more).
+pub(super) fn update(conn: &Connection, person: &Person) -> Result<usize, StorageError> {
+    Ok(conn.execute(
+        "UPDATE person SET name = ?2, color = ?3, avatar_path = ?4, is_me = ?5, note = ?6, updated_at = ?7
+         WHERE id = ?1 AND deleted_at IS NULL",
+        params![
+            person.id.as_str(),
+            person.name,
+            person.color,
+            person.avatar_path,
+            person.is_me,
+            person.note,
+            now_ms()
+        ],
+    )?)
+}
+
+pub(super) fn me(conn: &Connection) -> Result<Option<Person>, StorageError> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM person WHERE is_me = 1 AND deleted_at IS NULL"),
+            [],
+            person_from_row,
+        )
+        .optional()?)
+}
+
+pub(super) fn valid_name(name: &str) -> Result<String, StorageError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(StorageError::InvalidInput("name must not be empty"));

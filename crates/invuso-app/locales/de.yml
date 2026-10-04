@@ -12,6 +12,8 @@ nav:
 common:
   back: "Zurück"
   close: "Schließen"
+  next: "Weiter"
+  save: "Speichern"
 
 add_sheet:
   title: "Hinzufügen"
@@ -55,3 +57,39 @@ page:
   settings_data: "Backup & Export"
   onboarding: "Willkommen"
   not_found: "Seite nicht gefunden"
+
+onboarding:
+  step: "Schritt %{current} von %{total}"
+  name_title: "Wie heißt du?"
+  name_text: "In Gruppen bist du „Ich“. Salden werden aus deiner Sicht angezeigt."
+  currency_title: "Deine Heimatwährung"
+  currency_text: "Neue Gruppen rechnen standardmäßig in dieser Währung ab."
+  language_title: "Deine Zielsprache"
+  language_text: "In diese Sprache werden Kassenzettel übersetzt."
+  finish: "Los geht's"
+
+profile:
+  section: "Profil"
+  name: "Name"
+  name_placeholder: "Dein Name"
+  name_required: "Bitte gib einen Namen ein."
+  home_currency: "Heimatwährung"
+  target_language: "Zielsprache"
+  save_error: "Speichern fehlgeschlagen."
+  load_error_title: "Profil kann nicht geladen werden"
+  missing_title: "Kein Profil vorhanden"
+  missing_text: "Starte die App neu, um das Profil anzulegen."
+
+currency_picker:
+  search: "Währung suchen"
+  favorites: "Favoriten"
+  all: "Alle Währungen"
+  no_results: "Keine Währung gefunden"
+
+language:
+  de: "Deutsch"
+  en: "Englisch"
+  ja: "Japanisch"
+  fr: "Französisch"
+  es: "Spanisch"
+  it: "Italienisch"
