@@ -6,9 +6,18 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+invuso-core.workspace = true
 dioxus.workspace = true
 dioxus-free-icons.workspace = true
 rust-i18n.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Only to ask Android for the app's private files directory (platform/).
+jni.workspace = true
+ndk-context.workspace = true
 
 [features]
 default = ["desktop"]

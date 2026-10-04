@@ -20,6 +20,10 @@ add_sheet:
   manual: "Manuell erfassen"
   cash: "Bargeld abheben / wechseln"
 
+startup:
+  db_error_title: "Daten können nicht geladen werden"
+  db_error_text: "Die Datenbank konnte nicht geöffnet werden. Deine Daten wurden nicht verändert."
+
 placeholder:
   title: "Noch nicht verfügbar"
   text: "Dieser Bereich wird in einem späteren Meilenstein umgesetzt."

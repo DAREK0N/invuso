@@ -42,7 +42,6 @@
     --color-cerulean-600: #3e7e8e;
     --color-cerulean-700: #2f5e6a;
     --color-cerulean-800: #1f3f47;
-    --color-cerulean-900: #101f23;
   }
 }
 @layer base {
@@ -194,6 +193,9 @@
   .fixed {
     position: fixed;
   }
+  .static {
+    position: static;
+  }
   .sticky {
     position: sticky;
   }
@@ -250,6 +252,9 @@
   }
   .inline {
     display: inline;
+  }
+  .table {
+    display: table;
   }
   .h-1 {
     height: calc(var(--spacing) * 1);

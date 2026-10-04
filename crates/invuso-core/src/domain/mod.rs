@@ -6,4 +6,4 @@ mod person;
 
 pub use currency::{Currency, CurrencyError};
 pub use money::{Money, MoneyError};
-pub use person::PersonId;
+pub use person::{Person, PersonId};

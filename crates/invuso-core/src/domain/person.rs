@@ -28,3 +28,17 @@ impl From<&str> for PersonId {
         Self::new(id)
     }
 }
+
+/// Someone who can pay or owe (idee.md 4.1). Created globally, usable in
+/// any number of groups.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Person {
+    pub id: PersonId,
+    pub name: String,
+    /// Avatar color as a design-token name, e.g. `"cerulean"`.
+    pub color: String,
+    pub avatar_path: Option<String>,
+    /// Exactly one person is the user ("Ich").
+    pub is_me: bool,
+    pub note: Option<String>,
+}

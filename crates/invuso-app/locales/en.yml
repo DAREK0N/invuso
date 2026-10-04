@@ -20,6 +20,10 @@ add_sheet:
   manual: "Enter manually"
   cash: "Withdraw / exchange cash"
 
+startup:
+  db_error_title: "Data cannot be loaded"
+  db_error_text: "The database could not be opened. Your data has not been changed."
+
 placeholder:
   title: "Not available yet"
   text: "This area will be built in a later milestone."
