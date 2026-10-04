@@ -179,6 +179,33 @@ pub fn display_date(iso: &str) -> String {
     }
 }
 
+/// Heading of a day in the timeline (GRP-20): "Heute", "Gestern", else the
+/// weekday and date, e.g. "Sa., 03.10.2026". `today` is `YYYY-MM-DD`.
+pub fn day_heading(date: &str, today: &str) -> String {
+    if date == today {
+        return t!("date.today").to_string();
+    }
+    if crate::clock::previous_day(today).as_deref() == Some(date) {
+        return t!("date.yesterday").to_string();
+    }
+    let weekday = match crate::clock::weekday(date) {
+        Some(0) => t!("date.weekday_mon"),
+        Some(1) => t!("date.weekday_tue"),
+        Some(2) => t!("date.weekday_wed"),
+        Some(3) => t!("date.weekday_thu"),
+        Some(4) => t!("date.weekday_fri"),
+        Some(5) => t!("date.weekday_sat"),
+        Some(6) => t!("date.weekday_sun"),
+        _ => return display_date(date),
+    };
+    t!(
+        "date.day_heading",
+        weekday = weekday,
+        date = display_date(date)
+    )
+    .to_string()
+}
+
 /// "01.03.2026 – 14.03.2026", "ab …", "bis …"; `None` without any date.
 pub fn period_text(start: Option<&str>, end: Option<&str>) -> Option<String> {
     match (start, end) {

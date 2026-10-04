@@ -182,6 +182,18 @@ fn normalized_note(note: Option<String>) -> Option<String> {
     note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
 }
 
+/// The person with this id, also if deleted: past expenses keep showing
+/// who paid (idee.md 1.4).
+pub(super) fn person_any(conn: &Connection, id: &PersonId) -> Result<Option<Person>, StorageError> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM person WHERE id = ?1"),
+            [id.as_str()],
+            person_from_row,
+        )
+        .optional()?)
+}
+
 fn person_from_row(row: &Row<'_>) -> rusqlite::Result<Person> {
     Ok(Person {
         id: PersonId::new(row.get::<_, String>(0)?),

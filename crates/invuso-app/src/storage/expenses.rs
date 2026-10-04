@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use invuso_core::Decimal;
 use invuso_core::domain::{
     CategoryId, Currency, Expense, ExpenseId, ExpensePayment, ExpenseSource, GroupId, Money,
-    PaymentMethodId, PersonId, local_date, validate_occurred_at, validate_payments, validate_split,
+    PaymentMethod, PaymentMethodId, Person, PersonId, local_date, validate_occurred_at,
+    validate_payments, validate_split,
 };
 use invuso_core::fx;
 use invuso_core::split::SplitMode;
@@ -13,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::db::{new_id, now_ms};
 use super::exchange_rates::{RateQuote, rate_id_for_expense};
 use super::settings::{HOME_CURRENCY, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP};
-use super::{Db, StorageError, categories, groups, settings};
+use super::{Db, StorageError, categories, groups, payment_methods, people, settings};
 
 /// One payer of a new expense (EXP-02, EXP-03); the amount is in minor
 /// units of the expense's currency.
@@ -41,14 +42,34 @@ pub struct NewExpense {
     pub split: SplitMode,
 }
 
-/// An expense as a list shows it, until the timeline (GRP-20) exists.
+/// One payer of an expense as the timeline shows it (GRP-21). Names of
+/// people and methods deleted since stay readable (idee.md 1.4 "Nichts
+/// geht verloren").
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpenseListEntry {
+pub struct TimelinePayer {
+    pub name: String,
+    pub method: Option<String>,
+}
+
+/// An expense as the group's timeline shows it (GRP-20, GRP-21).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineEntry {
     pub id: ExpenseId,
     pub title: String,
+    pub category_id: Option<CategoryId>,
     pub occurred_at: String,
     pub total: Money,
     pub total_in_base: Money,
+    /// In the order they were entered.
+    pub payers: Vec<TimelinePayer>,
+}
+
+/// The people and payment methods an expense refers to, by id, including
+/// those deleted since it was saved.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ExpenseParties {
+    pub people: BTreeMap<PersonId, Person>,
+    pub methods: BTreeMap<PaymentMethodId, PaymentMethod>,
 }
 
 /// One stored `expense_share` row: person, weight, percent, amount.
@@ -220,34 +241,65 @@ impl Db {
         Ok(())
     }
 
-    /// The group's expenses, newest first.
-    pub fn group_expenses(&self, group: &GroupId) -> Result<Vec<ExpenseListEntry>, StorageError> {
+    /// The group's expenses for the timeline (GRP-20): newest day first,
+    /// within a day the latest local time first. An expense added later
+    /// with an earlier date sorts in by that date (GRP-23).
+    pub fn group_timeline(&self, group: &GroupId) -> Result<Vec<TimelineEntry>, StorageError> {
         self.with(|conn| {
             let mut statement = conn.prepare(
-                "SELECT id, title, occurred_at, total_minor, currency, total_base_minor,
-                        base_currency
+                "SELECT id, title, category_id, occurred_at, total_minor, currency,
+                        total_base_minor, base_currency
                  FROM expense WHERE group_id = ?1 AND deleted_at IS NULL
-                 ORDER BY occurred_date DESC, occurred_at DESC, created_at DESC",
+                 ORDER BY occurred_date DESC, substr(occurred_at, 12, 8) DESC,
+                          created_at DESC, id",
             )?;
             let rows = statement
                 .query_map([group.as_str()], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(7)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
+
+            // All payers of the group in one query instead of one per row.
+            let mut statement = conn.prepare(
+                "SELECT ep.expense_id, p.name, pm.name
+                 FROM expense_payment ep
+                 JOIN expense e ON e.id = ep.expense_id
+                 JOIN person p ON p.id = ep.person_id
+                 LEFT JOIN payment_method pm ON pm.id = ep.payment_method_id
+                 WHERE e.group_id = ?1 AND e.deleted_at IS NULL AND ep.deleted_at IS NULL
+                 ORDER BY ep.created_at, ep.id",
+            )?;
+            let mut payers: BTreeMap<String, Vec<TimelinePayer>> = BTreeMap::new();
+            for row in statement.query_map([group.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    TimelinePayer {
+                        name: row.get(1)?,
+                        method: row.get(2)?,
+                    },
+                ))
+            })? {
+                let (expense, payer) = row?;
+                payers.entry(expense).or_default().push(payer);
+            }
+
             rows.into_iter()
                 .map(
-                    |(id, title, occurred_at, total, currency, base, base_currency)| {
-                        Ok(ExpenseListEntry {
+                    |(id, title, category, occurred_at, total, currency, base, base_currency)| {
+                        Ok(TimelineEntry {
+                            payers: payers.remove(&id).unwrap_or_default(),
                             id: ExpenseId::new(id),
                             title,
+                            category_id: category.map(CategoryId::new),
                             occurred_at,
                             total: Money::new(total, stored_currency(&currency)?),
                             total_in_base: Money::new(base, stored_currency(&base_currency)?),
@@ -255,6 +307,63 @@ impl Db {
                     },
                 )
                 .collect()
+        })
+    }
+
+    /// How many expenses the group has, for the link to its timeline.
+    pub fn group_expense_count(&self, group: &GroupId) -> Result<u32, StorageError> {
+        self.with(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM expense WHERE group_id = ?1 AND deleted_at IS NULL",
+                [group.as_str()],
+                |row| row.get(0),
+            )?)
+        })
+    }
+
+    /// Whether the expense exists but is deleted, so a screen showing it
+    /// can tell "just deleted" from "never existed".
+    pub fn is_expense_deleted(&self, id: &ExpenseId) -> Result<bool, StorageError> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT 1 FROM expense WHERE id = ?1 AND deleted_at IS NOT NULL",
+                    [id.as_str()],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
+        })
+    }
+
+    /// Everyone who paid or shares the expense and the methods they paid
+    /// with (GRP-22), also if deleted since.
+    pub fn expense_parties(&self, expense: &Expense) -> Result<ExpenseParties, StorageError> {
+        let participants = expense.split.participants();
+        let person_ids: BTreeSet<&PersonId> = expense
+            .payments
+            .iter()
+            .map(|p| &p.person_id)
+            .chain(participants.iter())
+            .collect();
+        let method_ids: BTreeSet<&PaymentMethodId> = expense
+            .payments
+            .iter()
+            .filter_map(|p| p.payment_method_id.as_ref())
+            .collect();
+        self.with(|conn| {
+            let mut parties = ExpenseParties::default();
+            for id in person_ids {
+                if let Some(person) = people::person_any(conn, id)? {
+                    parties.people.insert(id.clone(), person);
+                }
+            }
+            for id in method_ids {
+                if let Some(method) = payment_methods::method_any(conn, id)? {
+                    parties.methods.insert(id.clone(), method);
+                }
+            }
+            Ok(parties)
         })
     }
 
@@ -1014,7 +1123,7 @@ mod tests {
     fn group_balances(s: &Setup) -> BTreeMap<PersonId, i64> {
         let entries: Vec<ExpenseEntry> = s
             .db
-            .group_expenses(&s.group)
+            .group_timeline(&s.group)
             .unwrap()
             .into_iter()
             .map(|entry| {
@@ -1124,7 +1233,7 @@ mod tests {
         let first = s.db.create_expense(older, &rate).unwrap();
         let second = s.db.create_expense(hotel(&s, equal), &rate).unwrap();
         let ids = |s: &Setup| -> Vec<ExpenseId> {
-            s.db.group_expenses(&s.group)
+            s.db.group_timeline(&s.group)
                 .unwrap()
                 .into_iter()
                 .map(|e| e.id)
@@ -1132,9 +1241,13 @@ mod tests {
         };
         assert_eq!(ids(&s), [second.id.clone(), first.id.clone()]);
 
+        assert!(!s.db.is_expense_deleted(&second.id).unwrap());
         s.db.delete_expense(&second.id).unwrap();
         assert_eq!(ids(&s), std::slice::from_ref(&first.id));
+        assert_eq!(s.db.group_expense_count(&s.group).unwrap(), 1);
         assert_eq!(s.db.expense(&second.id).unwrap(), None);
+        assert!(s.db.is_expense_deleted(&second.id).unwrap());
+        assert!(!s.db.is_expense_deleted(&ExpenseId::new("never")).unwrap());
         assert!(matches!(
             s.db.delete_expense(&second.id),
             Err(StorageError::NotFound)
@@ -1143,9 +1256,112 @@ mod tests {
         s.db.restore_expense(&second.id).unwrap();
         assert_eq!(s.db.expense(&second.id).unwrap(), Some(second.clone()));
         assert_eq!(ids(&s).len(), 2);
+        assert!(!s.db.is_expense_deleted(&second.id).unwrap());
         assert!(matches!(
             s.db.restore_expense(&second.id),
             Err(StorageError::NotFound)
         ));
+    }
+
+    #[test]
+    fn timeline_sorts_by_day_and_time_and_names_payers() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let card =
+            s.db.create_payment_method(NewPaymentMethod {
+                name: "Visa".into(),
+                kind: PaymentMethodKind::CreditCard,
+                owner_person_id: Some(s.anna.id.clone()),
+                last4: None,
+                color: "cerulean".into(),
+                icon: "credit-card".into(),
+            })
+            .unwrap();
+        let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()]));
+        let at = |title: &str, occurred_at: &str| NewExpense {
+            title: title.into(),
+            occurred_at: occurred_at.into(),
+            ..hotel(&s, equal.clone())
+        };
+        s.db.create_expense(at("Lunch", "2026-10-04T12:00:00+09:00"), &rate)
+            .unwrap();
+        s.db.create_expense(at("Dinner", "2026-10-04T19:00:00+09:00"), &rate)
+            .unwrap();
+        // Same local day in another time zone: sorts by local time.
+        s.db.create_expense(at("Breakfast", "2026-10-04T08:00:00+02:00"), &rate)
+            .unwrap();
+        // Added last, but happened the day before (GRP-23).
+        let shared = NewExpense {
+            payments: vec![
+                NewExpensePayment {
+                    person_id: s.me.id.clone(),
+                    payment_method_id: None,
+                    amount_minor: 1_000,
+                },
+                NewExpensePayment {
+                    person_id: s.anna.id.clone(),
+                    payment_method_id: Some(card.id.clone()),
+                    amount_minor: 3_000,
+                },
+            ],
+            ..at("Late entry", "2026-10-03T21:00:00+09:00")
+        };
+        s.db.create_expense(shared, &rate).unwrap();
+
+        let timeline = s.db.group_timeline(&s.group).unwrap();
+        let titles: Vec<_> = timeline.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, ["Dinner", "Lunch", "Breakfast", "Late entry"]);
+        assert_eq!(
+            timeline[3].payers,
+            [
+                TimelinePayer {
+                    name: "Ich".into(),
+                    method: None
+                },
+                TimelinePayer {
+                    name: "Anna".into(),
+                    method: Some("Visa".into())
+                },
+            ]
+        );
+        assert_eq!(timeline[3].total_in_base, Money::new(4_000, cur("EUR")));
+        assert_eq!(s.db.group_expense_count(&s.group).unwrap(), 4);
+
+        // Names stay readable after the method is deleted.
+        s.db.delete_payment_method(&card.id).unwrap();
+        let timeline = s.db.group_timeline(&s.group).unwrap();
+        assert_eq!(timeline[3].payers[1].method.as_deref(), Some("Visa"));
+    }
+
+    #[test]
+    fn parties_include_deleted_people_and_methods() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let card =
+            s.db.create_payment_method(NewPaymentMethod {
+                name: "Visa".into(),
+                kind: PaymentMethodKind::CreditCard,
+                owner_person_id: Some(s.me.id.clone()),
+                last4: None,
+                color: "cerulean".into(),
+                icon: "credit-card".into(),
+            })
+            .unwrap();
+        let mut new = hotel(
+            &s,
+            SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()])),
+        );
+        new.payments[0].payment_method_id = Some(card.id.clone());
+        let expense = s.db.create_expense(new, &rate).unwrap();
+
+        s.db.delete_payment_method(&card.id).unwrap();
+        s.db.delete_person(&s.anna.id).unwrap();
+        let parties = s.db.expense_parties(&expense).unwrap();
+        assert_eq!(
+            parties.people.keys().collect::<BTreeSet<_>>(),
+            BTreeSet::from([&s.me.id, &s.anna.id])
+        );
+        assert_eq!(parties.people[&s.anna.id].name, "Anna");
+        assert_eq!(parties.methods[&card.id].name, "Visa");
     }
 }

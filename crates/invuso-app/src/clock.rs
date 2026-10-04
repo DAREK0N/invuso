@@ -34,15 +34,34 @@ pub fn occurred_at(date: &str, time: &str) -> Option<String> {
     Some(format_occurred_at(local, offset))
 }
 
-fn parse_local(date: &str, time: &str) -> Option<PrimitiveDateTime> {
+/// Day of the week of a `YYYY-MM-DD` date, Monday = 0 … Sunday = 6.
+pub fn weekday(date: &str) -> Option<u8> {
+    Some(parse_date(date)?.weekday().number_days_from_monday())
+}
+
+/// The calendar day before a `YYYY-MM-DD` date, in the same form.
+pub fn previous_day(date: &str) -> Option<String> {
+    let day = parse_date(date)?.previous_day()?;
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        day.year(),
+        u8::from(day.month()),
+        day.day()
+    ))
+}
+
+fn parse_date(date: &str) -> Option<Date> {
     if !is_iso_date(date) {
         return None;
     }
     let year = date[0..4].parse().ok()?;
     let month = Month::try_from(date[5..7].parse::<u8>().ok()?).ok()?;
     let day = date[8..10].parse().ok()?;
-    let date = Date::from_calendar_date(year, month, day).ok()?;
-    Some(PrimitiveDateTime::new(date, parse_time(time)?))
+    Date::from_calendar_date(year, month, day).ok()
+}
+
+fn parse_local(date: &str, time: &str) -> Option<PrimitiveDateTime> {
+    Some(PrimitiveDateTime::new(parse_date(date)?, parse_time(time)?))
 }
 
 fn parse_time(text: &str) -> Option<Time> {
@@ -101,6 +120,19 @@ mod tests {
         let stamp = occurred_at(&date, &time).unwrap();
         assert_eq!(validate_occurred_at(&stamp), Ok(()));
         assert!(stamp.starts_with(&format!("{date}T{time}:00")));
+    }
+
+    #[test]
+    fn weekday_and_previous_day() {
+        // 2026-10-04 is a Sunday.
+        assert_eq!(weekday("2026-10-04"), Some(6));
+        assert_eq!(weekday("2026-10-05"), Some(0));
+        assert_eq!(weekday("2026-13-01"), None);
+        assert_eq!(previous_day("2026-10-04").as_deref(), Some("2026-10-03"));
+        assert_eq!(previous_day("2026-03-01").as_deref(), Some("2026-02-28"));
+        assert_eq!(previous_day("2024-03-01").as_deref(), Some("2024-02-29"));
+        assert_eq!(previous_day("2026-01-01").as_deref(), Some("2025-12-31"));
+        assert_eq!(previous_day("x"), None);
     }
 
     #[test]

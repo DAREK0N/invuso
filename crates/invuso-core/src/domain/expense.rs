@@ -4,7 +4,7 @@ use std::fmt;
 use thiserror::Error;
 
 use super::{GroupId, Money, PaymentMethodId, PersonId, is_iso_date};
-use crate::split::{SplitError, SplitMode, split};
+use crate::split::{SplitError, SplitMode, rescale, split};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExpenseError {
@@ -135,6 +135,31 @@ pub struct Expense {
     pub payments: Vec<ExpensePayment>,
 }
 
+impl Expense {
+    /// Each person's share in the expense's own currency (idee.md 8.1).
+    pub fn shares(&self) -> Result<BTreeMap<PersonId, i64>, ExpenseError> {
+        validate_split(self.total.amount_minor(), &self.split)
+    }
+
+    /// Each person's share in the base currency (idee.md 8.2 step 5): the
+    /// own-currency shares rescaled to `total_in_base`, so they add up to
+    /// it exactly instead of drifting by rounding each one on its own.
+    pub fn shares_in_base(&self) -> Result<BTreeMap<PersonId, i64>, ExpenseError> {
+        Ok(rescale(self.total_in_base.amount_minor(), &self.shares()?)?)
+    }
+
+    /// What each payer paid, in the base currency, rescaled like
+    /// [`Expense::shares_in_base`] so it adds up to `total_in_base`.
+    pub fn payments_in_base(&self) -> Result<BTreeMap<PersonId, i64>, ExpenseError> {
+        let paid: BTreeMap<PersonId, i64> = self
+            .payments
+            .iter()
+            .map(|p| (p.person_id.clone(), p.amount.amount_minor()))
+            .collect();
+        Ok(rescale(self.total_in_base.amount_minor(), &paid)?)
+    }
+}
+
 /// Checks who paid (EXP-02): at least one payer, each person once, every
 /// part positive and all parts adding up to exactly `total_minor`.
 pub fn validate_payments(
@@ -241,6 +266,95 @@ mod tests {
 
     fn p(id: &str) -> PersonId {
         PersonId::new(id)
+    }
+
+    fn expense(total: Money, total_in_base: Money, split: SplitMode) -> Expense {
+        Expense {
+            id: ExpenseId::new("e"),
+            group_id: None,
+            title: "Ramen".to_string(),
+            category_id: None,
+            occurred_at: "2026-10-04T19:30:00+09:00".to_string(),
+            total,
+            fx_rate_id: None,
+            total_in_base,
+            split,
+            source: ExpenseSource::Manual,
+            payments: Vec::new(),
+        }
+    }
+
+    fn cur(code: &str) -> super::super::Currency {
+        super::super::Currency::from_code(code).unwrap()
+    }
+
+    #[test]
+    fn base_shares_add_up_to_the_converted_total() {
+        // 1000 JPY = 5.63 EUR; converting each share on its own would give
+        // 1.88 + 1.87 + 1.87 = 5.62 EUR.
+        let e = expense(
+            Money::new(1000, cur("JPY")),
+            Money::new(563, cur("EUR")),
+            SplitMode::Equal([p("a"), p("b"), p("c")].into()),
+        );
+        assert_eq!(
+            e.shares(),
+            Ok([(p("a"), 334), (p("b"), 333), (p("c"), 333)].into())
+        );
+        let base = e.shares_in_base().unwrap();
+        assert_eq!(base.values().sum::<i64>(), 563);
+        // Rests: a 0.042, b and c 0.479; the leftover cent goes to b by id.
+        assert_eq!(base, [(p("a"), 188), (p("b"), 188), (p("c"), 187)].into());
+    }
+
+    #[test]
+    fn base_payments_add_up_to_the_converted_total() {
+        let mut e = expense(
+            Money::new(3000, cur("JPY")),
+            Money::new(1683, cur("EUR")),
+            SplitMode::Equal([p("a")].into()),
+        );
+        e.payments = ["a", "b"]
+            .map(|id| ExpensePayment {
+                person_id: p(id),
+                payment_method_id: None,
+                amount: Money::new(1500, cur("JPY")),
+            })
+            .into();
+        // 841.5 each: the odd cent goes to the first id.
+        assert_eq!(
+            e.payments_in_base(),
+            Ok([(p("a"), 842), (p("b"), 841)].into())
+        );
+        e.payments.clear();
+        assert!(e.payments_in_base().is_err());
+    }
+
+    #[test]
+    fn base_shares_equal_shares_in_the_same_currency() {
+        let e = expense(
+            Money::new(4000, cur("EUR")),
+            Money::new(4000, cur("EUR")),
+            SplitMode::Exact([(p("a"), 2999), (p("b"), 1001)].into()),
+        );
+        assert_eq!(e.shares_in_base(), e.shares());
+    }
+
+    #[test]
+    fn base_shares_keep_zero_weights_and_three_decimals() {
+        // 10 EUR = 4.700 BHD (three decimals); b carries nothing.
+        let e = expense(
+            Money::new(1000, cur("EUR")),
+            Money::new(4700, cur("BHD")),
+            SplitMode::Weights(
+                [
+                    (p("a"), rust_decimal::Decimal::ONE),
+                    (p("b"), rust_decimal::Decimal::ZERO),
+                ]
+                .into(),
+            ),
+        );
+        assert_eq!(e.shares_in_base(), Ok([(p("a"), 4700), (p("b"), 0)].into()));
     }
 
     #[test]

@@ -27,7 +27,9 @@ pub fn AddActionSheet(on_close: EventHandler<()>) -> Element {
                 }
                 ActionRow {
                     label: t!("add_sheet.manual").to_string(),
-                    to: Route::ExpenseNew {},
+                    to: Route::ExpenseNew {
+                        group: String::new(),
+                    },
                     on_close,
                     Icon { icon: LdPencil, class: "h-5 w-5" }
                 }

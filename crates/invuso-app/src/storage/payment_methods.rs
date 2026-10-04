@@ -213,6 +213,21 @@ fn check_owner(conn: &Connection, owner: Option<&PersonId>) -> Result<(), Storag
     exists.ok_or(StorageError::InvalidInput("owner does not exist"))
 }
 
+/// The method with this id, also if archived or deleted: past expenses
+/// keep showing what was paid with (idee.md 1.4).
+pub(super) fn method_any(
+    conn: &Connection,
+    id: &PaymentMethodId,
+) -> Result<Option<PaymentMethod>, StorageError> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM payment_method pm WHERE pm.id = ?1"),
+            [id.as_str()],
+            method_from_row,
+        )
+        .optional()?)
+}
+
 fn method_from_row(row: &Row<'_>) -> rusqlite::Result<PaymentMethod> {
     let kind: String = row.get(2)?;
     Ok(PaymentMethod {

@@ -53,6 +53,8 @@ struct FormData {
     currency: Option<Currency>,
     /// The expense being edited (EXP-05); `None` for a new one.
     existing: Option<Expense>,
+    /// Group whose timeline opened the form (GRP-23).
+    opened_from: Option<GroupId>,
 }
 
 /// Someone who paid (part of) the expense (EXP-02, EXP-03).
@@ -75,11 +77,15 @@ enum Sheet {
 }
 
 /// `/expense/new`: records an expense by hand (EXP-01..04, EXP-06, EXP-07;
-/// idee.md 7.3). Saving leads to the group.
+/// idee.md 7.3), in `group` if given (GRP-23). Saving leads to the group's
+/// timeline.
 #[component]
-pub fn ExpenseNew() -> Element {
+pub fn ExpenseNew(group: String) -> Element {
     let db = use_context::<Db>();
-    let data = use_hook(|| load(&db, None).map_err(|e| e.to_string()));
+    let data = use_hook(|| {
+        let preset = (!group.is_empty()).then(|| GroupId::new(group));
+        load(&db, None, preset).map_err(|e| e.to_string())
+    });
 
     rsx! {
         TopBar { title: t!("page.expense_new").to_string(), show_back: true }
@@ -97,7 +103,7 @@ pub fn ExpenseEdit(id: String) -> Element {
     let db = use_context::<Db>();
     // `None` stands for "not found".
     let data = use_hook(|| {
-        load(&db, Some(&ExpenseId::new(id))).map_err(|e| match e {
+        load(&db, Some(&ExpenseId::new(id)), None).map_err(|e| match e {
             StorageError::NotFound => None,
             other => Some(other.to_string()),
         })
@@ -138,6 +144,7 @@ fn ExpenseForm(data: FormData) -> Element {
     let nav = use_navigator();
     let existing = data.existing.clone();
     let editing = existing.is_some();
+    let opened_from = data.opened_from.clone();
 
     let initial_people =
         use_hook(|| people_of(&db, data.group.as_ref(), &data.me).map_err(|e| e.to_string()));
@@ -370,6 +377,7 @@ fn ExpenseForm(data: FormData) -> Element {
         saving.set(true);
         let worker_db = save_db.clone();
         let edit_id = save_existing.as_ref().map(|e| e.id.clone());
+        let opened_from = opened_from.clone();
         let (mut revision, mut toaster) = (revision, toaster);
         spawn(async move {
             // The day's rate may have to be fetched; keep the network off
@@ -389,7 +397,8 @@ fn ExpenseForm(data: FormData) -> Element {
                         (false, false) => t!("expense.saved"),
                     };
                     toaster.show(message.to_string(), None);
-                    leave(nav, saved.expense.group_id.as_ref(), editing);
+                    let group = saved.expense.group_id.as_ref();
+                    leave(nav, group, editing || group == opened_from.as_ref());
                 }
                 Ok(Err(error)) => {
                     saving.set(false);
@@ -816,16 +825,17 @@ fn ExpenseForm(data: FormData) -> Element {
     }
 }
 
-/// After saving or deleting: back to where the edit started, otherwise to
-/// the group (the timeline follows with AP-13) or Home.
-fn leave(nav: Navigator, group: Option<&GroupId>, editing: bool) {
-    if editing && nav.can_go_back() {
+/// After saving or deleting: `back` to the screen the form was opened from
+/// when it shows the expense (its detail, or the timeline of its group),
+/// otherwise to the group's timeline (GRP-23) or Home.
+fn leave(nav: Navigator, group: Option<&GroupId>, back: bool) {
+    if back && nav.can_go_back() {
         nav.go_back();
         return;
     }
     match group {
         Some(id) => {
-            nav.replace(Route::GroupOverview {
+            nav.replace(Route::GroupTimeline {
                 id: id.as_str().to_string(),
             });
         }
@@ -1014,8 +1024,13 @@ fn NoGroupIcon() -> Element {
 }
 
 /// Everything the form needs; with `id` also the expense to edit
-/// (`StorageError::NotFound` if it is gone).
-fn load(db: &Db, id: Option<&ExpenseId>) -> Result<FormData, StorageError> {
+/// (`StorageError::NotFound` if it is gone). `preset` is the group a new
+/// expense starts in, if it still exists.
+fn load(
+    db: &Db,
+    id: Option<&ExpenseId>,
+    preset: Option<GroupId>,
+) -> Result<FormData, StorageError> {
     let me = db.me()?.ok_or(StorageError::NotFound)?;
     let home_currency = db
         .profile()?
@@ -1025,12 +1040,16 @@ fn load(db: &Db, id: Option<&ExpenseId>) -> Result<FormData, StorageError> {
         Some(id) => Some(db.expense(id)?.ok_or(StorageError::NotFound)?),
         None => None,
     };
+    let opened_from = preset.filter(|id| groups.iter().any(|g| &g.id == id));
     let (group, currency) = match &existing {
         Some(expense) => (expense.group_id.clone(), Some(expense.total.currency())),
-        None => (
-            preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups),
-            db.currency_setting(LAST_EXPENSE_CURRENCY)?,
-        ),
+        None => {
+            let group = match &opened_from {
+                Some(id) => Some(id.clone()),
+                None => preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups),
+            };
+            (group, db.currency_setting(LAST_EXPENSE_CURRENCY)?)
+        }
     };
     let methods = db
         .payment_methods()?
@@ -1046,6 +1065,7 @@ fn load(db: &Db, id: Option<&ExpenseId>) -> Result<FormData, StorageError> {
         group,
         currency,
         existing,
+        opened_from,
     })
 }
 

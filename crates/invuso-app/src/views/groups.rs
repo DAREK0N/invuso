@@ -13,16 +13,13 @@ mod form;
 mod list;
 mod members;
 mod overview;
+mod timeline;
 
 pub use form::{GroupEdit, GroupNew};
 pub use list::GroupList;
 pub use members::GroupMembers;
 pub use overview::GroupOverview;
-
-#[component]
-pub fn GroupTimeline(id: String) -> Element {
-    rsx! { PlaceholderPage { title: t!("page.group_timeline").to_string(), show_back: true } }
-}
+pub use timeline::GroupTimeline;
 
 #[component]
 pub fn GroupSettle(id: String) -> Element {

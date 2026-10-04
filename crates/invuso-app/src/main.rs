@@ -85,8 +85,9 @@ pub enum Route {
     #[end_layout]
 
     #[layout(FocusShell)]
-        #[route("/expense/new")]
-        ExpenseNew {},
+        // `group` preselects a group, e.g. from its timeline (GRP-23).
+        #[route("/expense/new?:group")]
+        ExpenseNew { group: String },
         #[route("/expense/:id/edit")]
         ExpenseEdit { id: String },
         #[route("/scan")]

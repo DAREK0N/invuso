@@ -196,6 +196,16 @@ payment_icon:
 
 date:
   format: "%{d}.%{m}.%{y}"
+  today: "Heute"
+  yesterday: "Gestern"
+  day_heading: "%{weekday}, %{date}"
+  weekday_mon: "Mo."
+  weekday_tue: "Di."
+  weekday_wed: "Mi."
+  weekday_thu: "Do."
+  weekday_fri: "Fr."
+  weekday_sat: "Sa."
+  weekday_sun: "So."
 
 group:
   add: "Gruppe anlegen"
@@ -226,7 +236,6 @@ group:
   deleted: "%{name} gelöscht"
   restore_error: "Wiederherstellen fehlgeschlagen."
   expenses: "Ausgaben"
-  no_expenses: "Noch keine Ausgaben."
 
 member:
   add: "Person hinzufügen"
@@ -355,6 +364,20 @@ expense:
   restore_error: "Wiederherstellen fehlgeschlagen:"
   not_found_title: "Ausgabe nicht gefunden"
   not_found_text: "Diese Ausgabe gibt es nicht mehr."
+
+expense_detail:
+  load_error_title: "Ausgabe konnte nicht geladen werden"
+  unknown_person: "Unbekannte Person"
+  weight: "Anteile: %{value}"
+  percent: "%{value} %"
+
+timeline:
+  add: "Ausgabe hinzufügen"
+  empty_title: "Noch keine Ausgaben"
+  empty_text: "Füge die erste Ausgabe hinzu. Datum und Uhrzeit sind frei wählbar, auch nachträglich."
+  more: "Weitere Tage anzeigen"
+  payer_with_method: "%{name} (%{method})"
+  load_error_title: "Ausgaben konnten nicht geladen werden"
 
 category:
   food: "Essen"

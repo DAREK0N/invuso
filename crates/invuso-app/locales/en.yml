@@ -196,6 +196,16 @@ payment_icon:
 
 date:
   format: "%{y}-%{m}-%{d}"
+  today: "Today"
+  yesterday: "Yesterday"
+  day_heading: "%{weekday}, %{date}"
+  weekday_mon: "Mon"
+  weekday_tue: "Tue"
+  weekday_wed: "Wed"
+  weekday_thu: "Thu"
+  weekday_fri: "Fri"
+  weekday_sat: "Sat"
+  weekday_sun: "Sun"
 
 group:
   add: "Create group"
@@ -226,7 +236,6 @@ group:
   deleted: "%{name} deleted"
   restore_error: "Restoring failed."
   expenses: "Expenses"
-  no_expenses: "No expenses yet."
 
 member:
   add: "Add person"
@@ -355,6 +364,20 @@ expense:
   restore_error: "Restoring failed:"
   not_found_title: "Expense not found"
   not_found_text: "This expense no longer exists."
+
+expense_detail:
+  load_error_title: "Expense could not be loaded"
+  unknown_person: "Unknown person"
+  weight: "Shares: %{value}"
+  percent: "%{value} %"
+
+timeline:
+  add: "Add expense"
+  empty_title: "No expenses yet"
+  empty_text: "Add the first expense. Date and time can be chosen freely, also afterwards."
+  more: "Show more days"
+  payer_with_method: "%{name} (%{method})"
+  load_error_title: "Expenses could not be loaded"
 
 category:
   food: "Food"
