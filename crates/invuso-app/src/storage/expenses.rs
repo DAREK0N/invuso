@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::db::{new_id, now_ms};
 use super::exchange_rates::{RateQuote, rate_id_for_expense};
 use super::settings::{HOME_CURRENCY, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP};
-use super::{Db, StorageError, categories, groups, payment_methods, people, settings};
+use super::{Db, StorageError, categories, groups, payment_methods, people, receipts, settings};
 
 /// One payer of a new expense (EXP-02, EXP-03); the amount is in minor
 /// units of the expense's currency.
@@ -40,6 +40,9 @@ pub struct NewExpense {
     /// Who carries the expense and how (EXP-04, idee.md 8.1); exact
     /// amounts are in the expense's currency.
     pub split: SplitMode,
+    /// Archived receipt to attach (RCP-03); only read when creating, an
+    /// edit keeps the expense's receipt (replacing it is RCP-08).
+    pub receipt_id: Option<String>,
 }
 
 /// One payer of an expense as the timeline shows it (GRP-21). Names of
@@ -62,6 +65,8 @@ pub struct TimelineEntry {
     pub total_in_base: Money,
     /// In the order they were entered.
     pub payers: Vec<TimelinePayer>,
+    /// Receipt thumbnail, relative to the data directory (GRP-21).
+    pub thumbnail_path: Option<String>,
 }
 
 /// An expense in the list of latest expenses on Home (HOME-03).
@@ -75,6 +80,8 @@ pub struct RecentExpense {
     pub total_in_base: Money,
     /// Name of its group; `None` for a personal expense (EXP-06).
     pub group_name: Option<String>,
+    /// Receipt thumbnail, relative to the data directory.
+    pub thumbnail_path: Option<String>,
 }
 
 /// The people and payment methods an expense refers to, by id, including
@@ -112,13 +119,18 @@ impl Db {
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
             let (base, fx_rate_id) = prepare(&tx, self.device_id(), &new, rate)?;
+            if let Some(receipt) = &new.receipt_id {
+                receipts::check_unattached(&tx, receipt)?;
+            }
             let now = now_ms();
             tx.execute(
                 "INSERT INTO expense
                      (id, group_id, title, category_id, occurred_at, occurred_date,
                       total_minor, currency, fx_rate_id, total_base_minor, base_currency,
-                      split_mode, source, reviewed, created_at, updated_at, origin_device_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14, ?15)",
+                      split_mode, source, reviewed, created_at, updated_at, origin_device_id,
+                      receipt_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14, ?15,
+                         ?16)",
                 params![
                     id.as_str(),
                     new.group_id.as_ref().map(GroupId::as_str),
@@ -134,7 +146,8 @@ impl Db {
                     new.split.code(),
                     ExpenseSource::Manual.code(),
                     now,
-                    self.device_id()
+                    self.device_id(),
+                    new.receipt_id
                 ],
             )?;
             insert_parts(&tx, self.device_id(), &id, &new, now)?;
@@ -171,11 +184,12 @@ impl Db {
         let title = validate_new(&new)?;
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
-            let (group_id, source): (Option<String>, String) = tx
+            let (group_id, source, receipt_id): (Option<String>, String, Option<String>) = tx
                 .query_row(
-                    "SELECT group_id, source FROM expense WHERE id = ?1 AND deleted_at IS NULL",
+                    "SELECT group_id, source, receipt_id FROM expense
+                     WHERE id = ?1 AND deleted_at IS NULL",
                     [id.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?
                 .ok_or(StorageError::NotFound)?;
@@ -219,6 +233,7 @@ impl Db {
             }
             insert_parts(&tx, self.device_id(), id, &new, now)?;
             tx.commit()?;
+            let new = NewExpense { receipt_id, ..new };
             Ok(saved(id.clone(), title, new, fx_rate_id, base, source))
         })
     }
@@ -260,11 +275,13 @@ impl Db {
     pub fn group_timeline(&self, group: &GroupId) -> Result<Vec<TimelineEntry>, StorageError> {
         self.with(|conn| {
             let mut statement = conn.prepare(
-                "SELECT id, title, category_id, occurred_at, total_minor, currency,
-                        total_base_minor, base_currency
-                 FROM expense WHERE group_id = ?1 AND deleted_at IS NULL
-                 ORDER BY occurred_date DESC, substr(occurred_at, 12, 8) DESC,
-                          created_at DESC, id",
+                "SELECT e.id, e.title, e.category_id, e.occurred_at, e.total_minor, e.currency,
+                        e.total_base_minor, e.base_currency, r.thumbnail_path
+                 FROM expense e
+                 LEFT JOIN receipt r ON r.id = e.receipt_id AND r.deleted_at IS NULL
+                 WHERE e.group_id = ?1 AND e.deleted_at IS NULL
+                 ORDER BY e.occurred_date DESC, substr(e.occurred_at, 12, 8) DESC,
+                          e.created_at DESC, e.id",
             )?;
             let rows = statement
                 .query_map([group.as_str()], |row| {
@@ -277,6 +294,7 @@ impl Db {
                         row.get::<_, String>(5)?,
                         row.get::<_, i64>(6)?,
                         row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -307,8 +325,19 @@ impl Db {
 
             rows.into_iter()
                 .map(
-                    |(id, title, category, occurred_at, total, currency, base, base_currency)| {
+                    |(
+                        id,
+                        title,
+                        category,
+                        occurred_at,
+                        total,
+                        currency,
+                        base,
+                        base_currency,
+                        thumbnail_path,
+                    )| {
                         Ok(TimelineEntry {
+                            thumbnail_path,
                             payers: payers.remove(&id).unwrap_or_default(),
                             id: ExpenseId::new(id),
                             title,
@@ -330,8 +359,9 @@ impl Db {
         self.with(|conn| {
             let mut statement = conn.prepare(
                 "SELECT e.id, e.title, e.category_id, e.occurred_at, e.total_minor, e.currency,
-                        e.total_base_minor, e.base_currency, g.name
+                        e.total_base_minor, e.base_currency, g.name, r.thumbnail_path
                  FROM expense e LEFT JOIN expense_group g ON g.id = e.group_id
+                 LEFT JOIN receipt r ON r.id = e.receipt_id AND r.deleted_at IS NULL
                  WHERE e.deleted_at IS NULL AND (e.group_id IS NULL OR g.deleted_at IS NULL)
                  ORDER BY e.occurred_date DESC, substr(e.occurred_at, 12, 8) DESC,
                           e.created_at DESC, e.id
@@ -349,6 +379,7 @@ impl Db {
                         row.get::<_, i64>(6)?,
                         row.get::<_, String>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -364,6 +395,7 @@ impl Db {
                         base,
                         base_currency,
                         group,
+                        thumbnail_path,
                     )| {
                         Ok(RecentExpense {
                             id: ExpenseId::new(id),
@@ -373,6 +405,7 @@ impl Db {
                             total: Money::new(total, stored_currency(&currency)?),
                             total_in_base: Money::new(base, stored_currency(&base_currency)?),
                             group_name: group,
+                            thumbnail_path,
                         })
                     },
                 )
@@ -459,7 +492,7 @@ fn load_expenses(
     let mut statement = conn.prepare(&format!(
         "SELECT e.id, e.group_id, e.title, e.category_id, e.occurred_at, e.total_minor,
                 e.currency, e.fx_rate_id, e.total_base_minor, e.base_currency, e.split_mode,
-                e.source
+                e.source, e.receipt_id
          FROM expense e WHERE {filter} AND e.deleted_at IS NULL
          ORDER BY e.occurred_date, substr(e.occurred_at, 12, 8), e.created_at, e.id"
     ))?;
@@ -478,6 +511,7 @@ fn load_expenses(
                 row.get::<_, String>(9)?,
                 row.get::<_, String>(10)?,
                 row.get::<_, String>(11)?,
+                row.get::<_, Option<String>>(12)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -537,6 +571,7 @@ fn load_expenses(
                 base_currency,
                 split_mode,
                 source,
+                receipt_id,
             )| {
                 let currency = stored_currency(&currency)?;
                 let split = stored_split(&split_mode, shares.remove(&id).unwrap_or_default())?;
@@ -561,6 +596,7 @@ fn load_expenses(
                     total_in_base: Money::new(total_base_minor, stored_currency(&base_currency)?),
                     split,
                     source: ExpenseSource::from_code(&source)?,
+                    receipt_id,
                     payments,
                 })
             },
@@ -704,6 +740,7 @@ fn saved(
         total_in_base,
         split: new.split,
         source,
+        receipt_id: new.receipt_id,
         payments: new
             .payments
             .into_iter()
@@ -900,6 +937,7 @@ mod tests {
                 amount_minor: 3_000,
             }],
             split: SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()])),
+            receipt_id: None,
         }
     }
 
@@ -922,6 +960,54 @@ mod tests {
         s.db.archive_rates("frankfurter", 2, &[eur_to("JPY", "150", "2026-10-03")])
             .unwrap();
         assert_eq!(s.db.expense(&saved.id).unwrap(), Some(saved));
+    }
+
+    #[test]
+    fn receipt_stays_with_its_expense() {
+        let s = setup("JPY");
+        let rate = s.db.latest_rate(cur("JPY"), cur("JPY")).unwrap().unwrap();
+        let receipt =
+            s.db.create_receipt("receipts/r.jpg", Some("receipts/r_thumb.jpg"))
+                .unwrap();
+        let with_receipt = NewExpense {
+            receipt_id: Some(receipt.id.clone()),
+            ..ramen(&s)
+        };
+        let saved = s.db.create_expense(with_receipt.clone(), &rate).unwrap();
+        assert_eq!(saved.receipt_id.as_deref(), Some(receipt.id.as_str()));
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(saved.clone()));
+
+        // Thumbnail in the timeline (GRP-21) and on Home.
+        let timeline = s.db.group_timeline(&s.group).unwrap();
+        assert_eq!(
+            timeline[0].thumbnail_path.as_deref(),
+            Some("receipts/r_thumb.jpg")
+        );
+        let recent = s.db.recent_expenses(10).unwrap();
+        assert_eq!(
+            recent[0].thumbnail_path.as_deref(),
+            Some("receipts/r_thumb.jpg")
+        );
+
+        // One receipt, one expense.
+        assert!(matches!(
+            s.db.create_expense(with_receipt, &rate),
+            Err(StorageError::InvalidInput(_))
+        ));
+
+        // Editing keeps the receipt, whatever the input says (RCP-08 later).
+        let edited = s.db.update_expense(&saved.id, ramen(&s), &rate).unwrap();
+        assert_eq!(edited.receipt_id.as_deref(), Some(receipt.id.as_str()));
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(edited));
+
+        let unknown = NewExpense {
+            receipt_id: Some("missing".into()),
+            ..ramen(&s)
+        };
+        assert!(matches!(
+            s.db.create_expense(unknown, &rate),
+            Err(StorageError::NotFound)
+        ));
     }
 
     #[test]

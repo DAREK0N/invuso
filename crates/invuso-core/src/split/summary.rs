@@ -126,6 +126,7 @@ mod tests {
             total_in_base,
             split,
             source: ExpenseSource::Manual,
+            receipt_id: None,
             payments: payers
                 .iter()
                 .map(|(person, amount)| ExpensePayment {

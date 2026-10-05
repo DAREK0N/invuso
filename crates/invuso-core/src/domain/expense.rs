@@ -132,6 +132,8 @@ pub struct Expense {
     pub total_in_base: Money,
     pub split: SplitMode,
     pub source: ExpenseSource,
+    /// Archived receipt the expense was recorded from or with (RCP-03).
+    pub receipt_id: Option<String>,
     pub payments: Vec<ExpensePayment>,
 }
 
@@ -289,6 +291,7 @@ mod tests {
             total_in_base,
             split,
             source: ExpenseSource::Manual,
+            receipt_id: None,
             payments: Vec::new(),
         }
     }

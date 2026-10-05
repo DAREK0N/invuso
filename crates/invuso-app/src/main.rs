@@ -85,13 +85,15 @@ pub enum Route {
     #[end_layout]
 
     #[layout(FocusShell)]
-        // `group` preselects a group, e.g. from its timeline (GRP-23).
-        #[route("/expense/new?:group")]
-        ExpenseNew { group: String },
+        // `group` preselects a group, e.g. from its timeline (GRP-23);
+        // `receipt` attaches a receipt just photographed (RCP-03).
+        #[route("/expense/new?:group&:receipt")]
+        ExpenseNew { group: String, receipt: String },
         #[route("/expense/:id/edit")]
         ExpenseEdit { id: String },
-        #[route("/scan")]
-        Scan {},
+        // `source` is `camera` or `gallery` (RCP-01, RCP-02).
+        #[route("/scan?:source")]
+        Scan { source: String },
         #[route("/scan/:receipt_id/review")]
         ReceiptReview { receipt_id: String },
         #[route("/onboarding")]
@@ -141,6 +143,7 @@ fn AppRoot(db: Db) -> Element {
     use_context_provider(state::Toaster::new);
     use_context_provider(state::RateStatus::new);
     services::rates::use_rate_refresh();
+    services::receipts::use_receipt_files();
 
     match has_me {
         // The router has no hook for its very first route, so the history it

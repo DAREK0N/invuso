@@ -32,6 +32,7 @@
     --radius-xl: calc(0.75rem * var(--ui-radius-scale));
     --radius-2xl: calc(1rem * var(--ui-radius-scale));
     --radius-3xl: calc(1.5rem * var(--ui-radius-scale));
+    --animate-spin: spin 1s linear infinite;
     --blur-lg: 16px;
     --default-transition-duration: 150ms;
     --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
@@ -281,6 +282,12 @@
   .z-\[1101\] {
     z-index: 1101;
   }
+  .z-\[1200\] {
+    z-index: 1200;
+  }
+  .z-\[1201\] {
+    z-index: 1201;
+  }
   .mx-2 {
     margin-inline: calc(var(--spacing) * 2);
   }
@@ -380,11 +387,17 @@
   .h-full {
     height: 100%;
   }
+  .max-h-64 {
+    max-height: calc(var(--spacing) * 64);
+  }
   .max-h-\[70vh\] {
     max-height: 70vh;
   }
   .max-h-\[75vh\] {
     max-height: 75vh;
+  }
+  .max-h-full {
+    max-height: 100%;
   }
   .min-h-8 {
     min-height: calc(var(--spacing) * 8);
@@ -476,11 +489,20 @@
   .rotate-180 {
     rotate: 180deg;
   }
+  .transform {
+    transform: var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,);
+  }
+  .animate-spin {
+    animation: var(--animate-spin);
+  }
   .cursor-pointer {
     cursor: pointer;
   }
   .cursor-text {
     cursor: text;
+  }
+  .touch-none {
+    touch-action: none;
   }
   .resize {
     resize: both;
@@ -637,8 +659,14 @@
   .border-watermelon-400 {
     border-color: var(--color-watermelon-400);
   }
+  .border-t-cerulean-400 {
+    border-top-color: var(--color-cerulean-400);
+  }
   .bg-ash-grey-700 {
     background-color: var(--color-ash-grey-700);
+  }
+  .bg-black {
+    background-color: var(--color-black);
   }
   .bg-black\/50 {
     background-color: color-mix(in srgb, #000 50%, transparent);
@@ -705,6 +733,15 @@
   }
   .fill-current {
     fill: currentcolor;
+  }
+  .object-contain {
+    object-fit: contain;
+  }
+  .object-cover {
+    object-fit: cover;
+  }
+  .object-top {
+    object-position: top;
   }
   .px-1 {
     padding-inline: calc(var(--spacing) * 1);
@@ -1001,10 +1038,18 @@
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
+  .transition-opacity {
+    transition-property: opacity;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
   .transition-transform {
     transition-property: transform, translate, scale, rotate;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+  .will-change-transform {
+    will-change: transform;
   }
   .outline-none {
     --tw-outline-style: none;
@@ -1076,6 +1121,11 @@
   .active\:text-floral-white-200 {
     &:active {
       color: var(--color-floral-white-200);
+    }
+  }
+  .active\:opacity-80 {
+    &:active {
+      opacity: 80%;
     }
   }
   .disabled\:opacity-50 {
@@ -1186,6 +1236,26 @@ html:has(#invuso-sheet-backdrop) {
   * {
     transition-duration: 0.01ms !important;
   }
+}
+@property --tw-rotate-x {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-rotate-y {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-rotate-z {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-skew-x {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-skew-y {
+  syntax: "*";
+  inherits: false;
 }
 @property --tw-space-x-reverse {
   syntax: "*";
@@ -1394,9 +1464,19 @@ html:has(#invuso-sheet-backdrop) {
   syntax: "*";
   inherits: false;
 }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 @layer properties {
   @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {
     *, ::before, ::after, ::backdrop {
+      --tw-rotate-x: initial;
+      --tw-rotate-y: initial;
+      --tw-rotate-z: initial;
+      --tw-skew-x: initial;
+      --tw-skew-y: initial;
       --tw-space-x-reverse: 0;
       --tw-border-style: solid;
       --tw-font-weight: initial;

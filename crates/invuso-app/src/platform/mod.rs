@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "android")]
 mod android;
+mod images;
+
+pub use images::{ImageKind, ImageSource, PickOutcome, image_source};
 
 /// Private, persistent directory for the database and receipt images.
 pub fn data_dir() -> Result<PathBuf, String> {

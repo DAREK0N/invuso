@@ -14,6 +14,7 @@ use crate::components::{
     TopBar,
 };
 use crate::preferences::{day_heading, period_text};
+use crate::services::receipts;
 use crate::services::summary::group_summary;
 use crate::state::DataRevision;
 use crate::storage::{Db, RecentExpense, StorageError};
@@ -249,6 +250,7 @@ fn RecentExpenses(
                     subtitle: recent_subtitle(&expense, &today),
                     total: expense.total,
                     total_in_base: expense.total_in_base,
+                    thumbnail: expense.thumbnail_path.as_deref().map(receipts::file_url),
                     onclick: {
                         let id = expense.id.as_str().to_string();
                         move |_| {

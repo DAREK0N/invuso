@@ -12,6 +12,7 @@ use crate::Route;
 use crate::clock;
 use crate::components::{Button, EmptyState, ExpenseRow, MoneyText, TopBar};
 use crate::preferences::day_heading;
+use crate::services::receipts;
 use crate::state::DataRevision;
 use crate::storage::{Db, TimelineEntry, TimelinePayer};
 
@@ -77,6 +78,7 @@ pub fn GroupTimeline(id: String) -> Element {
                         onclick: move |_| {
                             nav.push(Route::ExpenseNew {
                                 group: group_id().as_str().to_string(),
+                                receipt: String::new(),
                             });
                         },
                         Icon { icon: LdPlus, class: "h-5 w-5" }
@@ -161,6 +163,7 @@ fn DaySection(
                         subtitle: entry_subtitle(&entry),
                         total: entry.total,
                         total_in_base: entry.total_in_base,
+                        thumbnail: entry.thumbnail_path.as_deref().map(receipts::file_url),
                     }
                 }
             }
@@ -247,6 +250,7 @@ mod tests {
             total: Money::new(base, currency),
             total_in_base: Money::new(base, currency),
             payers: Vec::new(),
+            thumbnail_path: None,
         }
     }
 

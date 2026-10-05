@@ -2234,6 +2234,7 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "dioxus-free-icons",
+ "image",
  "invuso-core",
  "jni 0.22.4",
  "ndk-context",

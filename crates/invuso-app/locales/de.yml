@@ -430,3 +430,16 @@ category:
   shopping: "Shopping"
   health: "Gesundheit"
   other: "Sonstiges"
+
+receipt:
+  title: "Kassenzettel"
+  open: "Kassenzettel im Vollbild ansehen"
+  remove: "Kassenzettel entfernen"
+  take_photo: "Foto"
+  choose: "Galerie"
+  image_error: "Das Bild kann nicht angezeigt werden. Es bleibt archiviert."
+
+scan:
+  working: "Bild wird übernommen …"
+  error_title: "Bild konnte nicht übernommen werden"
+  retry: "Erneut versuchen"

@@ -6,22 +6,34 @@ use dioxus_free_icons::{
 
 use crate::Route;
 use crate::components::BottomSheet;
+use crate::platform::ImageKind;
+use crate::services::receipts;
+use crate::views::{SOURCE_CAMERA, SOURCE_GALLERY};
 
 /// Action sheet behind the central plus button (idee.md 7.1).
 #[component]
 pub fn AddActionSheet(on_close: EventHandler<()>) -> Element {
+    // Photos need Android 10+ and a camera app; see `platform::images`.
+    let can_take_photo = use_hook(|| receipts::supports(ImageKind::Camera));
+
     rsx! {
         BottomSheet { title: t!("add_sheet.title").to_string(), on_close,
             div { class: "flex flex-col gap-1 px-3 pt-2",
-                ActionRow {
-                    label: t!("add_sheet.scan").to_string(),
-                    to: Route::Scan {},
-                    on_close,
-                    Icon { icon: LdCamera, class: "h-5 w-5" }
+                if can_take_photo {
+                    ActionRow {
+                        label: t!("add_sheet.scan").to_string(),
+                        to: Route::Scan {
+                            source: SOURCE_CAMERA.to_string(),
+                        },
+                        on_close,
+                        Icon { icon: LdCamera, class: "h-5 w-5" }
+                    }
                 }
                 ActionRow {
                     label: t!("add_sheet.gallery").to_string(),
-                    to: Route::Scan {},
+                    to: Route::Scan {
+                        source: SOURCE_GALLERY.to_string(),
+                    },
                     on_close,
                     Icon { icon: LdImage, class: "h-5 w-5" }
                 }
@@ -29,6 +41,7 @@ pub fn AddActionSheet(on_close: EventHandler<()>) -> Element {
                     label: t!("add_sheet.manual").to_string(),
                     to: Route::ExpenseNew {
                         group: String::new(),
+                        receipt: String::new(),
                     },
                     on_close,
                     Icon { icon: LdPencil, class: "h-5 w-5" }

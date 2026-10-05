@@ -6,7 +6,8 @@ use dioxus::router::Navigator;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdCheck, LdChevronRight, LdCircleAlert, LdPlus, LdTrash2, LdTriangleAlert, LdUser, LdX,
+        LdCamera, LdCheck, LdChevronRight, LdCircleAlert, LdImage, LdPlus, LdTrash2,
+        LdTriangleAlert, LdUser, LdX,
     },
 };
 use invuso_core::Decimal;
@@ -18,6 +19,7 @@ use invuso_core::domain::{
 use invuso_core::fx;
 use invuso_core::split::allocate;
 
+use super::detail::ReceiptCard;
 use super::split::{ShareRow, SplitDraft, SplitKind, split_error_text, sum_hint};
 use crate::Route;
 use crate::clock;
@@ -27,13 +29,15 @@ use crate::components::{
     MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, TextField, TopBar,
 };
 use crate::format::{NumberFormat, amount_text, fit_amount_text, format_money, parse_amount};
+use crate::platform::ImageKind;
 use crate::preferences::{category_name, default_home_currency, display_date};
 use crate::services::expenses::{SaveExpenseError, save_expense, update_expense};
 use crate::services::rates::{CurrencyApi, Frankfurter};
+use crate::services::receipts::{self, capture_receipt};
 use crate::state::{DataRevision, ToastAction, Toaster};
 use crate::storage::{
     Db, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, NearRate, NewExpense, NewExpensePayment,
-    StorageError,
+    ReceiptFiles, StorageError,
 };
 
 /// What the form reads from the database once; it keeps its own state
@@ -55,6 +59,9 @@ struct FormData {
     existing: Option<Expense>,
     /// Group whose timeline opened the form (GRP-23).
     opened_from: Option<GroupId>,
+    /// Receipt attached to the expense (RCP-03): the saved one when
+    /// editing, or the one just photographed (`/scan`).
+    receipt: Option<ReceiptFiles>,
 }
 
 /// Someone who paid (part of) the expense (EXP-02, EXP-03).
@@ -77,14 +84,15 @@ enum Sheet {
 }
 
 /// `/expense/new`: records an expense by hand (EXP-01..04, EXP-06, EXP-07;
-/// idee.md 7.3), in `group` if given (GRP-23). Saving leads to the group's
-/// timeline.
+/// idee.md 7.3), in `group` if given (GRP-23), with `receipt` attached if
+/// given (RCP-03). Saving leads to the group's timeline.
 #[component]
-pub fn ExpenseNew(group: String) -> Element {
+pub fn ExpenseNew(group: String, receipt: String) -> Element {
     let db = use_context::<Db>();
     let data = use_hook(|| {
         let preset = (!group.is_empty()).then(|| GroupId::new(group));
-        load(&db, None, preset).map_err(|e| e.to_string())
+        let receipt = (!receipt.is_empty()).then_some(receipt);
+        load(&db, None, preset, receipt.as_deref()).map_err(|e| e.to_string())
     });
 
     rsx! {
@@ -103,7 +111,7 @@ pub fn ExpenseEdit(id: String) -> Element {
     let db = use_context::<Db>();
     // `None` stands for "not found".
     let data = use_hook(|| {
-        load(&db, Some(&ExpenseId::new(id)), None).map_err(|e| match e {
+        load(&db, Some(&ExpenseId::new(id)), None, None).map_err(|e| match e {
             StorageError::NotFound => None,
             other => Some(other.to_string()),
         })
@@ -203,6 +211,10 @@ fn ExpenseForm(data: FormData) -> Element {
             .map(|e| format!("{} {e}", t!("expense.people_error")))
     });
     let mut saving = use_signal(|| false);
+    let mut receipt = use_signal(|| data.receipt.clone());
+    let mut picking = use_signal(|| false);
+    let mut receipt_error = use_signal(|| None::<String>);
+    let can_take_photo = use_hook(|| receipts::supports(ImageKind::Camera));
 
     let groups = data.groups.clone();
     let home_currency = data.home_currency;
@@ -372,6 +384,7 @@ fn ExpenseForm(data: FormData) -> Element {
                 })
                 .collect(),
             split,
+            receipt_id: receipt.read().as_ref().map(|r| r.id.clone()),
         };
         save_error.set(None);
         saving.set(true);
@@ -411,6 +424,21 @@ fn ExpenseForm(data: FormData) -> Element {
             }
         });
     };
+
+    let pick_db = db.clone();
+    let pick = use_callback(move |kind: ImageKind| {
+        picking.set(true);
+        receipt_error.set(None);
+        let db = pick_db.clone();
+        spawn(async move {
+            match capture_receipt(db, kind).await {
+                Ok(Some(picked)) => receipt.set(Some(picked)),
+                Ok(None) => {}
+                Err(error) => receipt_error.set(Some(error.to_string())),
+            }
+            picking.set(false);
+        });
+    });
 
     let delete_db = db.clone();
     let delete_existing = existing.clone();
@@ -546,6 +574,55 @@ fn ExpenseForm(data: FormData) -> Element {
                     time.set(value);
                     date_error.set(None);
                 },
+            }
+            match receipt() {
+                Some(attached) => rsx! {
+                    div { class: "flex flex-col gap-2",
+                        ReceiptCard { key: "{attached.id}", receipt: attached }
+                        // Replacing the receipt of a saved expense is RCP-08.
+                        if !editing {
+                            button {
+                                class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-floral-white-300 active:bg-jet-black-800 transition-colors",
+                                r#type: "button",
+                                onclick: move |_| receipt.set(None),
+                                Icon { icon: LdX, class: "h-4 w-4" }
+                                {t!("receipt.remove").to_string()}
+                            }
+                        }
+                    }
+                },
+                None if !editing => rsx! {
+                    section { class: "flex flex-col gap-2",
+                        h2 { class: "px-1 text-sm font-medium text-floral-white-300", {t!("receipt.title").to_string()} }
+                        div { class: "flex gap-3",
+                            if can_take_photo {
+                                Button {
+                                    variant: ButtonVariant::Secondary,
+                                    class: "flex-1",
+                                    disabled: picking(),
+                                    onclick: move |_| pick.call(ImageKind::Camera),
+                                    Icon { icon: LdCamera, class: "h-5 w-5" }
+                                    {t!("receipt.take_photo").to_string()}
+                                }
+                            }
+                            Button {
+                                variant: ButtonVariant::Secondary,
+                                class: "flex-1",
+                                disabled: picking(),
+                                onclick: move |_| pick.call(ImageKind::Gallery),
+                                Icon { icon: LdImage, class: "h-5 w-5" }
+                                {t!("receipt.choose").to_string()}
+                            }
+                        }
+                        if picking() {
+                            p { class: "px-1 text-sm text-floral-white-400", role: "status", {t!("scan.working").to_string()} }
+                        }
+                        if let Some(error) = receipt_error() {
+                            p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
+                        }
+                    }
+                },
+                None => rsx! {},
             }
             div { class: "flex flex-col gap-2",
                 span { class: "text-sm font-medium text-floral-white-300", {t!("expense.group").to_string()} }
@@ -1025,11 +1102,13 @@ fn NoGroupIcon() -> Element {
 
 /// Everything the form needs; with `id` also the expense to edit
 /// (`StorageError::NotFound` if it is gone). `preset` is the group a new
-/// expense starts in, if it still exists.
+/// expense starts in, if it still exists; `receipt` the receipt it starts
+/// with.
 fn load(
     db: &Db,
     id: Option<&ExpenseId>,
     preset: Option<GroupId>,
+    receipt: Option<&str>,
 ) -> Result<FormData, StorageError> {
     let me = db.me()?.ok_or(StorageError::NotFound)?;
     let home_currency = db
@@ -1059,7 +1138,15 @@ fn load(
         .into_iter()
         .filter(|m| !m.archived)
         .collect();
+    let receipt = match existing
+        .as_ref()
+        .map_or(receipt, |e| e.receipt_id.as_deref())
+    {
+        Some(receipt) => db.receipt(receipt)?,
+        None => None,
+    };
     Ok(FormData {
+        receipt,
         me,
         home_currency,
         groups,
@@ -1288,19 +1375,25 @@ mod tests {
         let flat = new("WG");
         db.set_setting(LAST_EXPENSE_GROUP, flat.id.as_str())
             .unwrap();
-        assert_eq!(load(&db, None, None).unwrap().group, Some(flat.id.clone()));
+        assert_eq!(
+            load(&db, None, None, None).unwrap().group,
+            Some(flat.id.clone())
+        );
 
         db.set_active_group(Some(&trip.id)).unwrap();
-        assert_eq!(load(&db, None, None).unwrap().group, Some(trip.id.clone()));
+        assert_eq!(
+            load(&db, None, None, None).unwrap().group,
+            Some(trip.id.clone())
+        );
         // The timeline's group still comes first (GRP-23).
         assert_eq!(
-            load(&db, None, Some(flat.id.clone())).unwrap().group,
+            load(&db, None, Some(flat.id.clone()), None).unwrap().group,
             Some(flat.id.clone())
         );
 
         // A deleted active group no longer counts.
         db.delete_group(&trip.id).unwrap();
-        assert_eq!(load(&db, None, None).unwrap().group, Some(flat.id));
+        assert_eq!(load(&db, None, None, None).unwrap().group, Some(flat.id));
     }
 
     #[test]

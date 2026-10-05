@@ -1,21 +1,28 @@
 package dev.dioxus.main
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Insets
 import android.graphics.drawable.ColorDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.webkit.WebView
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
 import java.lang.ref.WeakReference
 
 // The generated wry sources reference `BuildConfig` from this package.
@@ -23,9 +30,12 @@ typealias BuildConfig = com.darekon.invuso.BuildConfig
 
 /// Thin platform bridge (AGENTS.md 5, stage 4). It only does what neither
 /// Dioxus nor the WebView can: edge-to-edge window chrome with the real
-/// system-bar insets, and routing the Android back key into the Dioxus router.
-/// No business logic, no state, no UI.
+/// system-bar insets, routing the Android back key into the Dioxus router,
+/// and opening the system camera or photo picker for receipt images.
+/// No business logic, no state beyond the running pick, no UI.
 class MainActivity : WryActivity() {
+    private val receiptImages = ReceiptImages(this)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
@@ -59,6 +69,19 @@ class MainActivity : WryActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    /// Called from Rust (`platform/android.rs`): kind 0 = camera, 1 = photo
+    /// picker. The image is copied to `dest`; the outcome arrives through
+    /// `receiptImageResult`.
+    fun requestReceiptImage(kind: Int, dest: String) {
+        runOnUiThread { receiptImages.request(kind, dest) }
+    }
+
+    /// Called from Rust: whether the camera path works on this device.
+    fun canTakeReceiptPhoto(): Boolean = receiptImages.canTakePhoto()
+
+    /// Implemented in Rust. status 0 = saved, 1 = cancelled, 2 = failed.
+    external fun receiptImageResult(status: Int, message: String?)
+
     @Suppress("DEPRECATION")
     private fun systemBack() {
         try {
@@ -79,10 +102,13 @@ object InvusoChrome {
     // white flash appears before the first frame.
     private val WINDOW_BACKGROUND = Color.rgb(0x0c, 0x14, 0x18)
 
-    // Close an open sheet first, otherwise pop the router history. Ids are
-    // rendered by BottomSheet and RouterBackTarget.
+    // Close an open image viewer or sheet first, otherwise pop the router
+    // history. Ids are rendered by ImageViewer, BottomSheet and
+    // RouterBackTarget.
     private const val BACK_SCRIPT = """
         (function () {
+            var viewer = document.getElementById('invuso-viewer-close');
+            if (viewer) { viewer.click(); return 'viewer'; }
             var sheet = document.getElementById('invuso-sheet-backdrop');
             if (sheet) { sheet.click(); return 'sheet'; }
             var back = document.getElementById('invuso-router-back');
@@ -236,5 +262,115 @@ object InvusoChrome {
             )
         } catch (_: Throwable) {
         }
+    }
+}
+
+/// Opens the system photo picker or camera app and copies the image to the
+/// path Rust asked for. The camera needs a writable content URI; dx cannot
+/// declare a FileProvider, so a MediaStore entry of this app takes the photo
+/// and is deleted right after copying (or on cancel). Android 10+ needs no
+/// permission for that. The entry cannot be pending (hidden): only its owner
+/// may write to a pending entry, not the camera app.
+class ReceiptImages(private val activity: MainActivity) {
+    private var dest: String? = null
+    private var captureUri: Uri? = null
+
+    private val pickLauncher =
+        activity.registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri == null) finish(CANCELLED, null) else copy(uri, deleteAfter = false)
+        }
+
+    private val takeLauncher =
+        activity.registerForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+            val uri = captureUri
+            captureUri = null
+            when {
+                uri == null -> finish(CANCELLED, null)
+                saved -> copy(uri, deleteAfter = true)
+                else -> {
+                    delete(uri)
+                    finish(CANCELLED, null)
+                }
+            }
+        }
+
+    fun canTakePhoto(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            activity.packageManager.hasSystemFeature("android.hardware.camera.any")
+
+    fun request(kind: Int, path: String) {
+        // A pick still running is answered as cancelled by Rust already.
+        dest = path
+        try {
+            if (kind == CAMERA) {
+                val uri = createCaptureUri() ?: return finish(FAILED, "camera unavailable")
+                captureUri = uri
+                takeLauncher.launch(uri)
+            } else {
+                pickLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            }
+        } catch (error: Throwable) {
+            captureUri?.let { delete(it) }
+            captureUri = null
+            finish(FAILED, error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun createCaptureUri(): Uri? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return null
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "invuso-receipt-${System.currentTimeMillis()}.jpg")
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Invuso")
+        }
+        return activity.contentResolver.insert(
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+            values,
+        )
+    }
+
+    private fun copy(uri: Uri, deleteAfter: Boolean) {
+        val target = dest ?: return finish(FAILED, "no target")
+        // Off the main thread: photos are several megabytes.
+        Thread {
+            try {
+                val input = activity.contentResolver.openInputStream(uri)
+                    ?: throw IllegalStateException("image unreadable")
+                input.use { source ->
+                    File(target).outputStream().use { sink -> source.copyTo(sink) }
+                }
+                if (deleteAfter) delete(uri)
+                finish(SAVED, null)
+            } catch (error: Throwable) {
+                if (deleteAfter) delete(uri)
+                finish(FAILED, error.message ?: error.javaClass.simpleName)
+            }
+        }.start()
+    }
+
+    private fun delete(uri: Uri) {
+        try {
+            activity.contentResolver.delete(uri, null, null)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun finish(status: Int, message: String?) {
+        dest = null
+        try {
+            activity.receiptImageResult(status, message)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private companion object {
+        const val CAMERA = 0
+        const val SAVED = 0
+        const val CANCELLED = 1
+        const val FAILED = 2
     }
 }

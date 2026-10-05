@@ -125,6 +125,7 @@ mod tests {
                     amount_minor: total,
                 }],
                 split: SplitMode::Equal(between.iter().map(|p| (*p).clone()).collect()),
+                receipt_id: None,
             },
             &rate,
         )

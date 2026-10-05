@@ -202,6 +202,7 @@ mod tests {
                 amount_minor: 3_000,
             }],
             split: SplitMode::Equal(BTreeSet::from([me.id.clone()])),
+            receipt_id: None,
         }
     }
 

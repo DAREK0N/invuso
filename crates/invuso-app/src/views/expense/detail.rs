@@ -4,7 +4,7 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdCircleAlert, LdPencil, LdTrash2},
+    icons::ld_icons::{LdCircleAlert, LdPencil, LdReceipt, LdTrash2},
 };
 use invuso_core::Decimal;
 use invuso_core::domain::{
@@ -17,12 +17,13 @@ use crate::Route;
 use crate::clock;
 use crate::components::{
     Avatar, AvatarSize, Button, ButtonVariant, CategoryIconGlyph, EmptyState, ErrorBanner,
-    MoneyText, PaymentIconGlyph, TopBar,
+    ImageViewer, MoneyText, PaymentIconGlyph, TopBar,
 };
 use crate::format::{NumberFormat, format_number, format_rate};
 use crate::preferences::{category_name, day_heading, display_date};
+use crate::services::receipts;
 use crate::state::{DataRevision, ToastAction, Toaster};
-use crate::storage::{Db, ExpenseParties, RateQuote};
+use crate::storage::{Db, ExpenseParties, RateQuote, ReceiptFiles};
 
 /// Everything the detail shows of one expense.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,8 @@ struct Detail {
     parties: ExpenseParties,
     /// The archived rate the expense was converted with (FX-04).
     rate: Option<RateQuote>,
+    /// The attached receipt (RCP-03).
+    receipt: Option<ReceiptFiles>,
     /// Own-currency shares, and both shares and payments in the base
     /// currency, each adding up exactly (idee.md 8.2, 8.4).
     shares: BTreeMap<PersonId, i64>,
@@ -50,8 +53,8 @@ enum Loaded {
 }
 
 /// `/expense/:id`: all about one expense – amounts, rate, who paid with
-/// what and everyone's share – with editing and deleting (GRP-22; the
-/// receipt and its line items follow with M2).
+/// what and everyone's share, the receipt in full screen (RCP-04) – with
+/// editing and deleting (GRP-22; line items follow with M2).
 #[component]
 pub fn ExpenseDetail(id: String) -> Element {
     let db = use_context::<Db>();
@@ -129,6 +132,9 @@ pub fn ExpenseDetail(id: String) -> Element {
                 rsx! {
                     div { class: "mx-4 flex flex-col gap-5 pt-6 safe-area-x",
                         Head { detail: detail.clone(), today: today.clone() }
+                        if let Some(receipt) = detail.receipt.clone() {
+                            ReceiptCard { receipt }
+                        }
                         PaymentsSection { detail: detail.clone() }
                         SharesSection { detail }
                         ErrorBanner { error: delete_error() }
@@ -223,6 +229,54 @@ fn Head(detail: Detail, today: String) -> Element {
             }
             if let Some(rate_text) = rate_text {
                 p { class: "text-sm tabular-nums text-floral-white-400", "{rate_text}" }
+            }
+        }
+    }
+}
+
+/// The receipt's thumbnail; tapping shows the original in full screen
+/// with zoom (RCP-04).
+#[component]
+pub(super) fn ReceiptCard(receipt: ReceiptFiles) -> Element {
+    let mut open = use_signal(|| false);
+    let original = receipt
+        .image_paths
+        .first()
+        .map(|path| receipts::file_url(path));
+    let has_original = original.is_some();
+    let label = t!("receipt.open").to_string();
+
+    rsx! {
+        section { class: "flex flex-col gap-2",
+            h2 { class: "px-1 text-sm font-medium text-floral-white-300", {t!("receipt.title").to_string()} }
+            button {
+                class: "flex w-full items-center justify-center overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900 active:opacity-80 transition-opacity ease-apple",
+                r#type: "button",
+                aria_label: "{label}",
+                disabled: !has_original,
+                onclick: move |_| open.set(true),
+                match &receipt.thumbnail_path {
+                    Some(path) => rsx! {
+                        img {
+                            class: "max-h-64 w-full object-cover object-top",
+                            src: receipts::file_url(path),
+                            alt: "",
+                        }
+                    },
+                    None => rsx! {
+                        span { class: "flex min-h-24 items-center gap-3 px-4 text-floral-white-200",
+                            Icon { icon: LdReceipt, class: "h-6 w-6" }
+                            span { class: "text-base", "{label}" }
+                        }
+                    },
+                }
+            }
+        }
+        if let (true, Some(src)) = (open(), original) {
+            ImageViewer {
+                src,
+                alt: t!("receipt.title").to_string(),
+                on_close: move |_| open.set(false),
             }
         }
     }
@@ -372,7 +426,12 @@ fn load(db: &Db, id: &ExpenseId) -> Result<Loaded, Box<dyn std::error::Error>> {
         )?,
         None => None,
     };
+    let receipt = match &expense.receipt_id {
+        Some(receipt) => db.receipt(receipt)?,
+        None => None,
+    };
     Ok(Loaded::Found(Box::new(Detail {
+        receipt,
         parties: db.expense_parties(&expense)?,
         group,
         category,

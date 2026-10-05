@@ -220,7 +220,10 @@ fn Totals(overview: Overview) -> Element {
                 Button {
                     class: "mt-3 w-full",
                     onclick: move |_| {
-                        nav.push(Route::ExpenseNew { group: group_id.clone() });
+                        nav.push(Route::ExpenseNew {
+                            group: group_id.clone(),
+                            receipt: String::new(),
+                        });
                     },
                     Icon { icon: LdPlus, class: "h-5 w-5" }
                     {t!("timeline.add").to_string()}

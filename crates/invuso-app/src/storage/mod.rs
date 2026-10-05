@@ -18,6 +18,7 @@ mod migrations;
 mod payment_methods;
 mod people;
 mod profile;
+mod receipts;
 mod settings;
 
 pub(crate) use db::now_ms;
@@ -30,6 +31,7 @@ pub use groups::NewGroup;
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;
+pub use receipts::ReceiptFiles;
 pub use settings::{
     CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY,
     LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST,

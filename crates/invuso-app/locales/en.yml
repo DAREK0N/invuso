@@ -430,3 +430,16 @@ category:
   shopping: "Shopping"
   health: "Health"
   other: "Other"
+
+receipt:
+  title: "Receipt"
+  open: "View receipt in full screen"
+  remove: "Remove receipt"
+  take_photo: "Photo"
+  choose: "Gallery"
+  image_error: "The image cannot be shown. It stays archived."
+
+scan:
+  working: "Adding the image …"
+  error_title: "The image could not be added"
+  retry: "Try again"

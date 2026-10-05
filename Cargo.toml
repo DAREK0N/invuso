@@ -20,9 +20,9 @@ uuid = { version = "1.27.0", features = ["v7"] }
 jni = "0.22.4"
 ndk-context = "0.1.1"
 sys-locale = "0.3.2"
-# Same version dioxus-desktop already pulls in; only its timer and
-# `spawn_blocking` are used.
-tokio = { version = "1.53.2", default-features = false, features = ["time", "rt"] }
+# Same version dioxus-desktop already pulls in; its timer, `spawn_blocking`
+# and the one-shot channel answering the image picker (`sync`) are used.
+tokio = { version = "1.53.2", default-features = false, features = ["time", "rt", "sync"] }
 # Exchange rates: blocking client with rustls (ring) and bundled Mozilla
 # roots, so Android needs no platform verifier (AP-09).
 ureq = "3.4.2"
@@ -33,3 +33,6 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 # Local date, time and UTC offset of new expenses (AP-11); already in the
 # tree through dioxus, `local-offset` reads the device's time zone.
 time = { version = "0.3.55", features = ["local-offset"] }
+# Receipt thumbnails (CORE-06); same version dioxus-desktop already pulls
+# in, pure Rust decoders only.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
