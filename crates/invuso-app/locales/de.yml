@@ -213,7 +213,7 @@ date:
 
 group:
   add: "Gruppe anlegen"
-  long_press_hint: "Lange drücken für Bearbeiten und Löschen."
+  long_press_hint: "Lange drücken zum Aktiv-Markieren, Bearbeiten und Löschen."
   empty_title: "Noch keine Gruppen"
   empty_text: "Lege eine Gruppe an, z. B. für eine Reise oder deine WG."
   load_error_title: "Gruppe kann nicht geladen werden"
@@ -240,6 +240,26 @@ group:
   deleted: "%{name} gelöscht"
   restore_error: "Wiederherstellen fehlgeschlagen."
   expenses: "Ausgaben"
+  active: "Aktive Gruppe"
+  mark_active: "Als aktiv markieren"
+  unmark_active: "Nicht mehr aktiv"
+  marked_active: "%{name} ist jetzt aktiv"
+  unmarked_active: "Keine Gruppe mehr aktiv"
+  active_error: "Speichern fehlgeschlagen."
+
+home:
+  active_group: "Aktive Gruppe"
+  no_group_expenses: "Noch keine Ausgaben in dieser Gruppe."
+  no_active_title: "Keine aktive Gruppe"
+  no_active_text: "Markiere eine Gruppe als aktiv. Sie erscheint dann hier, und neue Ausgaben landen automatisch in ihr."
+  choose_group: "Gruppe wählen"
+  no_groups_title: "Noch keine Gruppe"
+  no_groups_text: "Lege eine Gruppe an, z. B. für eine Reise oder deine WG."
+  recent: "Letzte Ausgaben"
+  no_expenses_title: "Noch keine Ausgaben"
+  no_expenses_text: "Tippe auf Plus, um deine erste Ausgabe zu erfassen."
+  personal: "Persönlich"
+  load_error_title: "Startseite kann nicht geladen werden"
 
 summary:
   total: "Gesamtausgaben"

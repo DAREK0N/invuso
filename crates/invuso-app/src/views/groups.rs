@@ -94,3 +94,19 @@ fn delete_with_undo(
     );
     Ok(())
 }
+
+/// Marks the group as active (GRP-05), or removes the mark with `None`,
+/// and confirms it in a toast.
+fn mark_active(db: &Db, group: Option<&Group>, mut revision: DataRevision, mut toaster: Toaster) {
+    match db.set_active_group(group.map(|g| &g.id)) {
+        Ok(()) => {
+            revision.bump();
+            let message = match group {
+                Some(group) => t!("group.marked_active", name = group.name),
+                None => t!("group.unmarked_active"),
+            };
+            toaster.show(message.to_string(), None);
+        }
+        Err(e) => toaster.show(format!("{} {e}", t!("group.active_error")), None),
+    }
+}

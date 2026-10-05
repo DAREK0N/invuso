@@ -213,7 +213,7 @@ date:
 
 group:
   add: "Create group"
-  long_press_hint: "Long-press to edit or delete."
+  long_press_hint: "Long-press to mark as active, edit or delete."
   empty_title: "No groups yet"
   empty_text: "Create a group, e.g. for a trip or your shared flat."
   load_error_title: "Group cannot be loaded"
@@ -240,6 +240,26 @@ group:
   deleted: "%{name} deleted"
   restore_error: "Restoring failed."
   expenses: "Expenses"
+  active: "Active group"
+  mark_active: "Mark as active"
+  unmark_active: "No longer active"
+  marked_active: "%{name} is now active"
+  unmarked_active: "No group is active now"
+  active_error: "Saving failed."
+
+home:
+  active_group: "Active group"
+  no_group_expenses: "No expenses in this group yet."
+  no_active_title: "No active group"
+  no_active_text: "Mark a group as active. It then shows up here, and new expenses go into it automatically."
+  choose_group: "Choose group"
+  no_groups_title: "No group yet"
+  no_groups_text: "Create a group, e.g. for a trip or your flat share."
+  recent: "Latest expenses"
+  no_expenses_title: "No expenses yet"
+  no_expenses_text: "Tap plus to record your first expense."
+  personal: "Personal"
+  load_error_title: "Home cannot be loaded"
 
 summary:
   total: "Total spent"

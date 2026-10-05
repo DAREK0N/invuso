@@ -46,8 +46,8 @@ struct FormData {
     categories: Vec<Category>,
     /// Active payment methods of everyone.
     methods: Vec<PaymentMethod>,
-    /// Preselected group: the one of the last expense, else the newest;
-    /// when editing, the expense's group.
+    /// Preselected group: the active one (GRP-05), else the one of the last
+    /// expense, else the newest; when editing, the expense's group.
     group: Option<GroupId>,
     /// Currency of the last expense, if any.
     currency: Option<Currency>,
@@ -1046,7 +1046,10 @@ fn load(
         None => {
             let group = match &opened_from {
                 Some(id) => Some(id.clone()),
-                None => preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups),
+                None => match db.active_group()? {
+                    Some(active) => Some(active.id),
+                    None => preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups),
+                },
             };
             (group, db.currency_setting(LAST_EXPENSE_CURRENCY)?)
         }
@@ -1069,8 +1072,8 @@ fn load(
     })
 }
 
-/// The group of the last expense if it still exists (`""` = it had none),
-/// otherwise the newest group. `GRP-05` (active group) will replace this.
+/// Without an active group: the group of the last expense if it still
+/// exists (`""` = it had none), otherwise the newest group.
 fn preselected_group(last: Option<&str>, groups: &[Group]) -> Option<GroupId> {
     match last {
         Some("") => None,
@@ -1259,6 +1262,45 @@ mod tests {
             Some(GroupId::new("new"))
         );
         assert_eq!(preselected_group(None, &[]), None);
+    }
+
+    #[test]
+    fn active_group_wins_over_the_last_one() {
+        let db = Db::open_in_memory().unwrap();
+        db.save_profile(&crate::storage::Profile {
+            name: "Ich".into(),
+            home_currency: Currency::from_code("EUR").unwrap(),
+            target_language: "de".into(),
+        })
+        .unwrap();
+        let new = |name: &str| {
+            db.create_group(crate::storage::NewGroup {
+                name: name.into(),
+                icon: "plane".into(),
+                color: "cerulean".into(),
+                base_currency: Currency::from_code("EUR").unwrap(),
+                start_date: None,
+                end_date: None,
+            })
+            .unwrap()
+        };
+        let trip = new("Japan");
+        let flat = new("WG");
+        db.set_setting(LAST_EXPENSE_GROUP, flat.id.as_str())
+            .unwrap();
+        assert_eq!(load(&db, None, None).unwrap().group, Some(flat.id.clone()));
+
+        db.set_active_group(Some(&trip.id)).unwrap();
+        assert_eq!(load(&db, None, None).unwrap().group, Some(trip.id.clone()));
+        // The timeline's group still comes first (GRP-23).
+        assert_eq!(
+            load(&db, None, Some(flat.id.clone())).unwrap().group,
+            Some(flat.id.clone())
+        );
+
+        // A deleted active group no longer counts.
+        db.delete_group(&trip.id).unwrap();
+        assert_eq!(load(&db, None, None).unwrap().group, Some(flat.id));
     }
 
     #[test]

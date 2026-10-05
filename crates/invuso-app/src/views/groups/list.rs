@@ -1,11 +1,13 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdChevronRight, LdCircleAlert, LdPencil, LdPlus, LdTrash2, LdUsers},
+    icons::ld_icons::{
+        LdChevronRight, LdCircleAlert, LdPencil, LdPin, LdPinOff, LdPlus, LdTrash2, LdUsers,
+    },
 };
 use invuso_core::domain::{Group, Money};
 
-use super::DeleteGroupSheet;
+use super::{DeleteGroupSheet, mark_active};
 use crate::Route;
 use crate::components::{
     AvatarEntry, AvatarStack, BottomSheet, Button, EmptyState, GroupIcon, MenuRow, MoneyText,
@@ -13,7 +15,7 @@ use crate::components::{
 };
 use crate::preferences::period_text;
 use crate::services::summary::group_summary;
-use crate::state::DataRevision;
+use crate::state::{DataRevision, Toaster};
 use crate::storage::{Db, StorageError};
 
 /// A group with its total, the own balance and the avatars of its
@@ -26,17 +28,19 @@ struct GroupEntry {
     total: Money,
     /// Balance of "Ich", if a member or still part of an expense (PER-02).
     own: Option<Money>,
+    /// Marked as the active group (GRP-05).
+    active: bool,
 }
 
 /// `/groups`: every group with icon, color, total, own balance and member
 /// avatars (GRP-01, GRP-02). Tap opens the group, long-press a menu
-/// (UI-09).
+/// (UI-09); the active group is marked (GRP-05).
 #[component]
 pub fn GroupList() -> Element {
     let db = use_context::<Db>();
     let revision = use_context::<DataRevision>();
     let nav = use_navigator();
-    let mut menu = use_signal(|| None::<Group>);
+    let mut menu = use_signal(|| None::<GroupEntry>);
     let mut confirm_delete = use_signal(|| None::<Group>);
     let mut delete_error = use_signal(|| None::<String>);
 
@@ -76,8 +80,8 @@ pub fn GroupList() -> Element {
                             for entry in entries.iter().cloned() {
                                 GroupRow {
                                     key: "{entry.group.id.as_str()}",
-                                    entry,
-                                    on_long_press: move |group| menu.set(Some(group)),
+                                    entry: entry.clone(),
+                                    on_long_press: move |_| menu.set(Some(entry.clone())),
                                 }
                             }
                         }
@@ -86,9 +90,10 @@ pub fn GroupList() -> Element {
                 }
             },
         }
-        if let Some(group) = menu() {
+        if let Some(entry) = menu() {
             GroupMenu {
-                group,
+                group: entry.group,
+                active: entry.active,
                 on_delete: move |group| {
                     menu.set(None);
                     delete_error.set(None);
@@ -111,6 +116,7 @@ pub fn GroupList() -> Element {
 
 fn load(db: &Db) -> Result<Vec<GroupEntry>, StorageError> {
     let me = db.me()?.map(|person| person.id);
+    let active = db.active_group()?.map(|group| group.id);
     db.groups()?
         .into_iter()
         .map(|group| {
@@ -128,6 +134,7 @@ fn load(db: &Db) -> Result<Vec<GroupEntry>, StorageError> {
                 })
                 .collect();
             Ok(GroupEntry {
+                active: active.as_ref() == Some(&group.id),
                 group,
                 members,
                 total: summary.total,
@@ -147,6 +154,7 @@ fn GroupRow(entry: GroupEntry, on_long_press: EventHandler<Group>) -> Element {
         members,
         total,
         own,
+        active,
     } = entry;
     let period = period_text(group.start_date.as_deref(), group.end_date.as_deref());
     let id = group.id.as_str().to_string();
@@ -167,7 +175,15 @@ fn GroupRow(entry: GroupEntry, on_long_press: EventHandler<Group>) -> Element {
             },
             GroupIcon { icon: group.icon.clone(), color: group.color.clone() }
             span { class: "flex min-w-0 flex-1 flex-col",
-                span { class: "truncate text-base text-floral-white-50", "{group.name}" }
+                span { class: "flex min-w-0 items-center gap-2",
+                    span { class: "truncate text-base text-floral-white-50", "{group.name}" }
+                    if active {
+                        span { class: "flex shrink-0 items-center gap-1 rounded-full bg-cerulean-800 px-2 py-0.5 text-xs font-medium text-cerulean-100",
+                            Icon { icon: LdPin, class: "h-3 w-3" }
+                            {t!("group.active").to_string()}
+                        }
+                    }
+                }
                 span { class: "flex min-w-0 items-center gap-1 text-sm text-floral-white-400",
                     MoneyText { amount: total }
                     if let Some(period) = period {
@@ -186,10 +202,20 @@ fn GroupRow(entry: GroupEntry, on_long_press: EventHandler<Group>) -> Element {
     }
 }
 
-/// Long-press menu of a group: edit, members, delete.
+/// Long-press menu of a group: mark as active or not (GRP-05), edit,
+/// members, delete.
 #[component]
-fn GroupMenu(group: Group, on_delete: EventHandler<Group>, on_close: EventHandler<()>) -> Element {
+fn GroupMenu(
+    group: Group,
+    active: bool,
+    on_delete: EventHandler<Group>,
+    on_close: EventHandler<()>,
+) -> Element {
+    let db = use_context::<Db>();
+    let revision = use_context::<DataRevision>();
+    let toaster = use_context::<Toaster>();
     let nav = use_navigator();
+    let active_target = group.clone();
     let edit_id = group.id.as_str().to_string();
     let members_id = edit_id.clone();
     let delete_target = group.clone();
@@ -197,6 +223,19 @@ fn GroupMenu(group: Group, on_delete: EventHandler<Group>, on_close: EventHandle
     rsx! {
         BottomSheet { title: group.name.clone(), on_close,
             div { class: "flex flex-col gap-1 px-3 pt-2",
+                MenuRow {
+                    label: if active { t!("group.unmark_active").to_string() } else { t!("group.mark_active").to_string() },
+                    onclick: move |_| {
+                        on_close.call(());
+                        let target = (!active).then_some(&active_target);
+                        mark_active(&db, target, revision, toaster);
+                    },
+                    if active {
+                        Icon { icon: LdPinOff, class: "h-5 w-5" }
+                    } else {
+                        Icon { icon: LdPin, class: "h-5 w-5" }
+                    }
+                }
                 MenuRow {
                     label: t!("common.edit").to_string(),
                     onclick: move |_| {

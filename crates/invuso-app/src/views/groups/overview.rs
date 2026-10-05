@@ -3,21 +3,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdArrowRight, LdCircleAlert, LdPlus, LdTrash2, LdTriangleAlert},
+    icons::ld_icons::{LdArrowRight, LdCircleAlert, LdPin, LdPlus, LdTrash2, LdTriangleAlert},
 };
 use invuso_core::domain::{Group, GroupId, GroupMember, Money, Person, PersonId};
 use invuso_core::split::GroupSummary;
 
 use super::form::GroupNotFound;
-use super::{DeleteGroupSheet, group_subtitle};
+use super::{DeleteGroupSheet, group_subtitle, mark_active};
 use crate::Route;
 use crate::components::{
     Avatar, AvatarEntry, AvatarSize, AvatarStack, Button, ButtonVariant, CardSection, EmptyState,
-    GroupIcon, LinkRow, MoneyText, TopBar,
+    GroupIcon, LinkRow, MoneyText, OwnBalance, TopBar,
 };
 use crate::format::{NumberFormat, format_money};
 use crate::services::summary::group_summary;
-use crate::state::DataRevision;
+use crate::state::{DataRevision, Toaster};
 use crate::storage::{Db, StorageError};
 
 /// Everything the overview shows of one group.
@@ -30,6 +30,8 @@ struct Overview {
     /// since, who still count with their expenses.
     people: BTreeMap<PersonId, Person>,
     me: Option<PersonId>,
+    /// Marked as the active group (GRP-05).
+    active: bool,
 }
 
 /// `/groups/:id`: total spent, own balance, who owes whom, who paid and who
@@ -68,6 +70,7 @@ pub fn GroupOverview(id: String) -> Element {
                             GroupIcon { icon: group.icon.clone(), color: group.color.clone(), large: true }
                             h2 { class: "text-2xl font-semibold break-words text-floral-white-50", "{group.name}" }
                             p { class: "text-sm text-floral-white-400", {group_subtitle(&group)} }
+                            ActiveMark { group: group.clone(), active: overview.active }
                         }
                         Totals { overview: overview.clone() }
                         div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
@@ -151,13 +154,43 @@ fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
     let summary = group_summary(db, &group)?;
     let people = db.people_any(summary.people.keys())?;
     let me = db.me()?.map(|person| person.id);
+    let active = db
+        .active_group()?
+        .is_some_and(|active| active.id == group.id);
     Ok(Some(Overview {
         group,
         members,
         summary,
         people,
         me,
+        active,
     }))
+}
+
+/// "Aktive Gruppe" if the group is the active one, otherwise the button
+/// to make it so (GRP-05).
+#[component]
+fn ActiveMark(group: Group, active: bool) -> Element {
+    let db = use_context::<Db>();
+    let revision = use_context::<DataRevision>();
+    let toaster = use_context::<Toaster>();
+
+    if active {
+        return rsx! {
+            span { class: "flex min-h-8 items-center gap-1.5 rounded-full bg-cerulean-800 px-3 text-sm font-medium text-cerulean-100",
+                Icon { icon: LdPin, class: "h-4 w-4" }
+                {t!("group.active").to_string()}
+            }
+        };
+    }
+    rsx! {
+        Button {
+            variant: ButtonVariant::Secondary,
+            onclick: move |_| mark_active(&db, Some(&group), revision, toaster),
+            Icon { icon: LdPin, class: "h-5 w-5" }
+            {t!("group.mark_active").to_string()}
+        }
+    }
 }
 
 /// Total spent in large type and the own balance (GRP-10, PER-02), or the
@@ -180,7 +213,7 @@ fn Totals(overview: Overview) -> Element {
             MoneyText { amount: summary.total, class: "text-4xl font-semibold text-floral-white-50" }
             if summary.expense_count > 0 {
                 if let Some(own) = own {
-                    OwnBalance { balance: own }
+                    OwnBalance { balance: own, class: "mt-1" }
                 }
             } else {
                 p { class: "mt-2 text-sm text-floral-white-400", {t!("summary.no_expenses").to_string()} }
@@ -200,27 +233,6 @@ fn Totals(overview: Overview) -> Element {
                 }
             }
         }
-    }
-}
-
-/// "Du bekommst 42,10 €" / "Du schuldest 12,00 €" / "Du bist ausgeglichen",
-/// colored like a balance (idee.md 3.2).
-#[component]
-fn OwnBalance(balance: Money) -> Element {
-    let amount = format_money(abs(balance), NumberFormat::current());
-    let (text, color) = match balance.amount_minor().signum() {
-        1 => (
-            t!("summary.you_get", amount = amount),
-            "text-muted-teal-300",
-        ),
-        -1 => (
-            t!("summary.you_owe", amount = amount),
-            "text-watermelon-300",
-        ),
-        _ => (t!("summary.you_even"), "text-floral-white-300"),
-    };
-    rsx! {
-        p { class: "mt-1 text-base font-medium tabular-nums {color}", "{text}" }
     }
 }
 
@@ -406,10 +418,6 @@ fn person_label(person: Option<&Person>) -> (String, String) {
             String::new(),
         ),
     }
-}
-
-fn abs(money: Money) -> Money {
-    Money::new(money.amount_minor().saturating_abs(), money.currency())
 }
 
 fn avatars(members: &[GroupMember]) -> Vec<AvatarEntry> {

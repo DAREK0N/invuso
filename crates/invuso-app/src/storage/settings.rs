@@ -21,6 +21,8 @@ pub const CONVERTER_TO: &str = "converter_to";
 /// in the next expense form (AP-11).
 pub const LAST_EXPENSE_GROUP: &str = "last_expense_group";
 pub const LAST_EXPENSE_CURRENCY: &str = "last_expense_currency";
+/// Id of the group marked as active (GRP-05); empty = none.
+pub(super) const ACTIVE_GROUP: &str = "active_group";
 
 impl Db {
     /// Value of a global setting (idee.md 4.1 `Settings`).

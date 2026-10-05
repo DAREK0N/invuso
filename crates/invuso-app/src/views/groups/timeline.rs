@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdChevronDown, LdChevronRight, LdCircleAlert, LdPlus, LdReceipt},
+    icons::ld_icons::{LdChevronDown, LdCircleAlert, LdPlus, LdReceipt},
 };
 use invuso_core::domain::{Category, CategoryId, GroupId, Money, MoneyError, local_date};
 
 use super::form::GroupNotFound;
 use crate::Route;
 use crate::clock;
-use crate::components::{Button, CategoryIconGlyph, EmptyState, MoneyText, TopBar};
+use crate::components::{Button, EmptyState, ExpenseRow, MoneyText, TopBar};
 use crate::preferences::day_heading;
 use crate::state::DataRevision;
 use crate::storage::{Db, TimelineEntry, TimelinePayer};
@@ -143,7 +143,7 @@ fn DaySection(
             }
             div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
                 for entry in day.entries.iter().cloned() {
-                    EntryRow {
+                    ExpenseRow {
                         key: "{entry.id.as_str()}",
                         icon: entry
                             .category_id
@@ -157,7 +157,10 @@ fn DaySection(
                                 nav.push(Route::ExpenseDetail { id: id.clone() });
                             }
                         },
-                        entry,
+                        title: entry.title.clone(),
+                        subtitle: entry_subtitle(&entry),
+                        total: entry.total,
+                        total_in_base: entry.total_in_base,
                     }
                 }
             }
@@ -165,45 +168,18 @@ fn DaySection(
     }
 }
 
-/// One expense (GRP-21): category, title, time and who paid with what;
-/// the amount in the base currency and, if different, in its own.
-#[component]
-fn EntryRow(entry: TimelineEntry, icon: String, onclick: EventHandler<()>) -> Element {
-    let foreign = entry.total.currency() != entry.total_in_base.currency();
+/// Time and who paid with what, under the title of an entry (GRP-21).
+fn entry_subtitle(entry: &TimelineEntry) -> String {
     let time = entry
         .occurred_at
         .get(11..16)
         .unwrap_or_default()
         .to_string();
     let payers = payers_text(&entry.payers);
-    let subtitle = if payers.is_empty() {
+    if payers.is_empty() {
         time
     } else {
         format!("{time} · {payers}")
-    };
-
-    rsx! {
-        button {
-            class: "flex min-h-16 w-full items-center gap-3 border-b border-jet-black-800 px-4 py-2 text-left last:border-b-0 active:bg-jet-black-800 transition-colors ease-apple",
-            r#type: "button",
-            onclick: move |_| onclick.call(()),
-            span {
-                class: "flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-jet-black-800 text-floral-white-300",
-                aria_hidden: "true",
-                CategoryIconGlyph { icon, class: "h-5 w-5".to_string() }
-            }
-            span { class: "flex min-w-0 flex-1 flex-col",
-                span { class: "truncate text-base text-floral-white-50", "{entry.title}" }
-                span { class: "truncate text-sm text-floral-white-400", "{subtitle}" }
-            }
-            span { class: "flex shrink-0 flex-col items-end",
-                MoneyText { amount: entry.total_in_base, class: "text-base font-semibold text-floral-white-100" }
-                if foreign {
-                    MoneyText { amount: entry.total, class: "text-sm text-floral-white-400" }
-                }
-            }
-            Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
-        }
     }
 }
 

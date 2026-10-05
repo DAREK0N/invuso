@@ -64,6 +64,19 @@ pub struct TimelineEntry {
     pub payers: Vec<TimelinePayer>,
 }
 
+/// An expense in the list of latest expenses on Home (HOME-03).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentExpense {
+    pub id: ExpenseId,
+    pub title: String,
+    pub category_id: Option<CategoryId>,
+    pub occurred_at: String,
+    pub total: Money,
+    pub total_in_base: Money,
+    /// Name of its group; `None` for a personal expense (EXP-06).
+    pub group_name: Option<String>,
+}
+
 /// The people and payment methods an expense refers to, by id, including
 /// those deleted since it was saved.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -303,6 +316,63 @@ impl Db {
                             occurred_at,
                             total: Money::new(total, stored_currency(&currency)?),
                             total_in_base: Money::new(base, stored_currency(&base_currency)?),
+                        })
+                    },
+                )
+                .collect()
+        })
+    }
+
+    /// The latest `limit` expenses of all groups and personal ones (HOME-03),
+    /// in the order of [`Db::group_timeline`]. Expenses of deleted groups
+    /// are left out, like the groups themselves.
+    pub fn recent_expenses(&self, limit: u32) -> Result<Vec<RecentExpense>, StorageError> {
+        self.with(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT e.id, e.title, e.category_id, e.occurred_at, e.total_minor, e.currency,
+                        e.total_base_minor, e.base_currency, g.name
+                 FROM expense e LEFT JOIN expense_group g ON g.id = e.group_id
+                 WHERE e.deleted_at IS NULL AND (e.group_id IS NULL OR g.deleted_at IS NULL)
+                 ORDER BY e.occurred_date DESC, substr(e.occurred_at, 12, 8) DESC,
+                          e.created_at DESC, e.id
+                 LIMIT ?1",
+            )?;
+            let rows = statement
+                .query_map([limit], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(
+                    |(
+                        id,
+                        title,
+                        category,
+                        occurred_at,
+                        total,
+                        currency,
+                        base,
+                        base_currency,
+                        group,
+                    )| {
+                        Ok(RecentExpense {
+                            id: ExpenseId::new(id),
+                            title,
+                            category_id: category.map(CategoryId::new),
+                            occurred_at,
+                            total: Money::new(total, stored_currency(&currency)?),
+                            total_in_base: Money::new(base, stored_currency(&base_currency)?),
+                            group_name: group,
                         })
                     },
                 )
@@ -1373,6 +1443,72 @@ mod tests {
         s.db.delete_payment_method(&card.id).unwrap();
         let timeline = s.db.group_timeline(&s.group).unwrap();
         assert_eq!(timeline[3].payers[1].method.as_deref(), Some("Visa"));
+    }
+
+    #[test]
+    fn recent_expenses_span_groups_and_skip_deleted_ones() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let other =
+            s.db.create_group(NewGroup {
+                name: "WG".into(),
+                icon: "home".into(),
+                color: "cerulean".into(),
+                base_currency: cur("EUR"),
+                start_date: None,
+                end_date: None,
+            })
+            .unwrap();
+        let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone()]));
+        let at = |title: &str, group: Option<&GroupId>, occurred_at: &str| NewExpense {
+            group_id: group.cloned(),
+            title: title.into(),
+            occurred_at: occurred_at.into(),
+            ..hotel(&s, equal.clone())
+        };
+        s.db.create_expense(
+            at("Hotel", Some(&s.group), "2026-10-02T15:00:00+09:00"),
+            &rate,
+        )
+        .unwrap();
+        s.db.create_expense(at("Kaffee", None, "2026-10-04T09:00:00+02:00"), &rate)
+            .unwrap();
+        s.db.create_expense(
+            at("Miete", Some(&other.id), "2026-10-03T10:00:00+02:00"),
+            &rate,
+        )
+        .unwrap();
+        let gone =
+            s.db.create_expense(
+                at("Taxi", Some(&s.group), "2026-10-05T10:00:00+09:00"),
+                &rate,
+            )
+            .unwrap();
+        s.db.delete_expense(&gone.id).unwrap();
+
+        let recent = s.db.recent_expenses(10).unwrap();
+        let rows: Vec<_> = recent
+            .iter()
+            .map(|e| (e.title.as_str(), e.group_name.as_deref()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Kaffee", None),
+                ("Miete", Some("WG")),
+                ("Hotel", Some("Japan"))
+            ]
+        );
+        assert_eq!(s.db.recent_expenses(1).unwrap().len(), 1);
+
+        s.db.delete_group(&other.id).unwrap();
+        let titles: Vec<_> =
+            s.db.recent_expenses(10)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.title)
+                .collect();
+        assert_eq!(titles, ["Kaffee", "Hotel"]);
     }
 
     #[test]

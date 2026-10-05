@@ -2,6 +2,7 @@ use invuso_core::domain::{Currency, Group, GroupId, validate_period};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::db::{new_id, now_ms};
+use super::settings::ACTIVE_GROUP;
 use super::{Db, StorageError, group_members, people};
 
 /// Input for creating a group (GRP-01).
@@ -85,6 +86,21 @@ impl Db {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(groups)
         })
+    }
+
+    /// The group marked as active (GRP-05), if it still exists; a deleted
+    /// one becomes active again when it is restored.
+    pub fn active_group(&self) -> Result<Option<Group>, StorageError> {
+        match self.setting(ACTIVE_GROUP)? {
+            Some(id) if !id.is_empty() => self.group(&GroupId::new(id)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Marks the group as active, the default target of new expenses
+    /// (GRP-05); `None` removes the mark.
+    pub fn set_active_group(&self, id: Option<&GroupId>) -> Result<(), StorageError> {
+        self.set_setting(ACTIVE_GROUP, id.map_or("", GroupId::as_str))
     }
 
     /// Saves name, icon, color, base currency and period.
@@ -205,6 +221,23 @@ mod tests {
             note: None,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn active_group_follows_deletion_and_can_be_cleared() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.active_group().unwrap(), None);
+        let trip = db.create_group(new("Japan")).unwrap();
+        db.set_active_group(Some(&trip.id)).unwrap();
+        assert_eq!(db.active_group().unwrap(), Some(trip.clone()));
+
+        db.delete_group(&trip.id).unwrap();
+        assert_eq!(db.active_group().unwrap(), None);
+        db.restore_group(&trip.id).unwrap();
+        assert_eq!(db.active_group().unwrap(), Some(trip));
+
+        db.set_active_group(None).unwrap();
+        assert_eq!(db.active_group().unwrap(), None);
     }
 
     #[test]
