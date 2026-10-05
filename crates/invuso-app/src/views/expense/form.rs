@@ -35,14 +35,17 @@ use crate::components::{
     MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, TextField, TopBar,
 };
 use crate::format::{NumberFormat, amount_text, fit_amount_text, format_money, parse_amount};
-use crate::platform::{ImageKind, system_translator};
+use crate::platform::ImageKind;
 use crate::preferences::{
     category_name, default_home_currency, display_date, language_name, suggested_target_language,
 };
 use crate::services::expenses::{SaveExpenseError, save_expense, update_expense};
 use crate::services::rates::{CurrencyApi, Frankfurter};
 use crate::services::receipts::{self, capture_receipt};
-use crate::services::translation::{MachineTranslation, remember_review, translate_lines};
+use crate::services::translation::{
+    MachineTranslation, TranslationConfidence, on_device_translator, packs, remember_review,
+    translate_lines,
+};
 use crate::state::{DataRevision, ToastAction, Toaster};
 use crate::storage::{
     Db, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, NearRate, NewExpense, NewExpensePayment,
@@ -332,7 +335,7 @@ fn ExpenseForm(data: FormData) -> Element {
         translation.set(Some(TranslationState::Running));
         let db = translate_db.clone();
         spawn(async move {
-            let translator = system_translator();
+            let translator = on_device_translator(TranslationConfidence::current(&db));
             let outcome =
                 translate_lines(&db, &translator, source.as_deref(), &target, &texts).await;
             // A newer run (other group, other lines) replaced this one.
@@ -1467,7 +1470,13 @@ fn translation_note(
     state: Option<&TranslationState>,
     items: &[ItemDraft],
 ) -> Option<TranslationNote> {
-    let note = |text: String, warning: bool| Some(TranslationNote { text, warning });
+    let note = |text: String, warning: bool| {
+        Some(TranslationNote {
+            text,
+            warning,
+            packs_link: false,
+        })
+    };
     match state? {
         TranslationState::Running => note(t!("items.translating").to_string(), false),
         TranslationState::Failed(message)
@@ -1485,6 +1494,14 @@ fn translation_note(
         } if source != target => {
             let (from, to) = (language_name(source), language_name(target));
             match machine {
+                // A pack on offer can close the gap (decision 10.2).
+                MachineTranslation::Unavailable if packs::find(source, target).is_some() => {
+                    Some(TranslationNote {
+                        text: t!("items.translation_pack", from = from, to = to).to_string(),
+                        warning: true,
+                        packs_link: true,
+                    })
+                }
                 MachineTranslation::Unavailable => note(
                     t!("items.translation_unavailable", from = from, to = to).to_string(),
                     true,

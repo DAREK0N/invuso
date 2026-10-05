@@ -149,6 +149,12 @@ fn ManageSection() -> Element {
                         span { class: "text-base tabular-nums text-floral-white-400", "{active_methods}" }
                     }
                 }
+                LinkRow {
+                    label: t!("page.settings_languages").to_string(),
+                    onclick: move |_| {
+                        nav.push(Route::SettingsLanguages {});
+                    },
+                }
             }
         }
         section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",

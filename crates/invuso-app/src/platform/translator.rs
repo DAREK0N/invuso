@@ -8,16 +8,21 @@
 
 use std::future::Future;
 
+/// One translated text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineText {
+    /// Empty where the engine had no answer (or one too unsure to show).
+    pub text: String,
+    /// Sure enough to keep for later receipts whatever confidence the user
+    /// picks; the device's translator gives no confidence and is trusted.
+    pub remember: bool,
+}
+
 /// How a translation request ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Translation {
-    /// One entry per input text, in order; empty where the engine had no
-    /// answer for that text.
-    #[cfg_attr(
-        all(not(target_os = "android"), not(test)),
-        expect(dead_code, reason = "only the Android bridge translates")
-    )]
-    Done(Vec<String>),
+    /// One entry per input text, in order.
+    Done(Vec<MachineText>),
     /// No engine for this language pair on this device; not an error.
     Unavailable,
 }

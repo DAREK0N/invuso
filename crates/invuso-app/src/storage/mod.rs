@@ -35,6 +35,6 @@ pub use profile::Profile;
 pub use receipts::{OcrFragment, ReceiptFiles, ReceiptText};
 pub use settings::{
     CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY,
-    LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST,
+    LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST, TRANSLATION_CONFIDENCE,
 };
 pub use translations::UNKNOWN_LANGUAGE;

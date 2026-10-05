@@ -1,16 +1,66 @@
 //! Translating the lines of a receipt (idee.md 7.2 step 4, TRL-01..05).
 //!
 //! Order of preference (decision 10.2): the user's own corrections and
-//! earlier translations from `translation_cache`, then the device's
-//! translation engine. A machine translation is only a suggestion; the
-//! user's text always wins (idee.md 1.4 principle 5).
+//! earlier translations from `translation_cache`, then the device's own
+//! translator, then a downloaded Opus-MT pack. A machine translation is
+//! only a suggestion; the user's text always wins (idee.md 1.4 principle 5).
+
+pub mod downloads;
+mod opus;
+pub mod packs;
+mod tokenizer;
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::path::PathBuf;
 
 use invuso_core::domain::LineItem;
 
-use crate::platform::{Translation, Translator};
-use crate::storage::{Db, StorageError, UNKNOWN_LANGUAGE};
+use crate::platform::{self, MachineText, Translation, Translator};
+use crate::storage::{Db, StorageError, TRANSLATION_CONFIDENCE, UNKNOWN_LANGUAGE};
+
+/// How sure a downloaded model must be before its translation is shown
+/// (user setting on the language packs screen). Lines below stay as
+/// printed. The device's own translator reports no confidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TranslationConfidence {
+    /// Only translations the model was very sure of.
+    Strict,
+    #[default]
+    Balanced,
+    /// Everything, including made-up sentences.
+    All,
+}
+
+impl TranslationConfidence {
+    pub const ALL: [Self; 3] = [Self::Strict, Self::Balanced, Self::All];
+
+    /// Stored value in `settings`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Balanced => "balanced",
+            Self::All => "all",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.code() == code)
+    }
+
+    /// The level the user picked; the default if none or unreadable.
+    pub fn current(db: &Db) -> Self {
+        db.setting(TRANSLATION_CONFIDENCE)
+            .ok()
+            .flatten()
+            .and_then(|code| Self::from_code(&code))
+            .unwrap_or_default()
+    }
+
+    pub fn save(self, db: &Db) -> Result<(), StorageError> {
+        db.set_setting(TRANSLATION_CONFIDENCE, self.code())
+    }
+}
 
 /// What happened to the lines that were not remembered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +75,89 @@ pub enum MachineTranslation {
     Unavailable,
     /// The engine failed; the message is for the user.
     Failed(String),
+}
+
+/// The device's translator first, a downloaded pack as fallback.
+pub struct OnDeviceTranslator<S> {
+    system: S,
+    /// Where packs are installed; `None` without app storage (host builds).
+    data_dir: Option<PathBuf>,
+    confidence: TranslationConfidence,
+}
+
+/// The translation engines of this device, in order of preference;
+/// translations of a pack are shown from `confidence` on.
+pub fn on_device_translator(
+    confidence: TranslationConfidence,
+) -> OnDeviceTranslator<impl Translator> {
+    OnDeviceTranslator {
+        system: platform::system_translator(),
+        data_dir: platform::data_dir().ok(),
+        confidence,
+    }
+}
+
+impl<S: Translator> Translator for OnDeviceTranslator<S> {
+    fn translate(
+        &self,
+        source: &str,
+        target: &str,
+        texts: Vec<String>,
+    ) -> impl Future<Output = Result<Translation, String>> + Send + use<S> {
+        let system = self.system.translate(source, target, texts.clone());
+        let pack = packs::find(source, target);
+        let data_dir = self.data_dir.clone();
+        let confidence = self.confidence;
+        async move {
+            let from_system = system.await;
+            if matches!(from_system, Ok(Translation::Done(_))) {
+                return from_system;
+            }
+            let installed = pack
+                .zip(data_dir)
+                .filter(|(pack, dir)| packs::is_installed(dir, pack));
+            let Some((pack, dir)) = installed else {
+                return from_system;
+            };
+            // Loading and running the model takes seconds; off the UI thread.
+            tokio::task::spawn_blocking(move || {
+                translate_with_pack(&packs::pack_dir(&dir, pack), &texts, confidence)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+    }
+}
+
+/// Loads the pack for this one receipt and translates its lines;
+/// translations below `confidence` come back empty. Only those passing the
+/// strictest level are remembered, so a later, stricter setting never meets
+/// an unsure translation in the cache. The model is dropped afterwards: it
+/// needs about as much memory as its files, too much to keep next to the
+/// text recognition.
+fn translate_with_pack(
+    dir: &std::path::Path,
+    texts: &[String],
+    confidence: TranslationConfidence,
+) -> Result<Translation, String> {
+    let engine = opus::OpusMt::load(dir).map_err(|e| e.to_string())?;
+    let translated = texts
+        .iter()
+        .map(|text| {
+            let translated = engine.translate(text).map_err(|e| e.to_string())?;
+            Ok(match translated {
+                Some(t) if t.passes(confidence) => MachineText {
+                    remember: t.passes(TranslationConfidence::Strict),
+                    text: t.text,
+                },
+                _ => MachineText {
+                    text: String::new(),
+                    remember: false,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Translation::Done(translated))
 }
 
 /// Translations by original text, and how the machine part went.
@@ -64,14 +197,18 @@ pub async fn translate_lines(
         Some(source) if source == target => MachineTranslation::SameLanguage,
         Some(source) => match translator.translate(source, target, missing.clone()).await {
             Ok(Translation::Done(translated)) => {
-                let pairs: Vec<(String, String)> = missing
-                    .into_iter()
-                    .zip(translated)
-                    .map(|(text, translation)| (text, translation.trim().to_string()))
-                    .filter(|(text, translation)| !translation.is_empty() && translation != text)
-                    .collect();
-                db.remember_translations(source, target, &pairs, false)?;
-                found.extend(pairs);
+                let mut kept = Vec::new();
+                for (text, machine) in missing.into_iter().zip(translated) {
+                    let translation = machine.text.trim().to_string();
+                    if translation.is_empty() || translation == text {
+                        continue;
+                    }
+                    if machine.remember {
+                        kept.push((text.clone(), translation.clone()));
+                    }
+                    found.insert(text, translation);
+                }
+                db.remember_translations(source, target, &kept, false)?;
                 MachineTranslation::Done
             }
             Ok(Translation::Unavailable) => MachineTranslation::Unavailable,
@@ -145,7 +282,16 @@ mod tests {
         ) -> impl Future<Output = Result<Translation, String>> + Send + use<> {
             self.asked.lock().unwrap().push(texts.clone());
             let answer = if self.available {
-                Translation::Done(texts.iter().map(|t| t.to_uppercase()).collect())
+                Translation::Done(
+                    texts
+                        .iter()
+                        .map(|t| MachineText {
+                            text: t.to_uppercase(),
+                            // Pretends lines with a space are unsure.
+                            remember: !t.contains(' '),
+                        })
+                        .collect(),
+                )
             } else {
                 Translation::Unavailable
             };
@@ -188,6 +334,48 @@ mod tests {
         assert_eq!(second.texts, first.texts);
         // Duplicates and blanks were never sent; the second run sent nothing.
         assert_eq!(*engine.asked.lock().unwrap(), [texts(&["beer", "rice"])]);
+    }
+
+    #[test]
+    fn unsure_translations_are_shown_but_not_remembered() {
+        let db = Db::open_in_memory().unwrap();
+        let engine = FakeTranslator {
+            available: true,
+            ..Default::default()
+        };
+        let lines = texts(&["beer", "rice ball"]);
+        let first = block_on(translate_lines(&db, &engine, Some("en"), "de", &lines)).unwrap();
+        assert_eq!(first.texts["rice ball"], "RICE BALL");
+        let remembered = db
+            .remembered_translations(Some("en"), "de", &lines)
+            .unwrap();
+        assert_eq!(remembered.len(), 1);
+        assert!(remembered.contains_key("beer"));
+        block_on(translate_lines(&db, &engine, Some("en"), "de", &lines)).unwrap();
+        // The unsure line goes to the engine again.
+        assert_eq!(
+            engine.asked.lock().unwrap().last().unwrap(),
+            &texts(&["rice ball"])
+        );
+    }
+
+    #[test]
+    fn confidence_setting_round_trips() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(
+            TranslationConfidence::current(&db),
+            TranslationConfidence::Balanced
+        );
+        TranslationConfidence::Strict.save(&db).unwrap();
+        assert_eq!(
+            TranslationConfidence::current(&db),
+            TranslationConfidence::Strict
+        );
+        db.set_setting(TRANSLATION_CONFIDENCE, "nonsense").unwrap();
+        assert_eq!(
+            TranslationConfidence::current(&db),
+            TranslationConfidence::Balanced
+        );
     }
 
     #[test]

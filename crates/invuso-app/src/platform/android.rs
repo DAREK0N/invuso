@@ -306,7 +306,18 @@ pub extern "system" fn Java_dev_dioxus_main_MainActivity_translationResult<'call
         };
         let result = match status {
             TRANSLATION_DONE if has_texts => read(env)
-                .map(super::Translation::Done)
+                .map(|texts| {
+                    super::Translation::Done(
+                        texts
+                            .into_iter()
+                            // The device's translator reports no confidence.
+                            .map(|text| super::MachineText {
+                                text,
+                                remember: true,
+                            })
+                            .collect(),
+                    )
+                })
                 .map_err(|e| e.to_string()),
             TRANSLATION_UNAVAILABLE => Ok(super::Translation::Unavailable),
             _ => Err("the device's translator failed".to_string()),

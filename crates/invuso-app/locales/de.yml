@@ -448,6 +448,8 @@ receipt:
 
 items:
   title: "Positionen"
+  translation_pack: "Für %{from} → %{to} ist noch kein Sprachpaket installiert. Korrekturen werden trotzdem gemerkt."
+  open_packs: "Sprachpakete"
   translating: "Positionen werden übersetzt …"
   translated_from: "Übersetzt aus: %{from}"
   translation_unavailable: "Für %{from} → %{to} ist auf diesem Gerät keine Übersetzung verfügbar. Korrekturen werden trotzdem gemerkt."
@@ -492,6 +494,26 @@ items:
   delete: "Löschen"
   cannot_split: "Diese Position lässt sich nicht weiter teilen."
   participants_hint: "Diese Personen teilen sich alles, was niemandem zugeordnet ist."
+
+packs:
+  intro: "Ohne Übersetzer des Geräts übersetzt Invuso Kassenzettel mit heruntergeladenen Sprachpaketen, danach offline. Es wird nur heruntergeladen, was du hier antippst."
+  confidence_title: "Übersetzungen anzeigen"
+  confidence_strict: "Nur sehr sichere"
+  confidence_strict_hint: "Weniger Fehler, aber auch weniger übersetzte Positionen."
+  confidence_balanced: "Ausgewogen (empfohlen)"
+  confidence_balanced_hint: "Blendet die meisten erfundenen Übersetzungen aus."
+  confidence_all: "Alle"
+  confidence_all_hint: "Zeigt jede Übersetzung, auch offensichtlich falsche."
+  confidence_note: "Gilt für Sprachpakete; der Übersetzer des Geräts meldet keine Sicherheit. Gemerkt werden nur sehr sichere Übersetzungen."
+  source: "Modelle: Opus-MT (Helsinki-NLP, Universität Helsinki), Apache-2.0. Download von github.com. Nicht angezeigte Übersetzungen lassen die Bezeichnung wie gedruckt."
+  megabytes: "%{size} MB"
+  installed: "Installiert · %{size}"
+  downloading: "%{done} von %{total} MB …"
+  download: "Laden"
+  cancel: "Download abbrechen"
+  failed: "Download fehlgeschlagen: %{message}"
+  delete_title: "Sprachpaket löschen?"
+  delete_text: "%{pair} wird vom Gerät entfernt. Gemerkte Übersetzungen und Korrekturen bleiben erhalten."
 
 ocr:
   starting: "Texterkennung wird vorbereitet …"

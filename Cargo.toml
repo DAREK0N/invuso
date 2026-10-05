@@ -41,6 +41,12 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 rten = "0.27.0"
 rten-tensor = "0.27.0"
 rten-imageproc = "0.27.0"
+# NFKC for the translation tokenizer (AP-21b); already in the tree through
+# url (dioxus-router), compiled Unicode data.
+icu_normalizer = "2.3.0"
+# SHA-256 of downloaded translation packs; the same version rustls already
+# pulls in for the rate requests.
+ring = "0.17.14"
 
 # `dx serve` builds in debug; unoptimized inference would take minutes per
 # receipt, so the OCR and image crates are always optimized.

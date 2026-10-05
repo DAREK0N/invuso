@@ -327,6 +327,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | ureq-proto | 0.6.4 | MIT OR Apache-2.0 | Copyright 2022 Martin Algesten |
 | url | 2.5.8 | MIT OR Apache-2.0 | Copyright (c) 2013-2025 The rust-url developers |
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 | Copyright (c) Simon Sapin |
+| utf16_iter | 1.0.5 | Apache-2.0 OR MIT | Copyright Mozilla Foundation |
 | utf8-zero | 0.8.1 | MIT OR Apache-2.0 | Copyright (c) Simon Sapin, Martin Algesten |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT | Copyright Mozilla Foundation |
 | uuid | 1.27.0 | Apache-2.0 OR MIT | Copyright (c) 2014 The Rust Project Developers; Copyright (c) 2018 Ashley Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon |
@@ -342,6 +343,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | webpki-roots | 1.0.9 | CDLA-Permissive-2.0 | Copyright (c) the contributors of https://github.com/rustls/webpki-roots |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | Copyright (c) HeroicKatora 2020 |
 | winnow | 0.7.15 | MIT | Copyright (c) the contributors of https://github.com/winnow-rs/winnow |
+| write16 | 1.0.0 | Apache-2.0 OR MIT | Copyright Mozilla Foundation |
 | writeable | 0.6.4 | Unicode-3.0 | COPYRIGHT AND PERMISSION NOTICE; Copyright © 2020-2024 Unicode, Inc. |
 | wry | 0.53.5 | Apache-2.0 OR MIT | Copyright (c) 2020-2023 Ngo Iok Ui & Tauri Programme within The Commons Conservancy |
 | y4m | 0.8.0 | MIT | Copyright (c) 2015-2019 PistonDevelopers; Copyright (c) 2019 image-rs contributors |

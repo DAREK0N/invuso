@@ -9,8 +9,8 @@ use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdArrowDown, LdArrowUp, LdLanguages, LdMerge, LdMinus, LdPlus, LdSplit, LdTrash2,
-        LdTriangleAlert,
+        LdArrowDown, LdArrowUp, LdDownload, LdLanguages, LdMerge, LdMinus, LdPlus, LdSplit,
+        LdTrash2, LdTriangleAlert,
     },
 };
 use invuso_core::Decimal;
@@ -21,6 +21,7 @@ use invuso_core::domain::{
 use invuso_core::receipt::{ItemKind, ParsedReceipt};
 use invuso_core::split::allocate;
 
+use crate::Route;
 use crate::components::{
     Avatar, AvatarEntry, AvatarSize, AvatarStack, BottomSheet, Chip, CompactAmountInput,
     CompactNumberInput, TextField,
@@ -164,6 +165,8 @@ pub(super) struct TranslationNote {
     pub text: String,
     /// Drawn as a hint (no engine, failure) rather than as information.
     pub warning: bool,
+    /// Offers the way to the translation packs (SET-07).
+    pub packs_link: bool,
 }
 
 /// The lines in the look of the printed receipt (user wish in AP-19):
@@ -226,6 +229,14 @@ pub(super) fn ReceiptItems(
                     role: "status",
                     aria_live: "polite",
                     "{note.text}"
+                }
+                if note.packs_link {
+                    Link {
+                        class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors",
+                        to: Route::SettingsLanguages {},
+                        Icon { icon: LdDownload, class: "h-4 w-4" }
+                        {t!("items.open_packs").to_string()}
+                    }
                 }
             }
             div { class: "flex flex-col drop-shadow-lg",

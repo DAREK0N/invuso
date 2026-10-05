@@ -448,6 +448,8 @@ receipt:
 
 items:
   title: "Items"
+  translation_pack: "No language pack for %{from} → %{to} is installed yet. Corrections are still remembered."
+  open_packs: "Language packs"
   translating: "Translating the lines …"
   translated_from: "Translated from: %{from}"
   translation_unavailable: "No translation from %{from} to %{to} is available on this device. Corrections are still remembered."
@@ -492,6 +494,26 @@ items:
   delete: "Delete"
   cannot_split: "This item cannot be split any further."
   participants_hint: "These people share everything not assigned to anyone."
+
+packs:
+  intro: "Without a translator on the device, Invuso translates receipts with downloaded language packs, offline afterwards. Only what you tap here is downloaded."
+  confidence_title: "Show translations"
+  confidence_strict: "Only very sure ones"
+  confidence_strict_hint: "Fewer mistakes, but fewer translated lines too."
+  confidence_balanced: "Balanced (recommended)"
+  confidence_balanced_hint: "Hides most made-up translations."
+  confidence_all: "All"
+  confidence_all_hint: "Shows every translation, even obviously wrong ones."
+  confidence_note: "Applies to language packs; the device's translator reports no confidence. Only very sure translations are remembered."
+  source: "Models: Opus-MT (Helsinki-NLP, University of Helsinki), Apache-2.0. Downloaded from github.com. Where no translation is shown, the line stays as printed."
+  megabytes: "%{size} MB"
+  installed: "Installed · %{size}"
+  downloading: "%{done} of %{total} MB …"
+  download: "Get"
+  cancel: "Cancel download"
+  failed: "Download failed: %{message}"
+  delete_title: "Delete language pack?"
+  delete_text: "%{pair} is removed from the device. Remembered translations and corrections are kept."
 
 ocr:
   starting: "Preparing text recognition …"

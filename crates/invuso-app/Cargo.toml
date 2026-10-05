@@ -25,6 +25,8 @@ image.workspace = true
 rten.workspace = true
 rten-tensor.workspace = true
 rten-imageproc.workspace = true
+icu_normalizer.workspace = true
+ring.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Only to ask Android for the app's private files directory (platform/).
