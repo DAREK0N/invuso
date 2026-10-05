@@ -9,7 +9,7 @@ use dioxus_free_icons::{
     icons::ld_icons::{LdSquare, LdSquareCheck},
 };
 use invuso_core::Decimal;
-use invuso_core::domain::{Currency, ExpenseError, Money, Person, PersonId};
+use invuso_core::domain::{Currency, ExpenseError, LineItem, Money, Person, PersonId, item_lines};
 use invuso_core::split::{SplitError, SplitMode};
 
 use crate::components::{Avatar, AvatarSize, CompactAmountInput, CompactNumberInput};
@@ -21,7 +21,7 @@ use crate::format::{
 /// Decimals a weight or a percentage can be typed with.
 const SHARE_DECIMALS: u32 = 2;
 
-/// The split mode the form edits (idee.md 8.1 without `Items`).
+/// The split mode the form edits (idee.md 8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum SplitKind {
     #[default]
@@ -29,10 +29,19 @@ pub(super) enum SplitKind {
     Weights,
     Percent,
     Exact,
+    /// By line items (idee.md 8.2); the people picked share what is not
+    /// assigned to anyone.
+    Items,
 }
 
 impl SplitKind {
-    pub(super) const ALL: [Self; 4] = [Self::Equal, Self::Weights, Self::Percent, Self::Exact];
+    pub(super) const ALL: [Self; 5] = [
+        Self::Equal,
+        Self::Weights,
+        Self::Percent,
+        Self::Exact,
+        Self::Items,
+    ];
 
     pub(super) fn label(self) -> String {
         match self {
@@ -40,6 +49,7 @@ impl SplitKind {
             Self::Weights => t!("expense.split_mode_weights"),
             Self::Percent => t!("expense.split_mode_percent"),
             Self::Exact => t!("expense.split_mode_exact"),
+            Self::Items => t!("expense.split_mode_items"),
         }
         .to_string()
     }
@@ -75,6 +85,12 @@ impl SplitDraft {
         };
         let mut draft = Self::equal(mode.participants());
         match mode {
+            SplitMode::Items { participants, .. } => {
+                // Only those sharing the unassigned lines, not everyone a
+                // line is assigned to.
+                draft.kind = SplitKind::Items;
+                draft.participants = participants.keys().cloned().collect();
+            }
             SplitMode::Equal(_) => {}
             SplitMode::Weights(weights) => {
                 draft.kind = SplitKind::Weights;
@@ -114,7 +130,7 @@ impl SplitDraft {
         format: NumberFormat,
     ) -> String {
         match self.kind {
-            SplitKind::Equal => String::new(),
+            SplitKind::Equal | SplitKind::Items => String::new(),
             SplitKind::Weights => self
                 .weights
                 .get(person)
@@ -127,7 +143,7 @@ impl SplitDraft {
 
     pub(super) fn set_text(&mut self, person: PersonId, text: String) {
         let texts = match self.kind {
-            SplitKind::Equal => return,
+            SplitKind::Equal | SplitKind::Items => return,
             SplitKind::Weights => &mut self.weights,
             SplitKind::Percent => &mut self.percents,
             SplitKind::Exact => &mut self.amounts,
@@ -143,13 +159,17 @@ impl SplitDraft {
     }
 
     /// The split the inputs describe; empty fields count as 0. Whether it
-    /// is valid decides `validate_split`.
+    /// is valid decides `validate_split`. Splitting by items takes the
+    /// form's `line_items`, the unassigned ones shared by default weight.
     pub(super) fn mode(
         &self,
         default_weights: &BTreeMap<PersonId, Decimal>,
         currency: Currency,
         format: NumberFormat,
+        line_items: &[LineItem],
     ) -> SplitMode {
+        let default_weight =
+            |person: &PersonId| default_weights.get(person).copied().unwrap_or(Decimal::ONE);
         let number = |texts: &BTreeMap<PersonId, String>, person: &PersonId, fallback: Decimal| {
             texts.get(person).map_or(fallback, |text| {
                 parse_number(text, format).unwrap_or(Decimal::ZERO)
@@ -161,11 +181,7 @@ impl SplitDraft {
             SplitKind::Weights => SplitMode::Weights(
                 people
                     .map(|person| {
-                        let fallback = default_weights
-                            .get(&person)
-                            .copied()
-                            .unwrap_or(Decimal::ONE);
-                        let weight = number(&self.weights, &person, fallback);
+                        let weight = number(&self.weights, &person, default_weight(&person));
                         (person, weight)
                     })
                     .collect(),
@@ -190,6 +206,15 @@ impl SplitDraft {
                     })
                     .collect(),
             ),
+            SplitKind::Items => SplitMode::Items {
+                participants: people
+                    .map(|person| {
+                        let weight = default_weight(&person);
+                        (person, weight)
+                    })
+                    .collect(),
+                items: item_lines(line_items),
+            },
         }
     }
 }
@@ -219,7 +244,7 @@ pub(super) fn sum_hint(
             .to_string();
             Some((text, sum == total.amount_minor()))
         }
-        SplitMode::Equal(_) | SplitMode::Weights(_) => None,
+        SplitMode::Equal(_) | SplitMode::Weights(_) | SplitMode::Items { .. } => None,
     }
 }
 
@@ -329,7 +354,7 @@ pub(super) fn ShareRow(
                             oninput: on_input,
                         }
                     },
-                    SplitKind::Equal => rsx! {},
+                    SplitKind::Equal | SplitKind::Items => rsx! {},
                 }
             }
         }
@@ -374,7 +399,7 @@ mod tests {
         weights.set_text(p("a"), "2".into());
         assert_eq!(weights.text(&p("c"), d("0.5"), DE), "0,5");
         assert_eq!(
-            weights.mode(&defaults, eur(), DE),
+            weights.mode(&defaults, eur(), DE, &[]),
             SplitMode::Weights(BTreeMap::from([
                 (p("a"), d("2")),
                 (p("b"), d("1")),
@@ -390,7 +415,7 @@ mod tests {
         percent.set_text(p("b"), "30".into());
         percent.toggle(p("c"));
         assert_eq!(
-            percent.mode(&BTreeMap::new(), eur(), DE),
+            percent.mode(&BTreeMap::new(), eur(), DE, &[]),
             SplitMode::Percent(BTreeMap::from([(p("a"), d("70")), (p("b"), d("30"))]))
         );
 
@@ -398,7 +423,7 @@ mod tests {
         exact.set_text(p("a"), "12,5".into());
         exact.set_text(p("b"), String::new());
         assert_eq!(
-            exact.mode(&BTreeMap::new(), eur(), DE),
+            exact.mode(&BTreeMap::new(), eur(), DE, &[]),
             SplitMode::Exact(BTreeMap::from([(p("a"), 1_250), (p("b"), 0), (p("c"), 0)]))
         );
     }
@@ -414,8 +439,35 @@ mod tests {
         ];
         for mode in modes {
             let draft = SplitDraft::from_mode(&mode, jpy, DE);
-            assert_eq!(draft.mode(&BTreeMap::new(), jpy, DE), mode);
+            assert_eq!(draft.mode(&BTreeMap::new(), jpy, DE, &[]), mode);
         }
+    }
+
+    #[test]
+    fn items_split_uses_default_weights_and_the_lines() {
+        let mut beer = LineItem {
+            original_text: "Bier".into(),
+            quantity: d("6"),
+            total_minor: 2_700,
+            ..LineItem::default()
+        };
+        beer.assigned_to = BTreeMap::from([(p("a"), d("2")), (p("c"), d("4"))]);
+        let lines = [beer];
+        let mut draft = draft(SplitKind::Items);
+        draft.toggle(p("c"));
+        let defaults = BTreeMap::from([(p("b"), d("2"))]);
+        let mode = draft.mode(&defaults, eur(), DE, &lines);
+        assert_eq!(
+            mode,
+            SplitMode::Items {
+                participants: BTreeMap::from([(p("a"), d("1")), (p("b"), d("2"))]),
+                items: item_lines(&lines),
+            }
+        );
+        // Reading it back keeps those sharing the rest, not the holders.
+        let back = SplitDraft::from_mode(&mode, eur(), DE);
+        assert_eq!(back.kind, SplitKind::Items);
+        assert_eq!(back.participants, [p("a"), p("b")].into());
     }
 
     #[test]

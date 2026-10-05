@@ -126,6 +126,8 @@ mod tests {
                 }],
                 split: SplitMode::Equal(between.iter().map(|p| (*p).clone()).collect()),
                 receipt_id: None,
+                line_items: Vec::new(),
+                source: invuso_core::domain::ExpenseSource::Manual,
             },
             &rate,
         )

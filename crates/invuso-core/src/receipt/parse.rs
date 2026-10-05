@@ -15,8 +15,9 @@ use rust_decimal::prelude::ToPrimitive;
 
 use super::rows::group_rows;
 use super::tokens::{
-    is_times, is_trailing_mark, is_unit_word, keyword_form, line_total, parse_count, parse_price,
-    parse_quantity, quantity_after_times, quantity_before_times, quantity_fits,
+    is_currency_mark, is_times, is_trailing_mark, is_unit_word, keyword_form, line_total,
+    parse_count, parse_price, parse_quantity, quantity_after_times, quantity_before_times,
+    quantity_fits,
 };
 use super::{
     ItemKind, ParsedItem, ParsedReceipt, ReceiptError, ReceiptRow, RecognizedText, RowKind,
@@ -38,8 +39,52 @@ pub fn parse_receipt(
     let cx = Context::new(currency, &tokens);
 
     let mut reader = Reader::new(currency, rows.len());
+    // Rows of text only right above, which may name prices printed below.
+    let mut text_above: Vec<usize> = Vec::new();
     for (index, row_tokens) in tokens.iter().enumerate() {
-        reader.read(index, analyze(row_tokens, &cx))?;
+        let mut line = analyze(row_tokens, &cx);
+        let mut wrapped = None;
+        if let Line::Item(draft) = &mut line
+            && !draft
+                .text
+                .split_whitespace()
+                .filter(|token| !is_currency_mark(token, currency))
+                .any(|token| token.chars().any(char::is_alphabetic))
+            && let Some(&above) = text_above.last()
+        {
+            take_name_from_above(draft, &rows[above].text, &cx);
+            wrapped = Some(above);
+        }
+        // `1 x 469,99 469,99` below a name and its article and serial
+        // numbers: a quantity row with its own total and nothing priced
+        // above it is the item of that name.
+        if let Line::Quantity(draft) = &line
+            && row_tokens
+                .iter()
+                .filter(|token| cx.price(token).is_some())
+                .count()
+                >= 2
+            && let Some(above) = name_row(&text_above, &tokens)
+        {
+            let mut draft = draft.clone();
+            draft.text = rows[above].text.clone();
+            line = Line::Item(draft);
+            wrapped = Some(above);
+        }
+        if matches!(line, Line::Plain) && rows[index].text.chars().any(char::is_alphabetic) {
+            text_above.push(index);
+        } else {
+            text_above.clear();
+        }
+        let items_before = reader.items.len();
+        reader.read(index, line)?;
+        if let Some(above) = wrapped
+            && reader.items.len() > items_before
+            && let Some(item) = reader.items.last_mut()
+        {
+            item.rows.insert(0, above);
+            reader.kinds[above] = RowKind::Item;
+        }
     }
     reader.close_items();
     reader.close_sums()?;
@@ -162,8 +207,14 @@ const KEYWORDS: &[(&[&str], Keyword)] = &[
     (&["change"], Keyword::Change),
 ];
 
+/// A word with this many digits is a code (article, EAN, serial number),
+/// not part of an article name.
+const CODE_DIGITS: usize = 5;
+
 /// First words of VAT rows without a percentage (`enth. MwSt 1,59`).
 const TAX_WORDS: &[&str] = &[
+    "netto",
+    "brutto",
     "mwst",
     "ust",
     "mehrwertsteuer",
@@ -176,6 +227,16 @@ const TAX_WORDS: &[&str] = &[
 ];
 
 fn keyword(tokens: &[&str]) -> Option<Keyword> {
+    leading_keyword(tokens).or_else(|| {
+        // A speck in front of the word, read as a letter (`E Summe 34,09`).
+        let (first, rest) = tokens.split_first()?;
+        (keyword_form(first).chars().count() == 1)
+            .then(|| leading_keyword(rest))
+            .flatten()
+    })
+}
+
+fn leading_keyword(tokens: &[&str]) -> Option<Keyword> {
     let words: Vec<String> = tokens
         .iter()
         .map(|token| keyword_form(token))
@@ -259,6 +320,16 @@ fn item_or_quantity(tokens: &[&str], cx: &Context) -> Line {
     }
 
     let mut head: Vec<&str> = tokens[..end].to_vec();
+    if let &[total] = prices.as_slice()
+        && let Some((quantity, unit)) = take_unit_price_times(&mut head, cx, total)
+    {
+        return Line::Item(Draft {
+            text: head.join(" "),
+            quantity: Some(quantity),
+            unit: quantity_fits(quantity, unit, total).then_some(unit),
+            total,
+        });
+    }
     let marker = take_quantity_suffix(&mut head).or_else(|| take_quantity_prefix(&mut head));
     let resolved = match (marker, prices.as_slice()) {
         (Some(Marker::PerUnit(q)), &[unit]) => {
@@ -311,6 +382,85 @@ fn take_quantity_suffix(head: &mut Vec<&str>) -> Option<Marker> {
         return Some(Marker::Count(quantity));
     }
     None
+}
+
+/// `Mül.Froop 0,39 € x 3 1,17`: unit price, multiplication sign and count
+/// between the text and the line total, as Edeka prints them. A count lost
+/// in recognition (`… 0,89 € x 1,78`) follows from the total if it divides
+/// evenly. Returns count and unit price and removes them from `head`.
+fn take_unit_price_times(head: &mut Vec<&str>, cx: &Context, total: i64) -> Option<(Decimal, i64)> {
+    let count = head.last().and_then(|token| parse_count(token));
+    // `x`, or `€x` with the currency glued on.
+    let times = |token: &str| {
+        is_times(token)
+            || token.char_indices().nth(1).is_some_and(|(split, _)| {
+                is_currency_mark(&token[..split], cx.currency) && is_times(&token[split..])
+            })
+    };
+    // Index of the multiplication sign, then of the unit price before it.
+    let mut at = head.len() - usize::from(count.is_some());
+    if at == 0 || !times(head[at - 1]) {
+        return None;
+    }
+    at -= 1;
+    if at > 0 && is_currency_mark(head[at - 1], cx.currency) {
+        at -= 1;
+    }
+    // Some text must stay in front of the unit price.
+    if at < 2 {
+        return None;
+    }
+    at -= 1;
+    let unit = cx.price(head[at]).filter(|unit| *unit > 0)?;
+    let quantity = match count {
+        Some(count) => count,
+        None => Decimal::from(exact_count(total, unit)?),
+    };
+    head.truncate(at);
+    Some((quantity, unit))
+}
+
+/// `total / unit` when it is a whole number of at least 1.
+fn exact_count(total: i64, unit: i64) -> Option<i64> {
+    (unit > 0 && total % unit == 0 && total / unit > 0).then(|| total / unit)
+}
+
+/// Invoices print the name on its own row and below it `1,0 34,99 EUR
+/// 34,99 EUR` (quantity, unit price, total). The prices row becomes the
+/// item, named by the row above; a leading quantity and unit price that
+/// explain the total are kept as such.
+fn take_name_from_above(draft: &mut Draft, above: &str, cx: &Context) {
+    let tokens: Vec<&str> = draft
+        .text
+        .split_whitespace()
+        .filter(|token| !is_currency_mark(token, cx.currency))
+        .collect();
+    if draft.quantity.is_none()
+        && let [quantity, unit] = tokens.as_slice()
+        && let (Some(quantity), Some(unit)) = (parse_quantity(quantity), cx.price(unit))
+        && quantity_fits(quantity, unit, draft.total)
+    {
+        draft.quantity = Some(quantity);
+        draft.unit = Some(unit);
+    }
+    draft.text = above.to_string();
+}
+
+/// Of the text rows right above some prices, the one naming the article:
+/// the closest without a code (article number, EAN, serial number), else
+/// the closest.
+fn name_row(text_above: &[usize], tokens: &[Vec<&str>]) -> Option<usize> {
+    let has_code = |row: usize| {
+        tokens[row]
+            .iter()
+            .any(|token| token.chars().filter(char::is_ascii_digit).count() >= CODE_DIGITS)
+    };
+    text_above
+        .iter()
+        .rev()
+        .find(|&&row| !has_code(row))
+        .or_else(|| text_above.last())
+        .copied()
 }
 
 /// `2 x Cola …` or `2x Cola …`: a count in front of the text.
@@ -661,6 +811,53 @@ mod tests {
     }
 
     #[test]
+    fn name_above_article_and_serial_numbers() {
+        // Smyths: name between article number and serial number, prices
+        // in a row of their own below.
+        let r = receipt(&[
+            "Steuernummer: DE325778210",
+            "EUR",
+            "Art/EAN 249691",
+            "Nintendo Switch 2 Konsol",
+            "Seriennr.: HAE10473970120",
+            "1 × 469,99 469,99 G",
+            "Art/EAN 8044881",
+            "SMYTHS TOYS TRAGETASCHE",
+            "1 × 1,00 1,00 G",
+            "SUMME [2] EUR 470,99",
+        ]);
+        assert_eq!(
+            items(&r),
+            [
+                ("Nintendo Switch 2 Konsol", dec("1"), Some(46999), 46999),
+                ("SMYTHS TOYS TRAGETASCHE", dec("1"), Some(100), 100)
+            ]
+        );
+        assert_eq!(r.items[0].rows, [3, 5]);
+        assert_eq!(r.check, TotalCheck::Matches);
+
+        // A quantity row without its own total still waits for the item
+        // below it.
+        let r = receipt(&["BÄCKEREI", "2 x 0,49", "Joghurt 0,98", "Summe 0,98"]);
+        assert_eq!(items(&r), [("Joghurt", dec("2"), Some(49), 98)]);
+    }
+
+    #[test]
+    fn speck_before_the_total_word() {
+        let r = receipt(&[
+            "Filter 9,99",
+            "SUMME EUR 9,99",
+            "MwSt.-Senkung -0,88",
+            "E Summe EUR 9,11",
+        ]);
+        assert_eq!(r.total.map(|m| m.amount_minor()), Some(911));
+        assert_eq!(r.check, TotalCheck::Matches);
+        // A one-letter word is not ignored in front of other text.
+        let r = receipt(&["A Milch 1,00", "Summe 1,00"]);
+        assert_eq!(items(&r), [("A Milch", Decimal::ONE, Some(100), 100)]);
+    }
+
+    #[test]
     fn quantity_row_below_item() {
         let r = receipt(&["Joghurt 0,98 A", "2 X 0,49", "Summe 0,98"]);
         assert_eq!(items(&r), [("Joghurt", dec("2"), Some(49), 98)]);
@@ -720,6 +917,52 @@ mod tests {
                 ("Kaffee", dec("4"), Some(250), 1000),
             ]
         );
+        assert_eq!(r.check, TotalCheck::Matches);
+    }
+
+    #[test]
+    fn unit_price_before_the_count() {
+        // Edeka: unit price, `€ x`, count, total; recognition sometimes
+        // loses the count or glues `€x` together.
+        let r = receipt(&[
+            "Mül.Froop 0,39 € x 3 1,17 AW",
+            "G&G Rahmspina 0,89 € x 1,78 A",
+            "B10E H-Milch 1,15 €X 4 4,60 A",
+            "Pfand 0,15*A",
+            "Leergut -0,25*B",
+            "Summe 7,45",
+        ]);
+        assert_eq!(
+            items(&r),
+            [
+                ("Mül.Froop", dec("3"), Some(39), 117),
+                ("G&G Rahmspina", dec("2"), Some(89), 178),
+                ("B10E H-Milch", dec("4"), Some(115), 460),
+                ("Pfand", Decimal::ONE, Some(15), 15),
+                ("Leergut", Decimal::ONE, Some(-25), -25),
+            ]
+        );
+        assert_eq!(r.check, TotalCheck::Matches);
+    }
+
+    #[test]
+    fn invoice_with_the_name_above_its_prices() {
+        let r = receipt(&[
+            "Rechnung",
+            "Datum: 02.10.2026",
+            "1 Nintendo Captain Toad",
+            "1,0 34,99 EUR 34,99 EUR",
+            "Netto: 29,40 EUR",
+            "19,00% MWSt: 5,59 EUR",
+            "Endbetrag: 34,99 EUR",
+        ]);
+        assert_eq!(
+            items(&r),
+            [("1 Nintendo Captain Toad", dec("1.0"), Some(3499), 3499)]
+        );
+        assert_eq!(r.items[0].rows, [2, 3]);
+        assert_eq!(r.rows[2].kind, RowKind::Item);
+        assert_eq!(r.rows[4].kind, RowKind::Tax);
         assert_eq!(r.check, TotalCheck::Matches);
     }
 

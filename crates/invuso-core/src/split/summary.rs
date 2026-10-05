@@ -135,6 +135,7 @@ mod tests {
                     amount: Money::new(*amount, total.currency()),
                 })
                 .collect(),
+            line_items: Vec::new(),
         }
     }
 

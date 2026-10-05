@@ -12,14 +12,18 @@ use dioxus_free_icons::{
 };
 use invuso_core::Decimal;
 use invuso_core::domain::{
-    Category, Currency, Expense, ExpenseError, ExpenseId, Group, GroupId, GroupMember, Money,
-    PaymentMethod, PaymentMethodId, Person, PersonId, is_iso_date, validate_participants,
-    validate_payments, validate_split,
+    Category, Currency, Expense, ExpenseError, ExpenseId, ExpenseSource, Group, GroupId,
+    GroupMember, LineItem, LineItemError, Money, PaymentMethod, PaymentMethodId, Person, PersonId,
+    is_iso_date, validate_participants, validate_payments, validate_split,
 };
 use invuso_core::fx;
+use invuso_core::receipt::ParsedReceipt;
 use invuso_core::split::allocate;
 
 use super::detail::ReceiptCard;
+use super::items::{
+    self, ItemAction, ItemDraft, ItemSheet, ReceiptItems, drafts_from_parsed, drafts_from_saved,
+};
 use super::recognition::ReceiptRecognition;
 use super::split::{ShareRow, SplitDraft, SplitKind, split_error_text, sum_hint};
 use crate::Route;
@@ -63,6 +67,9 @@ struct FormData {
     /// Receipt attached to the expense (RCP-03): the saved one when
     /// editing, or the one just photographed (`/scan`).
     receipt: Option<ReceiptFiles>,
+    /// Opened to check a scanned receipt (idee.md 7.2 step 5): starts
+    /// split by line items and saves the expense as scanned.
+    review: bool,
 }
 
 /// Someone who paid (part of) the expense (EXP-02, EXP-03).
@@ -82,6 +89,8 @@ enum Sheet {
     AddPayer,
     /// Payment method of the payer at this index.
     Method(usize),
+    /// The line item with this key.
+    Item(u64),
 }
 
 /// `/expense/new`: records an expense by hand (EXP-01..04, EXP-06, EXP-07;
@@ -134,6 +143,30 @@ pub fn ExpenseEdit(id: String) -> Element {
     }
 }
 
+/// `/scan/:receipt_id/review`: the review of a scanned receipt (idee.md
+/// 7.2 steps 5–6, OCR-30..35): the expense form with the receipt, its
+/// recognized positions to correct and assign, split by line items.
+#[component]
+pub fn ReceiptReview(receipt_id: String) -> Element {
+    let db = use_context::<Db>();
+    let data = use_hook(|| {
+        load(&db, None, None, Some(&receipt_id))
+            .map(|data| FormData {
+                review: true,
+                ..data
+            })
+            .map_err(|e| e.to_string())
+    });
+
+    rsx! {
+        TopBar { title: t!("page.receipt_review").to_string(), show_back: true }
+        match data {
+            Err(message) => rsx! { LoadError { message } },
+            Ok(data) => rsx! { ExpenseForm { data } },
+        }
+    }
+}
+
 #[component]
 fn LoadError(message: String) -> Element {
     rsx! {
@@ -153,6 +186,7 @@ fn ExpenseForm(data: FormData) -> Element {
     let nav = use_navigator();
     let existing = data.existing.clone();
     let editing = existing.is_some();
+    let review = data.review;
     let opened_from = data.opened_from.clone();
 
     let initial_people =
@@ -198,8 +232,22 @@ fn ExpenseForm(data: FormData) -> Element {
             expense.total.currency(),
             NumberFormat::current(),
         ),
-        None => SplitDraft::equal(start_people.iter().map(|m| m.person.id.clone()).collect()),
+        None => {
+            let mut draft =
+                SplitDraft::equal(start_people.iter().map(|m| m.person.id.clone()).collect());
+            if review && data.group.is_some() {
+                draft.kind = SplitKind::Items;
+            }
+            draft
+        }
     });
+    let mut items = use_signal(|| {
+        existing
+            .as_ref()
+            .map(|e| drafts_from_saved(&e.line_items))
+            .unwrap_or_default()
+    });
+    let mut item_error = use_signal(|| None::<String>);
     let mut sheet = use_signal(|| None::<Sheet>);
     let mut amount_error = use_signal(|| None::<String>);
     let mut title_error = use_signal(|| None::<String>);
@@ -250,9 +298,24 @@ fn ExpenseForm(data: FormData) -> Element {
             Ok(list) => {
                 payers.set(vec![default_payer(&list, &me, &methods)]);
                 payers_manual.set(false);
-                split_draft.set(SplitDraft::equal(
-                    list.iter().map(|m| m.person.id.clone()).collect(),
-                ));
+                // A scanned receipt is split by its lines once there is a
+                // group to split it in.
+                let kind = if review && new_group.is_some() {
+                    SplitKind::Items
+                } else {
+                    split_draft.peek().kind
+                };
+                let mut draft =
+                    SplitDraft::equal(list.iter().map(|m| m.person.id.clone()).collect());
+                draft.kind = kind;
+                split_draft.set(draft);
+                // Lines can only belong to members of the new group.
+                for draft in items.write().iter_mut() {
+                    draft
+                        .item
+                        .assigned_to
+                        .retain(|person, _| list.iter().any(|m| &m.person.id == person));
+                }
                 people.set(list);
                 payers_error.set(None);
                 participants_error.set(None);
@@ -271,6 +334,8 @@ fn ExpenseForm(data: FormData) -> Element {
             payer.amount_text = fit_amount_text(&payer.amount_text, new_currency, format);
         }
         split_draft.write().fit_currency(new_currency, format);
+        let old_currency = *currency.peek();
+        items::fit_currency(&mut items.write(), old_currency, new_currency, format);
         currency.set(new_currency);
     };
 
@@ -354,9 +419,10 @@ fn ExpenseForm(data: FormData) -> Element {
                 valid = false;
             }
         }
+        let line_items = items::line_items(&items.read());
         let split = split_draft
             .read()
-            .mode(&default_weights.read(), cur, format);
+            .mode(&default_weights.read(), cur, format, &line_items);
         let split_check = match total {
             Some(total) => validate_split(total.amount_minor(), &split).map(|_| ()),
             None => validate_participants(&split.participants()),
@@ -386,6 +452,12 @@ fn ExpenseForm(data: FormData) -> Element {
                 .collect(),
             split,
             receipt_id: receipt.read().as_ref().map(|r| r.id.clone()),
+            line_items,
+            source: if review {
+                ExpenseSource::Scan
+            } else {
+                ExpenseSource::Manual
+            },
         };
         save_error.set(None);
         saving.set(true);
@@ -482,7 +554,9 @@ fn ExpenseForm(data: FormData) -> Element {
     let amounts = payer_amounts(&payer_list, manual, total_minor, cur, format);
     let paid: i64 = amounts.iter().sum();
     let draft = split_draft();
-    let split = draft.mode(&default_weights.read(), cur, format);
+    let item_list = items();
+    let line_items = items::line_items(&item_list);
+    let split = draft.mode(&default_weights.read(), cur, format, &line_items);
     let shares = if total_minor > 0 {
         validate_split(total_minor, &split).unwrap_or_default()
     } else {
@@ -502,6 +576,60 @@ fn ExpenseForm(data: FormData) -> Element {
         .filter(|p| !payer_list.iter().any(|payer| payer.person.id == p.id))
         .collect();
     let all_selected = members.iter().all(|m| selected.contains(&m.person.id));
+    let by_items = current_group.is_some() && draft.kind == SplitKind::Items;
+    // A personal expense shows the lines it has, without assigning them.
+    let show_items = by_items || (current_group.is_none() && (review || !item_list.is_empty()));
+
+    // What the recognition read fills what is still empty (idee.md 7.2
+    // step 3): the amount, in review also from the lines' sum, and the lines.
+    let on_read = move |parsed: ParsedReceipt| {
+        let total = parsed
+            .total
+            .or_else(|| parsed.items_sum().ok().filter(|_| review))
+            .filter(|total| total.amount_minor() > 0);
+        if let Some(total) = total
+            && amount_text_signal.peek().is_empty()
+        {
+            amount_text_signal.set(amount_text(total, NumberFormat::current()));
+            amount_error.set(None);
+        }
+        if items.peek().is_empty() {
+            items.set(drafts_from_parsed(&parsed));
+        }
+    };
+
+    let add_item = move |_| {
+        let draft = ItemDraft::new(LineItem {
+            quantity: Decimal::ONE,
+            edited_by_user: true,
+            ..LineItem::default()
+        });
+        let key = draft.key;
+        items.write().push(draft);
+        item_error.set(None);
+        sheet.set(Some(Sheet::Item(key)));
+    };
+
+    let mut change_item = move |(key, line): (u64, LineItem)| {
+        if let Some(draft) = items.write().iter_mut().find(|d| d.key == key) {
+            draft.item = line;
+        }
+        participants_error.set(None);
+    };
+
+    let mut item_action = move |(key, action): (u64, ItemAction)| {
+        let outcome = items::apply(&mut items.write(), key, action);
+        match outcome {
+            Ok(stay) => {
+                item_error.set(None);
+                if !stay {
+                    sheet.set(None);
+                }
+            }
+            Err(error) => item_error.set(Some(item_error_text(&error))),
+        }
+        participants_error.set(None);
+    };
 
     rsx! {
         div { class: "mx-4 flex flex-col gap-5 pt-4 pb-8 safe-area-x",
@@ -586,13 +714,7 @@ fn ExpenseForm(data: FormData) -> Element {
                                 key: "{attached.id}",
                                 receipt_id: attached.id.clone(),
                                 currency,
-                                on_total: move |total: Money| {
-                                    // Only fills an empty amount; anything typed wins.
-                                    if amount_text_signal.peek().is_empty() && total.amount_minor() > 0 {
-                                        amount_text_signal.set(amount_text(total, NumberFormat::current()));
-                                        amount_error.set(None);
-                                    }
-                                },
+                                on_read,
                             }
                             button {
                                 class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-floral-white-300 active:bg-jet-black-800 transition-colors",
@@ -752,7 +874,10 @@ fn ExpenseForm(data: FormData) -> Element {
                             }
                         }
                     }
-                    if draft.kind == SplitKind::Equal {
+                    if by_items {
+                        p { class: "px-1 text-sm text-floral-white-400", {t!("items.participants_hint").to_string()} }
+                    }
+                    if draft.kind == SplitKind::Equal || draft.kind == SplitKind::Items {
                         div { class: "overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900 py-1",
                             PersonPicker {
                                 multiple: true,
@@ -814,6 +939,20 @@ fn ExpenseForm(data: FormData) -> Element {
                 }
                 if let Some(error) = participants_error() {
                     p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
+                }
+            }
+            if show_items {
+                ReceiptItems {
+                    items: item_list.clone(),
+                    currency: cur,
+                    total,
+                    people: members.iter().map(|m| m.person.clone()).collect::<Vec<_>>(),
+                    assignable: by_items,
+                    on_open: move |key| {
+                        item_error.set(None);
+                        sheet.set(Some(Sheet::Item(key)));
+                    },
+                    on_add: add_item,
                 }
             }
             ErrorBanner { error: save_error() }
@@ -910,8 +1049,36 @@ fn ExpenseForm(data: FormData) -> Element {
                 },
                 None => rsx! {},
             },
+            Some(Sheet::Item(key)) => {
+                let index = item_list.iter().position(|d| d.key == key);
+                match index {
+                    Some(index) => rsx! {
+                        ItemSheet {
+                            key: "{key}",
+                            draft: item_list[index].clone(),
+                            currency: cur,
+                            members: members.clone(),
+                            assignable: by_items,
+                            has_previous: index > 0,
+                            has_next: index + 1 < item_list.len(),
+                            error: item_error(),
+                            on_change: move |line| change_item((key, line)),
+                            on_action: move |action| item_action((key, action)),
+                            on_close: move |_| sheet.set(None),
+                        }
+                    },
+                    None => rsx! {},
+                }
+            }
             None => rsx! {},
         }
+    }
+}
+
+fn item_error_text(error: &LineItemError) -> String {
+    match error {
+        LineItemError::CannotSplit => t!("items.cannot_split").to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -1169,6 +1336,7 @@ fn load(
         currency,
         existing,
         opened_from,
+        review: false,
     })
 }
 

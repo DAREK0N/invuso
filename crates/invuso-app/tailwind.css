@@ -236,6 +236,18 @@ html:has(#invuso-sheet-backdrop) {
     user-select: none;
 }
 
+/* Torn paper edges of the line item list (AP-19, receipt look): a row of
+   triangles in the paper color, pointing up above it and down below it. */
+.receipt-edge-top {
+    background: conic-gradient(from 135deg at top, var(--color-floral-white-50) 90deg, transparent 0)
+        0 0 / 1rem 100% repeat-x;
+}
+
+.receipt-edge-bottom {
+    background: conic-gradient(from -45deg at bottom, var(--color-floral-white-50) 90deg, transparent 0)
+        0 0 / 1rem 100% repeat-x;
+}
+
 .app-focus-content-inset {
     padding-bottom: calc(1.5rem + var(--safe-area-bottom));
 }

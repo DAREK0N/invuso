@@ -12,10 +12,14 @@ pub(super) struct Row {
 
 /// Groups fragments into rows, top to bottom.
 ///
-/// A fragment joins the row above when its centre is less than half a
-/// fragment height away from the row's mean centre; the smaller of the two
-/// heights counts, so one tall box cannot swallow its neighbours. Integer
-/// arithmetic only, so every platform groups identically.
+/// A fragment joins a row when its centre is less than half a fragment
+/// height away from the row's mean centre; the smaller of the two heights
+/// counts, so one tall box cannot swallow its neighbours. A row never takes
+/// a fragment that lies in the same column as one it already has: on
+/// curved paper the price of the next row may sort in before, and two
+/// prices side by side would ruin both rows. Of the last [`OPEN_ROWS`]
+/// rows the closest fitting one wins. Integer arithmetic only, so every
+/// platform groups identically.
 pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
     let mut sorted: Vec<&RecognizedText> = fragments
         .iter()
@@ -25,13 +29,15 @@ pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
 
     let mut rows: Vec<Vec<&RecognizedText>> = Vec::new();
     for fragment in sorted {
-        if let Some(row) = rows.last_mut()
-            && belongs_to(row, fragment)
-        {
-            row.push(fragment);
-            continue;
+        let open = rows.len().saturating_sub(OPEN_ROWS);
+        let best = (open..rows.len())
+            .filter(|&i| !shares_column(&rows[i], fragment))
+            .filter_map(|i| distance(&rows[i], fragment).map(|d| (d, i)))
+            .min();
+        match best {
+            Some((_, i)) => rows[i].push(fragment),
+            None => rows.push(vec![fragment]),
         }
-        rows.push(vec![fragment]);
     }
 
     rows.into_iter()
@@ -52,7 +58,12 @@ pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
         .collect()
 }
 
-fn belongs_to(row: &[&RecognizedText], fragment: &RecognizedText) -> bool {
+/// How many of the newest rows a fragment may still join.
+const OPEN_ROWS: usize = 3;
+
+/// How far the fragment's centre is from the row's mean centre, relative
+/// to the row (scaled by 2n), if it is close enough to join.
+fn distance(row: &[&RecognizedText], fragment: &RecognizedText) -> Option<i64> {
     let n = row.len() as i64;
     let top_sum: i64 = row.iter().map(|f| i64::from(f.bbox.top)).sum();
     let bottom_sum: i64 = row.iter().map(|f| i64::from(f.bbox.bottom)).sum();
@@ -60,7 +71,21 @@ fn belongs_to(row: &[&RecognizedText], fragment: &RecognizedText) -> bool {
     // |centre − mean centre| < min(height, mean height) / 2
     let distance = (n * fragment.bbox.center_y2() - (top_sum + bottom_sum)).abs();
     let limit = (n * fragment.bbox.height()).min(bottom_sum - top_sum);
-    distance < limit
+    // Compared across rows of different sizes, so per fragment.
+    (distance < limit).then(|| distance / n)
+}
+
+/// Whether the fragment overlaps a fragment of the row horizontally by
+/// more than a third of the narrower one.
+fn shares_column(row: &[&RecognizedText], fragment: &RecognizedText) -> bool {
+    row.iter().any(|other| {
+        let overlap =
+            fragment.bbox.right.min(other.bbox.right) - fragment.bbox.left.max(other.bbox.left);
+        let narrower = (fragment.bbox.right - fragment.bbox.left)
+            .min(other.bbox.right - other.bbox.left)
+            .max(1);
+        overlap * 3 > narrower
+    })
 }
 
 #[cfg(test)]
@@ -115,6 +140,19 @@ mod tests {
             frag(0, 150, 300, 190, "Milch"),
         ]);
         assert_eq!(texts(&rows), ["Brot 2,49", "Milch"]);
+    }
+
+    #[test]
+    fn two_prices_of_one_column_never_share_a_row() {
+        // Crumpled paper: the second price sits higher than its name and
+        // sorts in before it.
+        let rows = group_rows(&[
+            frag(0, 100, 300, 150, "Leergut A"),
+            frag(600, 108, 700, 158, "-1,25"),
+            frag(600, 140, 700, 190, "-9,83"),
+            frag(0, 152, 300, 202, "Leergut B"),
+        ]);
+        assert_eq!(texts(&rows), ["Leergut A -1,25", "Leergut B -9,83"]);
     }
 
     #[test]

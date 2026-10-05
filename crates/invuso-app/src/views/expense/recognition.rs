@@ -3,7 +3,7 @@ use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{LdCircleAlert, LdRotateCcw, LdScanText, LdTriangleAlert},
 };
-use invuso_core::domain::{Currency, Money};
+use invuso_core::domain::Currency;
 use invuso_core::receipt::{ParsedReceipt, TotalCheck, parse_receipt};
 
 use crate::format::{NumberFormat, format_money};
@@ -13,13 +13,14 @@ use crate::storage::Db;
 
 /// Text recognition of the attached receipt (OCR-01, idee.md 7.2 steps
 /// 2–3): starts it unless it ran before, shows its progress while the form
-/// stays usable, then what the parser read. Offers the recognized total
-/// once through `on_total`, so an empty amount can take it.
+/// stays usable, then what the parser read. Hands what was read to the
+/// form once through `on_read` (idee.md 7.2 step 3), so it can fill an
+/// empty amount and the line items.
 #[component]
 pub(super) fn ReceiptRecognition(
     receipt_id: String,
     currency: ReadSignal<Currency>,
-    on_total: EventHandler<Money>,
+    on_read: EventHandler<ParsedReceipt>,
 ) -> Element {
     let db = use_context::<Db>();
     let revision = use_context::<DataRevision>();
@@ -53,12 +54,12 @@ pub(super) fn ReceiptRecognition(
 
     let mut offered = use_signal(|| false);
     use_effect(move || {
-        let total = parsed.read().as_ref().and_then(|p| p.as_ref()?.total);
-        if let Some(total) = total
+        let receipt = parsed.read().clone().flatten();
+        if let Some(receipt) = receipt
             && !*offered.peek()
         {
             offered.set(true);
-            on_total.call(total);
+            on_read.call(receipt);
         }
     });
 

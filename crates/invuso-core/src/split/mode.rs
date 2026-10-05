@@ -2,11 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rust_decimal::Decimal;
 
-use super::{SplitError, allocate};
+use super::{ItemLine, SplitError, allocate, split_by_items};
 use crate::domain::PersonId;
 
-/// How an expense without line items is shared (idee.md 8.1, SPL-01).
-/// Splitting by line items is [`split_by_items`](super::split_by_items).
+/// How an expense is shared (idee.md 8.1, SPL-01).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SplitMode {
     /// Everyone listed pays the same.
@@ -17,6 +16,13 @@ pub enum SplitMode {
     Percent(BTreeMap<PersonId, Decimal>),
     /// Fixed amounts in minor units that must add up to the total.
     Exact(BTreeMap<PersonId, i64>),
+    /// By line items (idee.md 8.2, SPL-02): `items` belong to whom they are
+    /// assigned to, unassigned ones and the rest up to the total are shared
+    /// by `participants` with their default weights.
+    Items {
+        participants: BTreeMap<PersonId, Decimal>,
+        items: Vec<ItemLine>,
+    },
 }
 
 impl SplitMode {
@@ -27,16 +33,26 @@ impl SplitMode {
             Self::Weights(_) => "weights",
             Self::Percent(_) => "percent",
             Self::Exact(_) => "exact",
+            Self::Items { .. } => "items",
         }
     }
 
     /// Everyone the expense is split between, including people whose
-    /// weight, percentage or amount is zero.
+    /// weight, percentage or amount is zero and, by items, everyone a line
+    /// is assigned to.
     pub fn participants(&self) -> BTreeSet<PersonId> {
         match self {
             Self::Equal(people) => people.clone(),
             Self::Weights(map) | Self::Percent(map) => map.keys().cloned().collect(),
             Self::Exact(map) => map.keys().cloned().collect(),
+            Self::Items {
+                participants,
+                items,
+            } => participants
+                .keys()
+                .chain(items.iter().flat_map(|item| item.assigned_to.keys()))
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -72,6 +88,10 @@ pub fn split(total: i64, mode: &SplitMode) -> Result<BTreeMap<PersonId, i64>, Sp
             }
             Ok(amounts.clone())
         }
+        SplitMode::Items {
+            participants,
+            items,
+        } => split_by_items(total, participants, items),
     }
 }
 
@@ -145,6 +165,30 @@ mod tests {
         assert_eq!(SplitMode::Percent(percents).participants(), both);
         let amounts = [(p("anna"), 5), (p("ben"), 0)].into();
         assert_eq!(SplitMode::Exact(amounts).participants(), both);
+    }
+
+    #[test]
+    fn items_mode_splits_by_assignment() {
+        // 6 beers at 4.50: Anna 2, Ben 1, Cleo 3; shared snacks 6.00.
+        let beer = ItemLine {
+            amount_minor: 2_700,
+            assigned_to: [(p("anna"), d("2")), (p("ben"), d("1")), (p("cleo"), d("3"))].into(),
+        };
+        let snacks = ItemLine {
+            amount_minor: 600,
+            assigned_to: BTreeMap::new(),
+        };
+        let mode = SplitMode::Items {
+            participants: [(p("anna"), d("1")), (p("ben"), d("1"))].into(),
+            items: vec![beer, snacks],
+        };
+        assert_eq!(mode.code(), "items");
+        assert_eq!(mode.participants(), [p("anna"), p("ben"), p("cleo")].into());
+        let result = split(3_300, &mode).unwrap();
+        assert_eq!(
+            result,
+            [(p("anna"), 1_200), (p("ben"), 750), (p("cleo"), 1_350)].into()
+        );
     }
 
     #[test]

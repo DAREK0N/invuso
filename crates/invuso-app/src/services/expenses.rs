@@ -203,6 +203,8 @@ mod tests {
             }],
             split: SplitMode::Equal(BTreeSet::from([me.id.clone()])),
             receipt_id: None,
+            line_items: Vec::new(),
+            source: invuso_core::domain::ExpenseSource::Manual,
         }
     }
 

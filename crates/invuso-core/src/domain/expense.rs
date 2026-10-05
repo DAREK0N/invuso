@@ -3,7 +3,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::{GroupId, Money, PaymentMethodId, PersonId, is_iso_date};
+use super::{GroupId, LineItem, LineItemError, Money, PaymentMethodId, PersonId, is_iso_date};
 use crate::split::{ExpenseEntry, SplitError, SplitMode, rescale, split};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -28,6 +28,8 @@ pub enum ExpenseError {
     InvalidOccurredAt(String),
     #[error("unknown expense source `{0}`")]
     UnknownSource(String),
+    #[error(transparent)]
+    LineItem(#[from] LineItemError),
 }
 
 /// Identifier of an `Expense` (idee.md 4.1).
@@ -135,6 +137,9 @@ pub struct Expense {
     /// Archived receipt the expense was recorded from or with (RCP-03).
     pub receipt_id: Option<String>,
     pub payments: Vec<ExpensePayment>,
+    /// Positions in receipt order (idee.md 4.1 `LineItem`); kept with any
+    /// split mode, `SplitMode::Items` splits by them.
+    pub line_items: Vec<LineItem>,
 }
 
 impl Expense {
@@ -293,6 +298,7 @@ mod tests {
             source: ExpenseSource::Manual,
             receipt_id: None,
             payments: Vec::new(),
+            line_items: Vec::new(),
         }
     }
 

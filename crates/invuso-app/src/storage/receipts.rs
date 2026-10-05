@@ -238,6 +238,17 @@ impl Db {
     }
 }
 
+/// Marks an analyzed receipt as checked by the user (status `reviewed`,
+/// idee.md 4.1 "geprüft"); a receipt never analyzed stays as it is.
+pub(super) fn mark_reviewed(conn: &Connection, id: &str, now: i64) -> Result<(), StorageError> {
+    conn.execute(
+        "UPDATE receipt SET status = 'reviewed', updated_at = ?2
+         WHERE id = ?1 AND status = 'analyzed' AND deleted_at IS NULL",
+        params![id, now],
+    )?;
+    Ok(())
+}
+
 /// A new expense may only take a receipt that exists and no other expense
 /// holds; one receipt belongs to one expense (idee.md 4.2).
 pub(super) fn check_unattached(conn: &Connection, id: &str) -> Result<(), StorageError> {

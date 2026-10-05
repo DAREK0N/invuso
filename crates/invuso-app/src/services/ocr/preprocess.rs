@@ -74,8 +74,40 @@ pub(super) fn stretch_contrast(image: &mut RgbImage) {
     }
 }
 
+/// Brightness that separates a bright receipt from the background it lies
+/// on (Otsu's threshold over the whole photo).
+pub(super) fn paper_threshold(image: &RgbImage) -> u8 {
+    let mut histogram = [0u64; 256];
+    for pixel in image.pixels() {
+        histogram[luma(pixel.0) as usize] += 1;
+    }
+    let total: u64 = histogram.iter().sum();
+    let weighted: f64 = histogram
+        .iter()
+        .enumerate()
+        .map(|(v, &n)| v as f64 * n as f64)
+        .sum();
+    let (mut below, mut below_weighted) = (0u64, 0f64);
+    let (mut best, mut best_variance) = (0u8, 0f64);
+    for (value, &count) in histogram.iter().enumerate() {
+        below += count;
+        below_weighted += value as f64 * count as f64;
+        let above = total - below;
+        if below == 0 || above == 0 {
+            continue;
+        }
+        let mean_below = below_weighted / below as f64;
+        let mean_above = (weighted - below_weighted) / above as f64;
+        let variance = below as f64 * above as f64 * (mean_below - mean_above).powi(2);
+        if variance > best_variance {
+            (best, best_variance) = (value as u8, variance);
+        }
+    }
+    best
+}
+
 /// Integer luma (ITU-R BT.601).
-fn luma([r, g, b]: [u8; 3]) -> u8 {
+pub(super) fn luma([r, g, b]: [u8; 3]) -> u8 {
     ((299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000) as u8
 }
 

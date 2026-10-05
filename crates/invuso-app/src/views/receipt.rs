@@ -25,8 +25,8 @@ enum ScanState {
 }
 
 /// `/scan?source=…`: opens the camera or the photo picker right away,
-/// archives the image (idee.md 7.2 steps 1–2) and continues to a new
-/// expense with the receipt attached (RCP-01..03). Backing out of the
+/// archives the image (idee.md 7.2 steps 1–2) and continues to its review
+/// (step 5, `ReceiptReview`), where text recognition runs (RCP-01..03). Backing out of the
 /// picker returns to where the plus button was tapped.
 #[component]
 pub fn Scan(source: String) -> Element {
@@ -45,9 +45,8 @@ pub fn Scan(source: String) -> Element {
         spawn(async move {
             match capture_receipt(db, kind).await {
                 Ok(Some(receipt)) => {
-                    nav.replace(Route::ExpenseNew {
-                        group: String::new(),
-                        receipt: receipt.id,
+                    nav.replace(Route::ReceiptReview {
+                        receipt_id: receipt.id,
                     });
                 }
                 Ok(None) if nav.can_go_back() => nav.go_back(),
@@ -96,11 +95,6 @@ pub fn Scan(source: String) -> Element {
             },
         }
     }
-}
-
-#[component]
-pub fn ReceiptReview(receipt_id: String) -> Element {
-    rsx! { PlaceholderPage { title: t!("page.receipt_review").to_string(), show_back: true } }
 }
 
 #[component]

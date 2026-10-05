@@ -35,11 +35,14 @@ const MAX_QUANTITY_DIGITS: usize = 9;
 /// thousands.
 pub(super) fn parse_price(token: &str, currency: Currency) -> Option<Price> {
     let mut rest = token.trim();
-    // IKEA prints the tax class right after the trailing minus: `9,99-A`.
-    if let Some(stripped) = rest.strip_suffix(|c: char| c.is_ascii_uppercase())
-        && stripped.ends_with('-')
-    {
-        rest = stripped;
+    // Tax classes glued to the amount: IKEA's `9,99-A`, Edeka's `0,15*A`
+    // (`*` = not discountable) and `-9,83*B`, or plain `2,99A`, `1,00AW`.
+    let without_class = rest.trim_end_matches(|c: char| c.is_ascii_uppercase());
+    if (rest.len() - without_class.len()) <= 2 {
+        let without_star = without_class.strip_suffix('*').unwrap_or(without_class);
+        if without_star.ends_with(|c: char| c.is_ascii_digit() || c == '-') {
+            rest = without_star;
+        }
     }
 
     let mut negative = false;
@@ -187,8 +190,14 @@ pub(super) fn quantity_after_times(token: &str) -> Option<Decimal> {
 }
 
 /// Tokens printed after the price that carry no amount: tax classes
-/// (`A`, `B`, `AW`, `*`), currency marks and per-unit marks (`EUR/kg`).
+/// (`A`, `B`, `AW`, `*`), currency marks and per-unit marks (`EUR/kg`),
+/// and specks the recognizer read as a single foreign character (`不`).
 pub(super) fn is_trailing_mark(token: &str, currency: Currency) -> bool {
+    let is_speck =
+        token.chars().count() == 1 && !token.is_ascii() && !is_currency_mark(token, currency);
+    if is_speck {
+        return true;
+    }
     let is_tax_class =
         (1..=2).contains(&token.len()) && token.chars().all(|c| c.is_ascii_uppercase());
     let is_per_unit = token.split_once('/').is_some_and(|(money, unit)| {
@@ -295,6 +304,13 @@ mod tests {
                 trailing_minus: true
             }
         );
+        // Edeka glues the tax class on, with `*` for "not discountable".
+        assert_eq!(eur("0,15*A"), Some(15));
+        assert_eq!(eur("-9,83*B"), Some(-983));
+        assert_eq!(eur("2,99A"), Some(299));
+        assert_eq!(eur("1,00AW"), Some(100));
+        assert_eq!(eur("0,15*"), Some(15));
+        assert_eq!(eur("1,00ABC"), None);
         let deposit = parse_price("0,25-", cur("EUR")).unwrap();
         assert_eq!(
             deposit,
@@ -349,6 +365,16 @@ mod tests {
         assert_eq!(quantity_after_times("×3"), Some(dec("3")));
         assert_eq!(quantity_after_times("x0,5"), None);
         assert_eq!(parse_count("10,4"), None);
+    }
+
+    #[test]
+    fn single_foreign_specks_after_a_price_are_marks() {
+        assert!(is_trailing_mark("不", cur("EUR")));
+        assert!(is_trailing_mark("，", cur("EUR")));
+        // The yen sign is a currency mark, not a speck; words stay words.
+        assert!(is_trailing_mark("円", cur("JPY")));
+        assert!(!is_trailing_mark("合計", cur("JPY")));
+        assert!(!is_trailing_mark("1", cur("EUR")));
     }
 
     #[test]

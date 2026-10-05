@@ -39,6 +39,9 @@ pub fn split_by_items(
     }
 
     let mut shares: BTreeMap<PersonId, i64> = participants.keys().map(|p| (p.clone(), 0)).collect();
+    // Lines with the same holders are added up before rounding, so the
+    // rest units of many small lines do not all land on the same people.
+    let mut pooled: BTreeMap<&BTreeMap<PersonId, Decimal>, i64> = BTreeMap::new();
     let mut items_sum = 0_i64;
     for item in items {
         let weights = if item.assigned_to.is_empty() {
@@ -46,12 +49,18 @@ pub fn split_by_items(
         } else {
             &item.assigned_to
         };
-        for (person, amount) in allocate(item.amount_minor, weights)? {
-            add(&mut shares, person, amount)?;
-        }
+        let pool = pooled.entry(weights).or_insert(0);
+        *pool = pool
+            .checked_add(item.amount_minor)
+            .ok_or(SplitError::Overflow)?;
         items_sum = items_sum
             .checked_add(item.amount_minor)
             .ok_or(SplitError::Overflow)?;
+    }
+    for (weights, amount) in pooled {
+        for (person, part) in allocate(amount, weights)? {
+            add(&mut shares, person, part)?;
+        }
     }
 
     let rest = total.checked_sub(items_sum).ok_or(SplitError::Overflow)?;
@@ -165,6 +174,28 @@ mod tests {
             result.values().copied().collect::<Vec<_>>(),
             [334, 333, 333]
         );
+    }
+
+    #[test]
+    fn small_shared_lines_are_rounded_together() {
+        // Each line alone would give its rest cent to Anna (and Ben):
+        // 0.50/0.50/0.49 + 1.33×3 + 0.20/0.20/0.19 + 0.33×3 → 2.36/2.36/2.34.
+        let items = [general(149), general(399), general(59), general(99)];
+        let result = split_by_items(706, &everyone(&["anna", "ben", "cleo"]), &items).unwrap();
+        assert_eq!(
+            result.values().copied().collect::<Vec<_>>(),
+            [236, 235, 235]
+        );
+
+        // Same holders with different weights are separate pools.
+        let mut heavy = only(100, &["anna", "ben"]);
+        heavy
+            .assigned_to
+            .insert(p("anna"), Decimal::from_str("3").unwrap());
+        let items = [only(101, &["anna", "ben"]), heavy];
+        let result = split_by_items(201, &everyone(&["anna", "ben"]), &items).unwrap();
+        assert_eq!(result[&p("anna")], 51 + 75);
+        assert_eq!(result[&p("ben")], 50 + 25);
     }
 
     #[test]

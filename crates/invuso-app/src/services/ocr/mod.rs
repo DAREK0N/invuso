@@ -223,17 +223,48 @@ mod tests {
             let elapsed = started.elapsed().as_millis();
             let rows = text_rows(&text.recognized());
             std::fs::write(out.join(format!("{stem}.txt")), rows.join("\n") + "\n").unwrap();
+            let boxes: Vec<String> = text
+                .fragments
+                .iter()
+                .map(|f| {
+                    let b = f.bbox;
+                    format!(
+                        "{}\t{}\t{}\t{}\t{:.2}\t{}",
+                        b.left, b.top, b.right, b.bottom, f.confidence, f.text
+                    )
+                })
+                .collect();
+            std::fs::write(
+                out.join(format!("{stem}.boxes.tsv")),
+                boxes.join("\n") + "\n",
+            )
+            .unwrap();
             println!(
                 "{stem:22} {elapsed:>6} ms {:>4} rows, skew {:.1}°",
                 rows.len(),
                 text.skew_degrees
             );
-            if stem.starts_with("de_") {
-                german += 1;
+            // `own_*` are the user's own photos: no expected result yet, so
+            // only the parsed items are written for comparing by eye.
+            let own = stem.starts_with("own_");
+            if stem.starts_with("de_") || own {
                 let parsed =
                     parse_receipt(&text.recognized(), Currency::from_code("EUR").unwrap()).unwrap();
                 println!("    {} items, check {:?}", parsed.items.len(), parsed.check);
-                assert_eq!(parsed.check, TotalCheck::Matches, "{stem}");
+                let items: Vec<String> = parsed
+                    .items
+                    .iter()
+                    .map(|i| format!("{} | {} | {:?}", i.text, i.quantity, i.total_price))
+                    .collect();
+                std::fs::write(
+                    out.join(format!("{stem}.items.txt")),
+                    items.join("\n") + "\n",
+                )
+                .unwrap();
+                if !own {
+                    german += 1;
+                    assert_eq!(parsed.check, TotalCheck::Matches, "{stem}");
+                }
             }
         }
         assert!(german > 0, "no German samples");

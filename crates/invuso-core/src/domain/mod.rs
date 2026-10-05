@@ -3,6 +3,7 @@
 mod currency;
 mod expense;
 mod group;
+mod line_item;
 mod money;
 mod payment_method;
 mod person;
@@ -13,6 +14,7 @@ pub use expense::{
     local_date, validate_occurred_at, validate_participants, validate_payments, validate_split,
 };
 pub use group::{Group, GroupError, GroupId, GroupMember, is_iso_date, validate_period};
+pub use line_item::{LineItem, LineItemError, LineItemKind, item_lines, line_items_sum};
 pub use money::{Money, MoneyError};
 pub use payment_method::{
     PaymentMethod, PaymentMethodError, PaymentMethodId, PaymentMethodKind, validate_last4,

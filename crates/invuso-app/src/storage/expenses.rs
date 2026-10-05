@@ -3,9 +3,9 @@ use std::str::FromStr;
 
 use invuso_core::Decimal;
 use invuso_core::domain::{
-    CategoryId, Currency, Expense, ExpenseId, ExpensePayment, ExpenseSource, GroupId, Money,
-    PaymentMethod, PaymentMethodId, Person, PersonId, local_date, validate_occurred_at,
-    validate_payments, validate_split,
+    CategoryId, Currency, Expense, ExpenseError, ExpenseId, ExpensePayment, ExpenseSource, GroupId,
+    LineItem, LineItemKind, Money, PaymentMethod, PaymentMethodId, Person, PersonId, item_lines,
+    local_date, validate_occurred_at, validate_payments, validate_split,
 };
 use invuso_core::fx;
 use invuso_core::split::SplitMode;
@@ -43,6 +43,11 @@ pub struct NewExpense {
     /// Archived receipt to attach (RCP-03); only read when creating, an
     /// edit keeps the expense's receipt (replacing it is RCP-08).
     pub receipt_id: Option<String>,
+    /// Positions in order (idee.md 4.1 `LineItem`), stored with any split;
+    /// `SplitMode::Items` must be built from them (`item_lines`).
+    pub line_items: Vec<LineItem>,
+    /// Only read when creating; an edit keeps how the expense was entered.
+    pub source: ExpenseSource,
 }
 
 /// One payer of an expense as the timeline shows it (GRP-21). Names of
@@ -144,13 +149,18 @@ impl Db {
                     base.amount_minor(),
                     base.currency().code(),
                     new.split.code(),
-                    ExpenseSource::Manual.code(),
+                    new.source.code(),
                     now,
                     self.device_id(),
                     new.receipt_id
                 ],
             )?;
             insert_parts(&tx, self.device_id(), &id, &new, now)?;
+            if let Some(receipt) = &new.receipt_id {
+                // Saving the expense is the user's check of what was read
+                // (idee.md 4.1 `Receipt.status`).
+                receipts::mark_reviewed(&tx, receipt, now)?;
+            }
             // Preselection of the next expense form.
             settings::set(
                 &tx,
@@ -159,14 +169,8 @@ impl Db {
             )?;
             settings::set(&tx, LAST_EXPENSE_CURRENCY, new.total.currency().code())?;
             tx.commit()?;
-            Ok(saved(
-                id.clone(),
-                title,
-                new,
-                fx_rate_id,
-                base,
-                ExpenseSource::Manual,
-            ))
+            let source = new.source;
+            Ok(saved(id.clone(), title, new, fx_rate_id, base, source))
         })
     }
 
@@ -222,7 +226,13 @@ impl Db {
                     now
                 ],
             )?;
-            for table in ["expense_payment", "expense_share"] {
+            tx.execute(
+                "UPDATE line_item_assignment SET deleted_at = ?2, updated_at = ?2
+                 WHERE deleted_at IS NULL AND line_item_id IN
+                       (SELECT id FROM line_item WHERE expense_id = ?1 AND deleted_at IS NULL)",
+                params![id.as_str(), now],
+            )?;
+            for table in ["expense_payment", "expense_share", "line_item"] {
                 tx.execute(
                     &format!(
                         "UPDATE {table} SET deleted_at = ?2, updated_at = ?2
@@ -556,6 +566,8 @@ fn load_expenses(
         payments.entry(expense).or_default().push(payment);
     }
 
+    let mut line_items = load_line_items(conn, filter, param)?;
+
     rows.into_iter()
         .map(
             |(
@@ -574,7 +586,9 @@ fn load_expenses(
                 receipt_id,
             )| {
                 let currency = stored_currency(&currency)?;
-                let split = stored_split(&split_mode, shares.remove(&id).unwrap_or_default())?;
+                let items = line_items.remove(&id).unwrap_or_default();
+                let split =
+                    stored_split(&split_mode, shares.remove(&id).unwrap_or_default(), &items)?;
                 let payments = payments
                     .remove(&id)
                     .unwrap_or_default()
@@ -598,10 +612,119 @@ fn load_expenses(
                     source: ExpenseSource::from_code(&source)?,
                     receipt_id,
                     payments,
+                    line_items: items,
                 })
             },
         )
         .collect()
+}
+
+/// One stored `line_item` row: id, expense, texts (original, translated,
+/// user), quantity, unit and total price, kind, confidence, edited.
+type LineItemRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<i64>,
+    i64,
+    String,
+    Option<f64>,
+    bool,
+);
+
+/// The line items of the expenses matching `filter`, by expense id, in
+/// receipt order, with their assignments.
+fn load_line_items(
+    conn: &Connection,
+    filter: &str,
+    param: &str,
+) -> Result<BTreeMap<String, Vec<LineItem>>, StorageError> {
+    let number = |text: &str| {
+        Decimal::from_str(text).map_err(|_| StorageError::InvalidInput("stored number is invalid"))
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT a.line_item_id, a.person_id, a.weight
+         FROM line_item_assignment a
+         JOIN line_item l ON l.id = a.line_item_id
+         JOIN expense e ON e.id = l.expense_id
+         WHERE {filter} AND e.deleted_at IS NULL AND l.deleted_at IS NULL
+               AND a.deleted_at IS NULL"
+    ))?;
+    let mut assignments: BTreeMap<String, BTreeMap<PersonId, Decimal>> = BTreeMap::new();
+    for row in statement.query_map([param], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (item, person, weight) = row?;
+        assignments
+            .entry(item)
+            .or_default()
+            .insert(PersonId::new(person), number(&weight)?);
+    }
+
+    let mut statement = conn.prepare(&format!(
+        "SELECT l.id, l.expense_id, l.original_text, l.translated_text, l.user_text,
+                l.quantity, l.unit_price_minor, l.total_price_minor, l.kind, l.ocr_confidence,
+                l.edited_by_user
+         FROM line_item l JOIN expense e ON e.id = l.expense_id
+         WHERE {filter} AND e.deleted_at IS NULL AND l.deleted_at IS NULL
+         ORDER BY l.position, l.id"
+    ))?;
+    let rows = statement
+        .query_map([param], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+            ))
+        })?
+        .collect::<Result<Vec<LineItemRow>, _>>()?;
+
+    let mut items: BTreeMap<String, Vec<LineItem>> = BTreeMap::new();
+    for (
+        id,
+        expense,
+        original,
+        translated,
+        user,
+        quantity,
+        unit,
+        total,
+        kind,
+        confidence,
+        edited,
+    ) in rows
+    {
+        let kind = LineItemKind::from_code(&kind)
+            .map_err(|_| StorageError::InvalidInput("stored line item kind is unknown"))?;
+        items.entry(expense).or_default().push(LineItem {
+            original_text: original,
+            translated_text: translated,
+            user_text: user,
+            quantity: number(&quantity)?,
+            unit_price_minor: unit,
+            total_minor: total,
+            kind,
+            assigned_to: assignments.remove(&id).unwrap_or_default(),
+            ocr_confidence: confidence.map(|c| c as f32),
+            edited_by_user: edited,
+        });
+    }
+    Ok(items)
 }
 
 /// Checks what needs no database and returns the trimmed title.
@@ -617,6 +740,16 @@ fn validate_new(new: &NewExpense) -> Result<String, StorageError> {
         .map(|p| (p.person_id.clone(), p.amount_minor))
         .collect();
     validate_payments(new.total.amount_minor(), &payments)?;
+    for item in &new.line_items {
+        item.validate().map_err(ExpenseError::from)?;
+    }
+    if let SplitMode::Items { items, .. } = &new.split
+        && *items != item_lines(&new.line_items)
+    {
+        return Err(StorageError::InvalidInput(
+            "the split does not match the line items",
+        ));
+    }
     validate_split(new.total.amount_minor(), &new.split)?;
     Ok(title)
 }
@@ -697,6 +830,11 @@ fn insert_parts(
             .iter()
             .map(|(p, a)| (p, None, None, Some(*a)))
             .collect(),
+        // Who shares the unassigned lines; the lines follow below.
+        SplitMode::Items { participants, .. } => participants
+            .iter()
+            .map(|(p, w)| (p, decimal(w), None, None))
+            .collect(),
     };
     for (person, weight, percent, amount) in rows {
         conn.execute(
@@ -715,6 +853,48 @@ fn insert_parts(
                 device_id
             ],
         )?;
+    }
+    for (position, item) in (0_i64..).zip(&new.line_items) {
+        let item_id = new_id();
+        conn.execute(
+            "INSERT INTO line_item
+                 (id, expense_id, position, original_text, translated_text, user_text, quantity,
+                  unit_price_minor, total_price_minor, kind, ocr_confidence, edited_by_user,
+                  created_at, updated_at, origin_device_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)",
+            params![
+                item_id,
+                id.as_str(),
+                position,
+                item.original_text,
+                item.translated_text,
+                item.user_text,
+                item.quantity.normalize().to_string(),
+                item.unit_price_minor,
+                item.total_minor,
+                item.kind.code(),
+                item.ocr_confidence.map(f64::from),
+                item.edited_by_user,
+                now,
+                device_id
+            ],
+        )?;
+        for (person, weight) in &item.assigned_to {
+            conn.execute(
+                "INSERT INTO line_item_assignment
+                     (id, line_item_id, person_id, weight, created_at, updated_at,
+                      origin_device_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+                params![
+                    new_id(),
+                    item_id,
+                    person.as_str(),
+                    weight.normalize().to_string(),
+                    now,
+                    device_id
+                ],
+            )?;
+        }
     }
     Ok(())
 }
@@ -741,6 +921,7 @@ fn saved(
         split: new.split,
         source,
         receipt_id: new.receipt_id,
+        line_items: new.line_items,
         payments: new
             .payments
             .into_iter()
@@ -753,8 +934,13 @@ fn saved(
     }
 }
 
-/// Rebuilds the split from its stored code and share rows.
-fn stored_split(code: &str, rows: Vec<ShareRow>) -> Result<SplitMode, StorageError> {
+/// Rebuilds the split from its stored code and share rows; splitting by
+/// items also takes the expense's line items.
+fn stored_split(
+    code: &str,
+    rows: Vec<ShareRow>,
+    line_items: &[LineItem],
+) -> Result<SplitMode, StorageError> {
     let mismatch = || StorageError::InvalidInput("stored share does not fit its split mode");
     let decimal = |text: Option<String>| {
         text.and_then(|t| Decimal::from_str(&t).ok())
@@ -780,6 +966,12 @@ fn stored_split(code: &str, rows: Vec<ShareRow>) -> Result<SplitMode, StorageErr
                 .map(|(person, _, _, amount)| Ok((person, amount.ok_or_else(mismatch)?)))
                 .collect::<Result<_, StorageError>>()?,
         ),
+        "items" => SplitMode::Items {
+            participants: people
+                .map(|(person, weight, _, _)| Ok((person, decimal(weight)?)))
+                .collect::<Result<_, StorageError>>()?,
+            items: item_lines(line_items),
+        },
         _ => return Err(StorageError::InvalidInput("stored split mode is unknown")),
     })
 }
@@ -938,6 +1130,8 @@ mod tests {
             }],
             split: SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()])),
             receipt_id: None,
+            line_items: Vec::new(),
+            source: ExpenseSource::Manual,
         }
     }
 
@@ -1627,5 +1821,171 @@ mod tests {
         );
         assert_eq!(parties.people[&s.anna.id].name, "Anna");
         assert_eq!(parties.methods[&card.id].name, "Visa");
+    }
+
+    fn line(text: &str, quantity: &str, total: i64, kind: LineItemKind) -> LineItem {
+        LineItem {
+            original_text: text.into(),
+            quantity: d(quantity),
+            unit_price_minor: None,
+            total_minor: total,
+            kind,
+            ocr_confidence: Some(0.9),
+            ..LineItem::default()
+        }
+    }
+
+    /// 6 beers (me 2, Anna 1, Ben 3), shared crisps and a printed subtotal
+    /// that must not count; 33 € paid by me (idee.md 7.2, 8.2).
+    fn scanned(s: &Setup, ben: &PersonId, receipt: &str) -> NewExpense {
+        let mut beer = line("Bier", "6", 2_700, LineItemKind::Article);
+        beer.unit_price_minor = Some(450);
+        beer.assigned_to = BTreeMap::from([
+            (s.me.id.clone(), d("2")),
+            (s.anna.id.clone(), d("1")),
+            (ben.clone(), d("3")),
+        ]);
+        let mut crisps = line("Chips", "1", 600, LineItemKind::Article);
+        crisps.user_text = Some("Paprika-Chips".into());
+        crisps.edited_by_user = true;
+        let line_items = vec![
+            beer,
+            crisps,
+            line("Zwischensumme", "1", 3_300, LineItemKind::Ignored),
+        ];
+        let participants: BTreeMap<_, _> = [&s.me.id, &s.anna.id, ben]
+            .into_iter()
+            .map(|p| (p.clone(), Decimal::ONE))
+            .collect();
+        NewExpense {
+            title: "Kiosk".into(),
+            total: Money::new(3_300, cur("EUR")),
+            payments: vec![NewExpensePayment {
+                person_id: s.me.id.clone(),
+                payment_method_id: None,
+                amount_minor: 3_300,
+            }],
+            split: SplitMode::Items {
+                participants,
+                items: item_lines(&line_items),
+            },
+            line_items,
+            receipt_id: Some(receipt.to_string()),
+            source: ExpenseSource::Scan,
+            ..ramen(s)
+        }
+    }
+
+    #[test]
+    fn line_items_and_their_assignments_are_saved() {
+        let s = setup("EUR");
+        let ben = add_ben(&s).id;
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let receipt = s.db.create_receipt("receipts/k.jpg", None).unwrap();
+        s.db.save_receipt_text(
+            &receipt.id,
+            &crate::storage::ReceiptText::new("test", Vec::new(), 0.0),
+        )
+        .unwrap();
+
+        let saved =
+            s.db.create_expense(scanned(&s, &ben, &receipt.id), &rate)
+                .unwrap();
+        assert_eq!(saved.source, ExpenseSource::Scan);
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(saved.clone()));
+        assert_eq!(saved.line_items[1].text(), "Paprika-Chips");
+        assert_eq!(
+            group_balances(&s),
+            BTreeMap::from([
+                (s.me.id.clone(), 3_300 - 1_100),
+                (s.anna.id.clone(), -650),
+                (ben.clone(), -1_550),
+            ])
+        );
+        let status: String =
+            s.db.with(|c| {
+                Ok(c.query_row(
+                    "SELECT status FROM receipt WHERE id = ?1",
+                    [&receipt.id],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(status, "reviewed");
+
+        // Ben's beers go to Anna; the crisps are dropped.
+        let mut changed = scanned(&s, &ben, &receipt.id);
+        changed.line_items.remove(1);
+        changed.line_items[0].assigned_to = BTreeMap::from([(s.anna.id.clone(), d("1"))]);
+        changed.total = Money::new(2_700, cur("EUR"));
+        changed.payments[0].amount_minor = 2_700;
+        changed.split = SplitMode::Items {
+            participants: BTreeMap::from([(s.me.id.clone(), Decimal::ONE)]),
+            items: item_lines(&changed.line_items),
+        };
+        let updated = s.db.update_expense(&saved.id, changed, &rate).unwrap();
+        assert_eq!(updated.source, ExpenseSource::Scan);
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(updated));
+        assert_eq!(
+            group_balances(&s),
+            BTreeMap::from([(s.me.id.clone(), 2_700), (s.anna.id.clone(), -2_700)])
+        );
+        let (items, assignments): (i64, i64) =
+            s.db.with(|c| {
+                Ok(c.query_row(
+                    "SELECT (SELECT count(*) FROM line_item WHERE deleted_at IS NULL),
+                            (SELECT count(*) FROM line_item_assignment WHERE deleted_at IS NULL)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!((items, assignments), (2, 1));
+    }
+
+    #[test]
+    fn split_and_line_items_must_agree() {
+        let s = setup("EUR");
+        let ben = add_ben(&s).id;
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let receipt = s.db.create_receipt("receipts/k.jpg", None).unwrap();
+
+        let mut stale = scanned(&s, &ben, &receipt.id);
+        stale.line_items.remove(1);
+        assert!(matches!(
+            s.db.create_expense(stale, &rate),
+            Err(StorageError::InvalidInput(_))
+        ));
+
+        let mut wrong_sign = scanned(&s, &ben, &receipt.id);
+        wrong_sign.line_items[1].kind = LineItemKind::Discount;
+        wrong_sign.split = SplitMode::Items {
+            participants: BTreeMap::from([(s.me.id.clone(), Decimal::ONE)]),
+            items: item_lines(&wrong_sign.line_items),
+        };
+        assert!(matches!(
+            s.db.create_expense(wrong_sign, &rate),
+            Err(StorageError::Expense(ExpenseError::LineItem(_)))
+        ));
+
+        // Assigned people must belong to the group like everyone else.
+        let stranger =
+            s.db.create_person(NewPerson {
+                name: "Fremd".into(),
+                color: "thistle".into(),
+                is_me: false,
+                note: None,
+            })
+            .unwrap();
+        let mut outsider = scanned(&s, &ben, &receipt.id);
+        outsider.line_items[0].assigned_to = BTreeMap::from([(stranger.id, Decimal::ONE)]);
+        outsider.split = SplitMode::Items {
+            participants: BTreeMap::from([(s.me.id.clone(), Decimal::ONE)]),
+            items: item_lines(&outsider.line_items),
+        };
+        assert!(matches!(
+            s.db.create_expense(outsider, &rate),
+            Err(StorageError::InvalidInput(_))
+        ));
     }
 }

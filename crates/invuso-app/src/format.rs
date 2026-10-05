@@ -85,6 +85,17 @@ pub fn format_money(money: Money, format: NumberFormat) -> String {
     }
 }
 
+/// An amount without currency symbol, as a receipt prints it: `-1.234,56`.
+pub fn format_plain(money: Money, format: NumberFormat) -> String {
+    let sign = if money.is_negative() { "-" } else { "" };
+    let number = format_minor(
+        money.amount_minor().unsigned_abs(),
+        money.currency(),
+        format,
+    );
+    format!("{sign}{number}")
+}
+
 /// The amount alone, without symbol, e.g. `1.234,56`.
 fn format_minor(minor: u64, currency: Currency, format: NumberFormat) -> String {
     let exponent = currency.exponent();

@@ -12,6 +12,7 @@ use invuso_core::domain::{
 };
 use invuso_core::split::SplitMode;
 
+use super::items::{ReceiptItems, drafts_from_saved};
 use super::split::SplitKind;
 use crate::Route;
 use crate::clock;
@@ -53,8 +54,8 @@ enum Loaded {
 }
 
 /// `/expense/:id`: all about one expense – amounts, rate, who paid with
-/// what and everyone's share, the receipt in full screen (RCP-04) – with
-/// editing and deleting (GRP-22; line items follow with M2).
+/// what and everyone's share, its line items, the receipt in full screen
+/// (RCP-04) – with editing and deleting (GRP-22).
 #[component]
 pub fn ExpenseDetail(id: String) -> Element {
     let db = use_context::<Db>();
@@ -136,7 +137,16 @@ pub fn ExpenseDetail(id: String) -> Element {
                             ReceiptCard { receipt }
                         }
                         PaymentsSection { detail: detail.clone() }
-                        SharesSection { detail }
+                        SharesSection { detail: detail.clone() }
+                        if !expense.line_items.is_empty() {
+                            ReceiptItems {
+                                items: drafts_from_saved(&expense.line_items),
+                                currency: expense.total.currency(),
+                                total: Some(expense.total),
+                                people: detail.parties.people.values().cloned().collect::<Vec<_>>(),
+                                assignable: matches!(expense.split, SplitMode::Items { .. }),
+                            }
+                        }
                         ErrorBanner { error: delete_error() }
                         div { class: "flex gap-3",
                             Button {
@@ -457,6 +467,7 @@ fn mode_kind(mode: &SplitMode) -> SplitKind {
         SplitMode::Weights(_) => SplitKind::Weights,
         SplitMode::Percent(_) => SplitKind::Percent,
         SplitMode::Exact(_) => SplitKind::Exact,
+        SplitMode::Items { .. } => SplitKind::Items,
     }
 }
 
@@ -470,6 +481,6 @@ fn mode_note(mode: &SplitMode, person: &PersonId, format: NumberFormat) -> Optio
         SplitMode::Percent(percents) => percents
             .get(person)
             .map(|p| t!("expense_detail.percent", value = format_number(*p, format)).to_string()),
-        SplitMode::Equal(_) | SplitMode::Exact(_) => None,
+        SplitMode::Equal(_) | SplitMode::Exact(_) | SplitMode::Items { .. } => None,
     }
 }
