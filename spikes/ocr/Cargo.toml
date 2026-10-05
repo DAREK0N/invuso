@@ -1,0 +1,19 @@
+[package]
+name = "ocr-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Own workspace root: the spike is deliberately not part of the Invuso workspace.
+[workspace]
+
+[dependencies]
+ocrs = "0.13.1"
+rten = { version = "0.26.0", features = ["onnx_format"] }
+rten-tensor = "0.26.0"
+image = "0.25.10"
+anyhow = "1"
+
+# No prebuilt ONNX Runtime for x86_64 Android (emulator); on Android only rten runs.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ort = "=2.0.0-rc.13"

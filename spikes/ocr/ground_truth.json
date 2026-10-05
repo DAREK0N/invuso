@@ -1,0 +1,16 @@
+{
+  "de_lidl_aurich_01": {"total": "18,02", "items": [
+    ["Dattelcherrytomaten", "1,49"], ["Grüne Oliven o. Kern", "3,99"], ["Erbsen extra fein", "0,59"],
+    ["Gemüsemais", "0,98"], ["Milchbrötchen", "0,99"], ["B Schlafover 0301558", "4,99"], ["B Schlafover 0301438", "4,99"]]},
+  "de_lidl_hesel_01": {"total": "0,77", "items": [["Bio Gurken", "0,77"]]},
+  "de_fressnapf_2020": {"total": "34,09", "items": [
+    ["ANIO Ersatzfilter 2 Stk", "9,99"], ["ANIO Ersatzpumpe", "9,99"], ["PREM Multicat 12L", "14,99"], ["MwSt.-Senkung", "-0,88"]]},
+  "de_ikea_2009": {"total": "13,98", "items": [["BITS MAGNTAFEL", "9,99"], ["BABBLA WHITEBST", "3,99"]]},
+  "de_augustiner_2020": {"total": "23.50", "items": [["1 0,4 Schorle", "3.60"], ["1 T-RINDERSTEAK", "19.90"]]},
+  "ja_lotteria": {"total": "1,410", "items": [["贅沢ハンバーグステーキ", "1,000"], ["ポテトセット", "410"]]},
+  "ja_ohsho": {"total": "2,033", "items": [["中華そば", "748"], ["特選セットA", "1,120"], ["特セット餃子+3個", "165"]]},
+  "ja_sukiya": {"total": "320", "items": [["(ミニ)まぜのっけ朝食", "320"]]},
+  "ja_yoshinoya": {"total": "712", "items": [["牛すき鍋膳・並", "712"]]},
+  "ja_simple_2017": {"total": "620", "items": [["2", "320"], ["2", "300"]]},
+  "ja_donki": {"total": null, "items": [], "text": ["領収書", "MEGAドン・キホーテ", "大森山王店", "TEL03-3773-1721", "営業時間 8:00~翌3:00"]}
+}

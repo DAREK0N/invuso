@@ -1,0 +1,106 @@
+diff --git a/crates/invuso-app/Dioxus.toml b/crates/invuso-app/Dioxus.toml
+index 9db7a4a..c7a4ad3 100644
+--- a/crates/invuso-app/Dioxus.toml
++++ b/crates/invuso-app/Dioxus.toml
+@@ -5,3 +5,10 @@ android_main_activity = "android/MainActivity.kt"
+ [bundle]
+ identifier = "com.darekon.invuso"
+ publisher = "DAREKON"
++
++# AP-S1 spike only (to be removed): ML Kit text recognition, bundled models.
++[android]
++gradle_dependencies = [
++    "com.google.mlkit:text-recognition:16.0.1",
++    "com.google.mlkit:text-recognition-japanese:16.0.1",
++]
+diff --git a/crates/invuso-app/android/MainActivity.kt b/crates/invuso-app/android/MainActivity.kt
+index 73e4fc1..450af02 100644
+--- a/crates/invuso-app/android/MainActivity.kt
++++ b/crates/invuso-app/android/MainActivity.kt
+@@ -43,6 +43,7 @@ class MainActivity : WryActivity() {
+             InvusoChrome.configure(this)
+         } catch (_: Throwable) {
+         }
++        OcrSpike.runIfRequested(filesDir)
+     }
+ 
+     override fun onWebViewCreate(webView: WebView) {
+@@ -374,3 +375,78 @@ class ReceiptImages(private val activity: MainActivity) {
+         const val FAILED = 2
+     }
+ }
++
++/// AP-S1 spike only (to be removed): runs ML Kit text recognition over
++/// `files/ocr-spike/samples` when `files/ocr-spike/run` exists and writes the
++/// recognized lines with boxes and timings next to them. Started via adb.
++object OcrSpike {
++    fun runIfRequested(filesDir: File) {
++        val root = File(filesDir, "ocr-spike")
++        val trigger = File(root, "run")
++        if (!trigger.exists()) return
++        trigger.delete()
++        Thread {
++            try {
++                run(root)
++            } catch (error: Throwable) {
++                File(root, "error.txt").writeText(error.stackTraceToString())
++            }
++        }.start()
++    }
++
++    private fun run(root: File) {
++        val images = File(root, "samples").listFiles()
++            ?.filter { it.name.endsWith(".jpg") || it.name.endsWith(".png") }
++            ?.sortedBy { it.name }
++            ?: return
++        val engines = listOf(
++            "mlkit-latin" to com.google.mlkit.vision.text.TextRecognition.getClient(
++                com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS,
++            ),
++            "mlkit-ja" to com.google.mlkit.vision.text.TextRecognition.getClient(
++                com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions.Builder().build(),
++            ),
++        )
++        for ((name, recognizer) in engines) {
++            val out = File(root, "results/$name").apply { mkdirs() }
++            val csv = StringBuilder("image,width,height,load_ms,infer_ms,lines\n")
++            for (file in images) {
++                val t0 = SystemClock.elapsedRealtime()
++                val bitmap = decode(file) ?: continue
++                val t1 = SystemClock.elapsedRealtime()
++                val text = com.google.android.gms.tasks.Tasks.await(
++                    recognizer.process(com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)),
++                )
++                val t2 = SystemClock.elapsedRealtime()
++                val tsv = StringBuilder()
++                var lines = 0
++                for (block in text.textBlocks) {
++                    for (line in block.lines) {
++                        val box = line.boundingBox ?: continue
++                        tsv.append("${box.left}\t${box.top}\t${box.right}\t${box.bottom}\t${line.text}\n")
++                        lines++
++                    }
++                }
++                File(out, file.nameWithoutExtension + ".tsv").writeText(tsv.toString())
++                csv.append("${file.nameWithoutExtension},${bitmap.width},${bitmap.height},${t1 - t0},${t2 - t1},$lines\n")
++                bitmap.recycle()
++            }
++            File(out, "timings.csv").writeText(csv.toString())
++            recognizer.close()
++        }
++        File(root, "done").writeText("ok")
++    }
++
++    /// Same cap as the Paddle detector input: longest side at most 4000 px.
++    private fun decode(file: File): android.graphics.Bitmap? {
++        val full = android.graphics.BitmapFactory.decodeFile(file.path) ?: return null
++        val longest = maxOf(full.width, full.height)
++        if (longest <= 4000) return full
++        val scale = 4000f / longest
++        val scaled = android.graphics.Bitmap.createScaledBitmap(
++            full, Math.round(full.width * scale), Math.round(full.height * scale), true,
++        )
++        full.recycle()
++        return scaled
++    }
++}
