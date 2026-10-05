@@ -63,11 +63,12 @@ jobs:
 
       # dx builds Rust in release mode but packs with Gradle's debug type,
       # signed with a throwaway debug key; it is re-signed below.
+      # ANDROID_NDK_LATEST_HOME comes from the runner image, not the `env`
+      # context, so it is only visible inside the shell.
       - name: Bundle
         working-directory: crates/invuso-app
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           dx bundle --platform android --release --target aarch64-linux-android \
             --package-types apk --out-dir "$GITHUB_WORKSPACE/dist"
           ls -l "$GITHUB_WORKSPACE/dist"
