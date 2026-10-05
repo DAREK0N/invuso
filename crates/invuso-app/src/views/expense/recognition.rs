@@ -15,7 +15,8 @@ use crate::storage::Db;
 /// 2–3): starts it unless it ran before, shows its progress while the form
 /// stays usable, then what the parser read. Hands what was read to the
 /// form once through `on_read` (idee.md 7.2 step 3), so it can fill an
-/// empty amount and the line items.
+/// empty amount and the line items; a reading with nothing in it does not
+/// count, so a later currency change can still fill them.
 #[component]
 pub(super) fn ReceiptRecognition(
     receipt_id: String,
@@ -52,11 +53,15 @@ pub(super) fn ReceiptRecognition(
         }
     });
 
+    // A result counts as offered only once it holds something: read in the
+    // wrong currency (yen amounts are no euro amounts), nothing is found,
+    // and switching the currency must offer the new reading.
     let mut offered = use_signal(|| false);
     use_effect(move || {
         let receipt = parsed.read().clone().flatten();
         if let Some(receipt) = receipt
             && !*offered.peek()
+            && (receipt.total.is_some() || !receipt.items.is_empty())
         {
             offered.set(true);
             on_read.call(receipt);

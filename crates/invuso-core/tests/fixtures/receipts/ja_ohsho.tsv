@@ -1,0 +1,40 @@
+# Source: https://commons.wikimedia.org/wiki/File:JP_日本_Japan_京都市Kyoto_中华料理店_餃子の王将_Gyoza_no_Ohsho_Japanese_Chinese_restaurant_chain_Receipt_in_June_2026_N13P_01.jpg (CC0, TKdows 2026)
+# OCR: PP-OCRv6 small via rten, app pipeline of AP-19 (detector 2560 px plus detail pass); raw fragments as recognized.
+# Anonymized: phone numbers, staff names and slip/register numbers replaced.
+# Columns: left, top, right, bottom (pixels), text
+347	205	522	239	伝票N0=657
+125	193	298	285	是H
+438	246	497	277	25
+345	246	412	281	F-7°MNo=
+173	269	289	286	OHOFOOD CERVICE CORR
+219	281	286	303	龄王将
+483	333	525	366	山田
+345	331	459	366	担当=8
+347	374	420	408	宅配事業者
+346	414	419	448	注文コード
+168	453	206	488	数
+241	456	353	488	メニュ
+475	456	564	493	金额
+190	496	325	531	1中華そば
+528	500	578	531	748
+188	539	367	572	1特選セットA
+500	542	576	576	1,120
+128	582	166	610	TP
+189	581	403	612	1特セッ餃子+3個
+528	584	576	614	165
+250	620	284	655	小
+355	620	393	656	計
+534	625	606	657	2,033
+356	661	392	697	税
+128	660	283	697	2026年06月21日外
+587	668	605	695	0
+129	705	201	735	17:07
+250	720	283	779	合
+358	722	388	753	e
+463	721	604	780	2,033
+166	744	195	778	657
+321	900	382	923	新規
+248	901	302	923	**
+398	901	458	922	**
+530	950	718	972	2026.06.21 17:30
+343	287	456	326	人数= 2

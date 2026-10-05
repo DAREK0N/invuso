@@ -3,8 +3,9 @@
 //! Engine-independent: any OCR engine delivers [`RecognizedText`] boxes,
 //! [`parse_receipt`] rebuilds the printed rows and turns them into
 //! [`ParsedItem`]s plus the printed total, so the review screen can show
-//! whether both agree. The rules follow German till receipts; Japanese
-//! specifics (OCR-17) come later.
+//! whether both agree. The rules follow German till receipts plus the
+//! Japanese specifics of OCR-17 (`小計`, `合計`, `お釣り`, `内税`/`外税`,
+//! counts glued to names, amounts without minor units).
 
 mod parse;
 mod rows;
@@ -104,6 +105,9 @@ pub enum ItemKind {
     Article,
     /// Negative amount, e.g. a discount or a returned deposit.
     Discount,
+    /// Tax added on top of the prices (`外税`), shared like the rest of
+    /// the bill (idee.md 8.2 step 4).
+    Tax,
 }
 
 /// One position of the receipt (later a `LineItem`).

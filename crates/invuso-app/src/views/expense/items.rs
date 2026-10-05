@@ -60,6 +60,7 @@ pub(super) fn drafts_from_parsed(receipt: &ParsedReceipt) -> Vec<ItemDraft> {
             let kind = match parsed.kind {
                 ItemKind::Article => LineItemKind::Article,
                 ItemKind::Discount => LineItemKind::Discount,
+                ItemKind::Tax => LineItemKind::Tax,
             };
             ItemDraft::new(LineItem {
                 original_text: parsed.text.clone(),

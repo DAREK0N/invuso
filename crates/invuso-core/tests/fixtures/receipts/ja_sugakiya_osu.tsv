@@ -1,0 +1,33 @@
+# Source: https://commons.wikimedia.org/wiki/File:Sugakiya-Osu-ten-Receipt.jpg (CC BY-SA 4.0, HQA02330)
+# OCR: PP-OCRv6 small via rten, app pipeline of AP-19 (detector 2560 px plus detail pass); raw fragments as recognized.
+# Anonymized: phone numbers, staff names and slip/register numbers replaced.
+# Columns: left, top, right, bottom (pixels), text
+274	180	393	201	スガキヤ大須店
+273	220	335	240	吉正ビル
+274	239	371	259	000-0000-0000
+274	259	441	277	店No-0000000001039-0001
+274	277	428	295	2022/03/10（木）12:17
+270	330	307	352	店内
+474	350	509	371	¥330
+287	350	348	369	ラーメン
+294	368	441	389	デザートSTーベリー
+474	387	509	409	¥280
+364	443	393	466	2点
+273	443	334	465	合計
+445	445	507	465	¥610
+473	463	506	484	¥55)
+273	462	356	483	(内消費税等
+272	481	326	502	10%对象
+473	482	508	503	¥610
+272	500	342	521	(標準税率
+473	501	506	522	¥55)
+271	520	346	539	現金お預り
+473	520	508	541	¥610
+364	555	399	579	山田
+270	557	333	578	会計担当
+270	577	341	595	No0000000
+307	744	472	767	@sugakiya_suchan
+403	792	487	804	QxO
+250	63	541	157	Sugakiya
+274	200	478	220	名古屋市中区大須3-45-2
+271	596	490	613	本日は御来店有難うございました

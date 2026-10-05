@@ -1,0 +1,26 @@
+# Source: https://commons.wikimedia.org/wiki/File:Yabaton-bento-shop-JR-Nagoya-station-receipt.jpg (CC BY-SA 4.0, HQA02330)
+# OCR: PP-OCRv6 small via rten, app pipeline of AP-19 (detector 2560 px plus detail pass); raw fragments as recognized.
+# Anonymized: phone numbers, staff names and slip/register numbers replaced.
+# Columns: left, top, right, bottom (pixels), text
+456	140	535	158	名古屋名物
+441	157	549	186	みそかつ
+392	179	589	245	矢場人
+429	363	712	383	愛知県名古屋市中村区名駅1丁目1番4号
+685	395	785	412	No.00000000
+361	396	510	412	2022年6月21日11:05
+718	413	785	431	POS:001
+706	466	788	488	￥1,100内
+356	517	396	541	小計
+724	519	788	540	￥1,100
+353	587	415	624	合計
+694	591	792	622	¥1,100
+353	619	430	642	内消費税
+752	620	793	642	￥81
+761	640	796	665	1点
+353	640	430	664	合計点数
+351	661	442	687	税率 8%
+729	663	797	686	￥1,100
+493	684	577	710	(内消費税
+750	684	799	712	¥81)
+349	727	549	751	注）軽減税率適用商品
+366	468	603	488	南九州厳選口ースとんか

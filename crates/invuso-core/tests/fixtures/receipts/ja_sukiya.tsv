@@ -1,0 +1,24 @@
+# Source: https://commons.wikimedia.org/wiki/File:Sukiya-Kamimaezu-eki-Minami-check.jpg (CC BY-SA 4.0, HQA02330)
+# OCR: PP-OCRv6 small via rten, app pipeline of AP-19 (detector 2560 px plus detail pass); raw fragments as recognized.
+# Anonymized: phone numbers, staff names and slip/register numbers replaced.
+# Columns: left, top, right, bottom (pixels), text
+253	185	495	211	2022年3月 3日(木)7:49
+376	229	618	289	54卓A
+259	235	316	285	伝票
+660	232	735	287	6
+482	334	510	361	名
+611	332	741	360	数量金额
+379	335	407	362	品
+712	373	754	419	320
+633	376	661	420	1
+295	376	523	423	(ミニ）まぜのっけ朝食
+706	439	755	464	29円
+444	441	653	466	320円（内消費税：10%
+285	444	374	469	商品代
+717	462	756	486	0円
+505	464	642	487	(内消費税：8%
+601	491	765	557	320円
+262	494	396	564	合計
+293	597	565	627	は軽減税率適用商品です。
+292	618	558	649	毎度ありがとうございます
+293	637	652	671	またのご来店をお待ちしております。

@@ -1,0 +1,15 @@
+# Source: https://commons.wikimedia.org/wiki/File:A-Receipt-Cascade-bakery.jpg (CC BY-SA 4.0, HQA02330)
+# OCR: PP-OCRv6 small via rten, app pipeline of AP-19 (detector 2560 px plus detail pass); raw fragments as recognized.
+# Anonymized: phone numbers, staff names and slip/register numbers replaced.
+# Columns: left, top, right, bottom (pixels), text
+233	136	586	214	Cascade
+341	205	462	230	金山駅店
+254	258	522	290	2019年 3月12日(火)No1
+218	316	370	346	サンドイッチ
+531	316	614	348	¥330外
+529	345	591	378	¥330
+202	346	284	377	小計
+201	373	284	407	外税売
+530	374	590	407	¥330
+540	403	590	438	￥27
+201	403	284	435	外税

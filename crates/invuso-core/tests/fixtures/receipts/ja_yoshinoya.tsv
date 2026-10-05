@@ -1,0 +1,21 @@
+# Source: https://commons.wikimedia.org/wiki/File:Yoshinoya-Otsu-dori-Sakae-receipt.jpg (CC BY-SA 4.0, HQA02330)
+# OCR: PP-OCRv6 small via rten, app pipeline of AP-19 (detector 2560 px plus detail pass); raw fragments as recognized.
+# Anonymized: phone numbers, staff names and slip/register numbers replaced.
+# Columns: left, top, right, bottom (pixels), text
+499	78	625	106	伝票No 985
+293	100	479	168	吉野家
+500	124	639	175	テーブルND 21
+299	156	474	196	YOSHINOYA
+499	174	607	209	担当6
+211	198	239	215	欢茶
+329	207	369	241	数
+661	201	765	244	金额
+397	212	588	243	メ二ュ一名
+352	248	551	279	1牛すき鍋膳·並
+712	241	759	269	712
+286	346	392	388	2022年03月01日
+721	350	770	380	712
+532	355	612	393	小計
+283	401	366	457	12:14
+695	443	789	497	712
+431	473	532	507	合計

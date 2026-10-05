@@ -207,6 +207,7 @@ mod tests {
             .collect();
         paths.sort();
         let mut german = 0;
+        let mut japanese_matched = 0;
         for path in paths {
             let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
             let mut image = preprocess::decode(&std::fs::read(&path).unwrap()).unwrap();
@@ -247,9 +248,11 @@ mod tests {
             // `own_*` are the user's own photos: no expected result yet, so
             // only the parsed items are written for comparing by eye.
             let own = stem.starts_with("own_");
-            if stem.starts_with("de_") || own {
+            let japanese = stem.starts_with("ja_");
+            if stem.starts_with("de_") || own || japanese {
+                let code = if japanese { "JPY" } else { "EUR" };
                 let parsed =
-                    parse_receipt(&text.recognized(), Currency::from_code("EUR").unwrap()).unwrap();
+                    parse_receipt(&text.recognized(), Currency::from_code(code).unwrap()).unwrap();
                 println!("    {} items, check {:?}", parsed.items.len(), parsed.check);
                 let items: Vec<String> = parsed
                     .items
@@ -261,12 +264,26 @@ mod tests {
                     items.join("\n") + "\n",
                 )
                 .unwrap();
-                if !own {
+                if stem.starts_with("de_") {
                     german += 1;
+                    assert_eq!(parsed.check, TotalCheck::Matches, "{stem}");
+                }
+                // Japanese photos that are no till receipt (`donki` header
+                // only, `receipt_jpy` handwritten) or whose set parts read
+                // `1コ` as `13` (McDonald's) are only written out.
+                let unparseable = [
+                    "ja_donki",
+                    "ja_receipt_jpy",
+                    "ja_mcd_kanayama",
+                    "ja_mcd_yabacho",
+                ];
+                if japanese && !unparseable.contains(&stem.as_str()) {
+                    japanese_matched += 1;
                     assert_eq!(parsed.check, TotalCheck::Matches, "{stem}");
                 }
             }
         }
         assert!(german > 0, "no German samples");
+        println!("{japanese_matched} Japanese receipts match their total");
     }
 }

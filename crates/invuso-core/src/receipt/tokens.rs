@@ -120,6 +120,10 @@ fn parse_amount_body(body: &str, exponent: usize) -> Option<i64> {
     } else {
         digits.push_str(integer);
     }
+    // `01`, `0103`: codes and register numbers, never amounts.
+    if digits.len() > 1 && digits.starts_with('0') {
+        return None;
+    }
     digits.push_str(fraction);
 
     if digits.len() > MAX_PRICE_DIGITS {
@@ -229,6 +233,81 @@ pub(super) fn quantity_fits(quantity: Decimal, unit_minor: i64, total_minor: i64
         .is_some_and(|difference| difference.abs() < Decimal::ONE)
 }
 
+/// Characters that end a date or time, not an article name (`2019年5`).
+const DATE_MARKS: &[char] = &['年', '月', '日', '時', '分'];
+
+/// Japanese tills glue marks, labels and names to the amount at the end of
+/// a row: `1,000込` (tax included), `¥330外`, `620計`, `380釣`,
+/// `ロールパン200※`. Splits such a token into name, amount and label, of
+/// which name and label may be empty. Both consist of non-ASCII letters
+/// only, so dates like `2022年03月01日` and `9,99-A` stay whole.
+pub(super) fn split_glued_amount(token: &str) -> Option<(&str, &str, &str)> {
+    let start = token.find(|c: char| c.is_ascii_digit() || matches!(c, '¥' | '￥'))?;
+    let (name, rest) = token.split_at(start);
+    let digits_at = rest.len() - rest.trim_start_matches(['¥', '￥']).len();
+    let end = rest[digits_at..]
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, ',' | '.')))
+        .map_or(rest.len(), |at| digits_at + at);
+    let (amount, label) = rest.split_at(end);
+    let amount_like = amount[digits_at..].starts_with(|c: char| c.is_ascii_digit())
+        && amount.ends_with(|c: char| c.is_ascii_digit());
+    // A single digit after a word is a staff or table number (`担当6`).
+    let name_ok = name.is_empty()
+        || (!name.contains(|c: char| c.is_ascii())
+            && name.ends_with(|c: char| c.is_alphabetic() && !DATE_MARKS.contains(&c))
+            && amount.len() - digits_at >= 2);
+    let label_ok = !label.contains(|c: char| c.is_ascii());
+    let glued = !name.is_empty() || !label.is_empty();
+    (amount_like && name_ok && label_ok && glued).then_some((name, amount, label))
+}
+
+/// `外2¥150`, `外¥130`: the tax class printed right before the yen sign.
+/// Returns the amount without it.
+pub(super) fn strip_tax_class(token: &str) -> Option<&str> {
+    let at = token.find(['¥', '￥'])?;
+    let class = token[..at].trim_end_matches(|c: char| c.is_ascii_digit());
+    TAX_CLASSES.contains(&class).then(|| &token[at..])
+}
+
+/// Tax class marks; the recognizer reads `外` also as `タト`.
+const TAX_CLASSES: &[&str] = &["外", "タト", "内", "軽", "非", "※", "*"];
+
+/// `外8`, `内10`: a tax class, alone or in front of an article name.
+pub(super) fn is_tax_class_word(token: &str) -> bool {
+    let digits = token.trim_start_matches(|c: char| !c.is_ascii_digit());
+    let class = &token[..token.len() - digits.len()];
+    ["外", "タト", "内", "軽"].contains(&class)
+        && digits.len() <= 2
+        && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `(1)`, `(1コ)`, `(2個)`: a count in brackets (McDonald's).
+pub(super) fn count_in_brackets(token: &str) -> Option<Decimal> {
+    let inner = token.strip_prefix(['(', '（'])?.strip_suffix([')', '）'])?;
+    parse_count(inner.trim_end_matches(['コ', '個']))
+}
+
+/// Characters after a number that make it a date, time, price or count
+/// rather than the count of an article (`3月`, `12時`, `500円`, `2点`).
+const NOT_AN_ARTICLE: &[char] = &['年', '月', '日', '時', '分', '円', '点', '個', '名', '人'];
+
+/// `1中華そば`: Japanese tills print the count right before the article
+/// name without a space. Returns the count and the name.
+pub(super) fn count_glued_to_name(token: &str) -> Option<(Decimal, &str)> {
+    let at = token.find(|c: char| !c.is_ascii_digit())?;
+    let (digits, name) = token.split_at(at);
+    let first = name.chars().next()?;
+    let glued = (1..=2).contains(&digits.len())
+        && !first.is_ascii()
+        && first.is_alphabetic()
+        && !NOT_AN_ARTICLE.contains(&first);
+    if glued {
+        Some((parse_count(digits)?, name))
+    } else {
+        None
+    }
+}
+
 /// The word as compared against keywords: lowercase letters only, so
 /// `SUMME[`, `GEGEBEN:` and `Zw.-Summe` match `summe`, `gegeben`, `zwsumme`.
 pub(super) fn keyword_form(token: &str) -> String {
@@ -331,6 +410,8 @@ mod tests {
         assert_eq!(yen("¥1,410"), Some(1410));
         assert_eq!(yen("￥320"), Some(320));
         assert_eq!(yen("1,410円"), Some(1410));
+        assert_eq!(yen("01"), None);
+        assert_eq!(yen("0"), Some(0));
         assert_eq!(yen("3.60"), None);
         assert_eq!(yen("14,10"), None);
     }
@@ -397,6 +478,71 @@ mod tests {
         assert!(!quantity_fits(dec("0.452"), 399, 179));
         assert!(quantity_fits(dec("2"), 49, 98));
         assert!(!quantity_fits(dec("2"), 49, 99));
+    }
+
+    #[test]
+    fn labels_glued_to_amounts() {
+        let split = split_glued_amount;
+        assert_eq!(split("1,000込"), Some(("", "1,000", "込")));
+        assert_eq!(split("620計"), Some(("", "620", "計")));
+        assert_eq!(split("45斤税"), Some(("", "45", "斤税")));
+        assert_eq!(split("¥330外"), Some(("", "¥330", "外")));
+        assert_eq!(split("￥1,100内"), Some(("", "￥1,100", "内")));
+        assert_eq!(split("ロールパン200※"), Some(("ロールパン", "200", "※")));
+        assert_eq!(split("3,99€"), Some(("", "3,99", "€")));
+        for token in [
+            "2022年03月01日",
+            "令和元年5",
+            "¥320",
+            "1,000",
+            "伝票",
+            "No.5号",
+            "担当6",
+            "9,99-A",
+            "12L",
+            "外2¥150",
+        ] {
+            assert_eq!(split(token), None, "{token}");
+        }
+    }
+
+    #[test]
+    fn tax_classes_and_bracket_counts() {
+        assert_eq!(strip_tax_class("外2¥150"), Some("¥150"));
+        assert_eq!(strip_tax_class("外￥200"), Some("￥200"));
+        assert_eq!(strip_tax_class("預り¥1,000"), None);
+        assert_eq!(strip_tax_class("¥150"), None);
+        assert_eq!(strip_tax_class("タト2¥160"), Some("¥160"));
+        assert!(is_tax_class_word("タト2"));
+        assert!(is_tax_class_word("外8"));
+        assert!(is_tax_class_word("内"));
+        assert!(!is_tax_class_word("外税"));
+        assert!(!is_tax_class_word("外123"));
+        assert_eq!(count_in_brackets("(1)"), Some(dec("1")));
+        assert_eq!(count_in_brackets("(2コ)"), Some(dec("2")));
+        assert_eq!(count_in_brackets("(A)"), None);
+    }
+
+    #[test]
+    fn counts_glued_to_japanese_names() {
+        assert_eq!(
+            count_glued_to_name("1中華そば"),
+            Some((dec("1"), "中華そば"))
+        );
+        assert_eq!(count_glued_to_name("12牛丼"), Some((dec("12"), "牛丼")));
+        for token in [
+            "3月",
+            "2点",
+            "500円",
+            "2026年",
+            "3D",
+            "0お茶",
+            "123牛丼",
+            "中華",
+            "7",
+        ] {
+            assert_eq!(count_glued_to_name(token), None, "{token}");
+        }
     }
 
     #[test]
