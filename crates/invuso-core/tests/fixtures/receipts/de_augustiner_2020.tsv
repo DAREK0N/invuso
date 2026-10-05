@@ -1,0 +1,56 @@
+# Source: https://commons.wikimedia.org/wiki/File:Augustiner_Neuhausen_Rechnung_2020.JPG (public domain, User:Mateus2019)
+# OCR: PP-OCRv6 small via rten, detector max 1920 px (spikes/ocr, AP-S1); raw fragments as recognized.
+# Anonymized: addresses, phone numbers, tax/register/terminal/transaction IDs and TSE data replaced.
+# Columns: left, top, right, bottom (pixels), text
+166	51	537	107	NEUHAUSER
+115	80	152	110	W
+163	109	552	161	AUGUSTINER
+45	125	180	164	Augustiner:
+46	158	170	190	BräuMünchen
+46	187	168	216	gegcündet 1328
+84	220	508	258	Musterstra~e 1 + 80000 M}nchen
+139	253	454	289	Telefonnr.: 089/0000000
+105	284	500	325	info@example.com
+112	321	494	356	www.example.com
+110	350	480	388	Steuernummer: 000/000/00000
+41	385	554	418	********** RECHNUNG **********
+164	448	437	486	Tisch: 1
+17	482	232	516	10.09.202017:01
+306	486	400	516	Bed. 2
+416	486	579	518	Rg.: 000000
+40	581	219	615	10,4 Schorle
+412	583	472	616	3.60
+518	584	579	617	3.60
+41	614	243	646	1 T-RINDERSTEAK
+402	617	471	648	19.90
+509	617	580	650	19.90
+69	679	129	710	MWST
+202	681	275	711	Netto
+335	682	421	712	Steuer
+482	683	569	715	Brutto
+45	711	130	743	16.00%
+215	714	274	743	3.10
+363	716	422	744	0.50
+506	716	568	747	3.60
+53	744	129	775	5.00%
+206	745	275	775	18.95
+362	747	420	776	0.95
+498	749	568	778	19.90
+9	809	148	843	Summe
+180	815	192	836	5
+385	813	536	845	23.50
+526	816	574	844	EUR
+9	876	173	907	BAR GEGEBEN:
+448	878	575	911	23.50 EUR
+106	940	488	978	Vielen Dank f}r Ihren Besuch
+186	974	395	1008	Auf Wiedersehen
+77	1036	514	1077	Bewirtungsaufwand - Angaben nach
+89	1070	492	1108	(Par.4, Abs.5, Ziffer 2, EStG)
+159	1138	414	1171	Bewirtete Personen:
+147	1529	431	1564	Anlass der Bewirtung:
+133	1789	433	1827	HIhe der Aufwendungen:
+98	1887	466	1923	bei Bewirtung im Restaurant
+173	1985	403	2020	in anderen F{llen
+97	2114	170	2150	Ort,
+391	2117	467	2151	Datum
+235	2216	369	2232	terscbrift

@@ -18,6 +18,7 @@ use rten_tensor::prelude::*;
 struct Fragment {
     x0: f32,
     y0: f32,
+    x1: f32,
     y1: f32,
     text: String,
     score: f32,
@@ -72,6 +73,7 @@ impl OcrsEngine {
                 Fragment {
                     x0: r.left() as f32,
                     y0: r.top() as f32,
+                    x1: r.right() as f32,
                     y1: r.bottom() as f32,
                     text: l.to_string(),
                     score: 1.0,
@@ -175,6 +177,7 @@ impl PaddleEngine {
                 out.push(Fragment {
                     x0: x0 as f32,
                     y0: y0 as f32,
+                    x1: x1 as f32,
                     y1: y1 as f32,
                     text,
                     score,
@@ -467,6 +470,21 @@ fn main() -> Result<()> {
                 infer_ms: t.elapsed().as_millis(),
             };
             let avg = frags.iter().map(|f| f.score).sum::<f32>() / frags.len().max(1) as f32;
+            // Raw boxes for the parser fixtures in invuso-core (AP-17).
+            let tsv: String = frags
+                .iter()
+                .map(|f| {
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}\n",
+                        f.x0,
+                        f.y0,
+                        f.x1,
+                        f.y1,
+                        f.text.trim()
+                    )
+                })
+                .collect();
+            fs::write(out_dir.join(format!("{stem}.tsv")), tsv)?;
             let lines = group_lines(frags);
             fs::write(out_dir.join(format!("{stem}.txt")), lines.join("\n") + "\n")?;
             writeln!(

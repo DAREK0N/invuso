@@ -87,6 +87,8 @@ DET_MAX=1920 cargo run --release -- v6s-rten
 python score.py ocrs v6s-rten                           # Wertung gegen ground_truth.json
 ```
 
+Neben `<beleg>.txt` (zusammengesetzte Zeilen) schreibt jeder Lauf `<beleg>.tsv` mit den Rohfragmenten (`left top right bottom text`). Daraus stammen die anonymisierten Parser-Fixtures in `crates/invuso-core/tests/fixtures/receipts/` (AP-17; erzeugt mit `DET_MAX=1920 SAMPLE=de_ cargo run --release -- v6s-rten`).
+
 Android (Emulator): `cargo build --release --target x86_64-linux-android` mit den NDK-Variablen `CC_x86_64_linux_android`, `AR_x86_64_linux_android`, `CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER`; Binärdatei, `models/` und `samples/` nach `/data/local/tmp/ocr`, dann `SPIKE_ROOT=/data/local/tmp/ocr ./ocr-spike v6s-rten`. ML Kit: `git apply mlkit/mlkit-bridge.patch`, Bilder nach `files/ocr-spike/samples`, Datei `files/ocr-spike/run` anlegen, App starten; `group_tsv.py` wandelt die Ergebnisse in Zeilen um.
 
 ## 5. Quellen

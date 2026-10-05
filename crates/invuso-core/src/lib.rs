@@ -11,6 +11,7 @@
 
 pub mod domain;
 pub mod fx;
+pub mod receipt;
 pub mod split;
 
 pub use rust_decimal::Decimal;
