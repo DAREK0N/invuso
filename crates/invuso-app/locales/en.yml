@@ -106,6 +106,8 @@ language:
   fr: "French"
   es: "Spanish"
   it: "Italian"
+  ko: "Korean"
+  zh: "Chinese"
 
 settings:
   manage_section: "Manage"
@@ -226,6 +228,10 @@ group:
   color: "Color"
   base_currency: "Base currency"
   base_currency_hint: "All balances of the group are calculated in this currency."
+  target_language: "Translate into"
+  target_language_hint: "Language receipts of this group are translated into."
+  language_global: "As in settings (%{language})"
+  language_global_unknown: "As in settings"
   start_date: "Start (optional)"
   end_date: "End (optional)"
   date_invalid: "Please choose a valid date."
@@ -442,6 +448,13 @@ receipt:
 
 items:
   title: "Items"
+  translating: "Translating the lines …"
+  translated_from: "Translated from: %{from}"
+  translation_unavailable: "No translation from %{from} to %{to} is available on this device. Corrections are still remembered."
+  translation_failed: "Translation failed: %{message}"
+  remember_error: "Corrections could not be remembered for the next receipt."
+  show_original: "Original"
+  show_translation: "Translation"
   empty: "No items yet"
   sum: "Sum of items"
   total: "TOTAL"

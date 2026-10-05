@@ -1098,6 +1098,7 @@ mod tests {
                 base_currency: cur(base),
                 start_date: None,
                 end_date: None,
+                target_language: None,
             })
             .unwrap();
         db.add_group_member(&group.id, &anna.id).unwrap();
@@ -1737,6 +1738,7 @@ mod tests {
                 base_currency: cur("EUR"),
                 start_date: None,
                 end_date: None,
+                target_language: None,
             })
             .unwrap();
         let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone()]));

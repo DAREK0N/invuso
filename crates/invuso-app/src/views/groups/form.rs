@@ -6,11 +6,14 @@ use dioxus_free_icons::{
 use invuso_core::domain::{Currency, Group, GroupError, GroupId, validate_period};
 
 use crate::Route;
+use crate::components::LanguagePicker;
 use crate::components::{
     BottomSheet, Button, ColorPicker, CurrencyPicker, DateField, EmptyState, ErrorBanner,
     IconPicker, IconSet, TextField, TopBar,
 };
-use crate::preferences::{DEFAULT_GROUP_ICON, default_home_currency, suggested_person_color};
+use crate::preferences::{
+    DEFAULT_GROUP_ICON, default_home_currency, language_name, suggested_person_color,
+};
 use crate::state::DataRevision;
 use crate::storage::{Db, NewGroup, StorageError};
 
@@ -23,8 +26,8 @@ pub fn GroupNew() -> Element {
     }
 }
 
-/// `/groups/:id/edit`: name, icon, color, base currency and period of a
-/// group (GRP-01).
+/// `/groups/:id/edit`: name, icon, color, base currency, period and target
+/// language of a group (GRP-01, TRL-05).
 #[component]
 pub fn GroupEdit(id: String) -> Element {
     let db = use_context::<Db>();
@@ -94,7 +97,20 @@ fn GroupForm(group: Option<Group>) -> Element {
     let mut start_date = use_signal(|| initial.and_then(|g| g.start_date).unwrap_or_default());
     let initial = group.clone();
     let mut end_date = use_signal(|| initial.and_then(|g| g.end_date).unwrap_or_default());
+    let initial = group.clone();
+    // `""` follows the global target language (TRL-05).
+    let mut target_language =
+        use_signal(|| initial.and_then(|g| g.target_language).unwrap_or_default());
+    let language_db = db.clone();
+    let global_language = use_hook(move || {
+        language_db
+            .profile()
+            .ok()
+            .flatten()
+            .map(|p| p.target_language)
+    });
     let mut picking_currency = use_signal(|| false);
+    let mut picking_language = use_signal(|| false);
     let mut name_error = use_signal(|| None::<String>);
     let mut start_error = use_signal(|| None::<String>);
     let mut end_error = use_signal(|| None::<String>);
@@ -134,6 +150,7 @@ fn GroupForm(group: Option<Group>) -> Element {
                 base_currency: base_currency(),
                 start_date: blank_to_none(start_date()),
                 end_date: blank_to_none(end_date()),
+                target_language: Some(target_language()),
             }),
             Some(existing) => {
                 let updated = Group {
@@ -143,6 +160,7 @@ fn GroupForm(group: Option<Group>) -> Element {
                     base_currency: base_currency(),
                     start_date: blank_to_none(start_date()).map(|d| d.trim().to_string()),
                     end_date: blank_to_none(end_date()).map(|d| d.trim().to_string()),
+                    target_language: Some(target_language()).filter(|l| !l.is_empty()),
                     ..existing.clone()
                 };
                 db.update_group(&updated).map(|()| updated)
@@ -168,6 +186,16 @@ fn GroupForm(group: Option<Group>) -> Element {
 
     let currency: Currency = base_currency();
     let end_min = Some(start_date()).filter(|d| !d.is_empty());
+    let follow_global = match &global_language {
+        Some(code) => t!("group.language_global", language = language_name(code)).to_string(),
+        None => t!("group.language_global_unknown").to_string(),
+    };
+    let language_code = target_language();
+    let (shown_code, shown_language) = if language_code.is_empty() {
+        ("–".to_string(), follow_global.clone())
+    } else {
+        (language_code.clone(), language_name(&language_code))
+    };
 
     rsx! {
         div { class: "mx-4 flex flex-col gap-5 pt-4 safe-area-x",
@@ -228,8 +256,36 @@ fn GroupForm(group: Option<Group>) -> Element {
                     end_error.set(None);
                 },
             }
+            div { class: "flex flex-col gap-2",
+                span { class: "text-sm font-medium text-floral-white-300", {t!("group.target_language").to_string()} }
+                button {
+                    class: "flex min-h-12 w-full items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-900 px-4 text-left active:bg-jet-black-800 transition-colors ease-apple",
+                    r#type: "button",
+                    onclick: move |_| picking_language.set(true),
+                    span { class: "w-12 shrink-0 text-sm font-semibold text-cerulean-300", "{shown_code}" }
+                    span { class: "flex-1 truncate text-base text-floral-white-50", "{shown_language}" }
+                    Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                }
+                p { class: "px-1 text-sm text-floral-white-500", {t!("group.target_language_hint").to_string()} }
+            }
             ErrorBanner { error: save_error() }
             Button { class: "w-full", onclick: save, {t!("common.save").to_string()} }
+        }
+        if picking_language() {
+            BottomSheet {
+                title: t!("group.target_language").to_string(),
+                on_close: move |_| picking_language.set(false),
+                div { class: "flex max-h-[70vh] flex-col gap-2 overflow-y-auto overscroll-contain px-3 pt-2",
+                    LanguagePicker {
+                        selected: language_code.clone(),
+                        follow_global: Some(follow_global.clone()),
+                        on_select: move |code| {
+                            target_language.set(code);
+                            picking_language.set(false);
+                        },
+                    }
+                }
+            }
         }
         if picking_currency() {
             BottomSheet {

@@ -20,8 +20,8 @@ use rust_decimal::prelude::ToPrimitive;
 
 use super::rows::group_rows;
 use super::tokens::{
-    count_glued_to_name, count_in_brackets, is_currency_mark, is_tax_class_word, is_times,
-    is_trailing_mark, is_unit_word, keyword_form, line_total, parse_count, parse_price,
+    count_glued_to_name, count_in_brackets, is_currency_mark, is_piece_word, is_tax_class_word,
+    is_times, is_trailing_mark, is_unit_word, keyword_form, line_total, parse_count, parse_price,
     parse_quantity, quantity_after_times, quantity_before_times, quantity_fits, split_glued_amount,
     strip_tax_class,
 };
@@ -610,7 +610,9 @@ fn item_or_quantity(tokens: &[&str], cx: &Context) -> Line {
             tax: false,
         });
     }
-    let marker = take_quantity_suffix(&mut head).or_else(|| take_quantity_prefix(&mut head));
+    let marker = take_quantity_suffix(&mut head)
+        .or_else(|| take_quantity_prefix(&mut head))
+        .or_else(|| take_piece_count(&mut head, &prices));
     let resolved = match (marker, prices.as_slice()) {
         (Some(Marker::PerUnit(q)), &[unit]) => {
             line_total(q, unit).map(|total| (Some(q), Some(unit), total))
@@ -769,6 +771,26 @@ fn take_quantity_prefix(head: &mut Vec<&str>) -> Option<Marker> {
         return Some(Marker::Count(count));
     }
     None
+}
+
+/// `Milch 2 St 1,98`: in German a piece count before the line total means
+/// `2 x`. A pack size in the name (`Ersatzfilter 2 Stk 9,99`) reads the
+/// same, so the count only holds if it divides the total evenly.
+fn take_piece_count(head: &mut Vec<&str>, prices: &[i64]) -> Option<Marker> {
+    let &[total] = prices else {
+        return None;
+    };
+    let [.., count, unit] = head[..] else {
+        return None;
+    };
+    // Some text must stay in front of the count; weights have their own rule.
+    if head.len() < 3 || !is_piece_word(unit) {
+        return None;
+    }
+    let count = parse_count(count)?.to_i64().filter(|count| *count >= 2)?;
+    exact_count(total, count)?;
+    head.truncate(head.len() - 2);
+    Some(Marker::Count(Decimal::from(count)))
 }
 
 /// Two prices without a quantity sign: `1 T-RINDERSTEAK 19.90 19.90` is
@@ -1321,6 +1343,27 @@ mod tests {
             items(&r),
             [("Ersatzfilter 2 Stk", Decimal::ONE, Some(999), 999)]
         );
+    }
+
+    #[test]
+    fn piece_count_before_the_total() {
+        let r = receipt(&[
+            "Milch 2 St 1,98",
+            "Joghurt 3 Stk. 1,47 A",
+            "Ersatzfilter 2 Stk 9,99",
+            "Kartoffeln 2 kg 3,98",
+            "Summe 17,42",
+        ]);
+        assert_eq!(
+            items(&r),
+            [
+                ("Milch", dec("2"), Some(99), 198),
+                ("Joghurt", dec("3"), Some(49), 147),
+                ("Ersatzfilter 2 Stk", Decimal::ONE, Some(999), 999),
+                ("Kartoffeln 2 kg", Decimal::ONE, Some(398), 398),
+            ]
+        );
+        assert_eq!(r.check, TotalCheck::Matches);
     }
 
     #[test]

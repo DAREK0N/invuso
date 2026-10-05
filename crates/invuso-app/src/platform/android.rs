@@ -186,6 +186,140 @@ pub extern "system" fn Java_dev_dioxus_main_MainActivity_receiptImageResult<'cal
     outcome.resolve::<jni::errors::LogErrorAndDefault>()
 }
 
+/// [`Translator`](super::Translator) over the device's on-device
+/// translation engine, reached through `MainActivity.translateTexts`.
+pub struct AndroidTranslator;
+
+/// Status codes of `MainActivity.translationResult`.
+const TRANSLATION_DONE: i32 = 0;
+const TRANSLATION_UNAVAILABLE: i32 = 1;
+
+type TranslationResult = Result<super::Translation, String>;
+
+/// Requests waiting for their answer from Kotlin, by request id.
+static PENDING_TRANSLATIONS: std::sync::Mutex<
+    Option<std::collections::HashMap<i64, tokio::sync::oneshot::Sender<TranslationResult>>>,
+> = std::sync::Mutex::new(None);
+static NEXT_TRANSLATION: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+
+impl super::Translator for AndroidTranslator {
+    fn translate(
+        &self,
+        source: &str,
+        target: &str,
+        texts: Vec<String>,
+    ) -> impl std::future::Future<Output = TranslationResult> + Send + use<> {
+        let id = NEXT_TRANSLATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let started = match PENDING_TRANSLATIONS.lock() {
+            Ok(mut pending) => {
+                pending
+                    .get_or_insert_with(Default::default)
+                    .insert(id, sender);
+                request_translation(id, source, target, &texts)
+            }
+            Err(_) => Err("translation state poisoned".to_string()),
+        };
+        if started.is_err()
+            && let Ok(mut pending) = PENDING_TRANSLATIONS.lock()
+            && let Some(pending) = pending.as_mut()
+        {
+            pending.remove(&id);
+        }
+        async move {
+            started?;
+            receiver
+                .await
+                .unwrap_or_else(|_| Err("translation was dropped".to_string()))
+        }
+    }
+}
+
+/// `MainActivity.translateTexts(id, source, target, texts)`; the answer
+/// arrives in [`Java_dev_dioxus_main_MainActivity_translationResult`].
+fn request_translation(
+    id: i64,
+    source: &str,
+    target: &str,
+    texts: &[String],
+) -> Result<(), String> {
+    with_activity(|env, activity| {
+        let source = JString::from_str(env, source).map_err(|e| e.to_string())?;
+        let target = JString::from_str(env, target).map_err(|e| e.to_string())?;
+        let empty = JString::from_str(env, "").map_err(|e| e.to_string())?;
+        let array = jni::objects::JObjectArray::<JString>::new(env, texts.len(), &empty)
+            .map_err(|e| e.to_string())?;
+        for (index, text) in texts.iter().enumerate() {
+            let text = JString::from_str(env, text).map_err(|e| e.to_string())?;
+            array
+                .set_element(env, index, &text)
+                .map_err(|e| e.to_string())?;
+        }
+        let signature = RuntimeMethodSignature::from_str(
+            "(JLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V",
+        )
+        .map_err(|e| e.to_string())?;
+        env.call_method(
+            activity,
+            JNIString::new("translateTexts"),
+            signature.method_signature(),
+            &[
+                jni::objects::JValue::Long(id),
+                jni::objects::JValue::Object(&source),
+                jni::objects::JValue::Object(&target),
+                jni::objects::JValue::Object(&array),
+            ],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    })
+}
+
+/// Native half of `MainActivity.translationResult(id, status, texts)`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_dioxus_main_MainActivity_translationResult<'caller>(
+    mut unowned_env: jni::EnvUnowned<'caller>,
+    _activity: JObject<'caller>,
+    id: jni::sys::jlong,
+    status: jni::sys::jint,
+    texts: JObject<'caller>,
+) {
+    // Taken first, so a failure below still answers the waiting request.
+    let sender = PENDING_TRANSLATIONS
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.as_mut()?.remove(&id));
+    let has_texts = !texts.is_null();
+    let outcome = unowned_env.with_env(|env| -> Result<(), jni::errors::Error> {
+        let read = |env: &mut jni::Env<'_>| -> Result<Vec<String>, jni::errors::Error> {
+            let array = env.cast_local::<jni::objects::JObjectArray<JString>>(texts)?;
+            let mut translated = Vec::new();
+            for index in 0..array.len(env)? {
+                let text: JString = array.get_element(env, index)?;
+                translated.push(if text.is_null() {
+                    String::new()
+                } else {
+                    text.try_to_string(env)?
+                });
+            }
+            Ok(translated)
+        };
+        let result = match status {
+            TRANSLATION_DONE if has_texts => read(env)
+                .map(super::Translation::Done)
+                .map_err(|e| e.to_string()),
+            TRANSLATION_UNAVAILABLE => Ok(super::Translation::Unavailable),
+            _ => Err("the device's translator failed".to_string()),
+        };
+        if let Some(sender) = sender {
+            // The receiver is gone if the screen that asked was left.
+            let _ = sender.send(result);
+        }
+        Ok(())
+    });
+    outcome.resolve::<jni::errors::LogErrorAndDefault>()
+}
+
 /// Runs `op` with the Activity, which `ndk-context` knows as the context.
 fn with_activity<T>(
     op: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> Result<T, String>,

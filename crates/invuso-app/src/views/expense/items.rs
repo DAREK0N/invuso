@@ -9,7 +9,8 @@ use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdArrowDown, LdArrowUp, LdMerge, LdMinus, LdPlus, LdSplit, LdTrash2, LdTriangleAlert,
+        LdArrowDown, LdArrowUp, LdLanguages, LdMerge, LdMinus, LdPlus, LdSplit, LdTrash2,
+        LdTriangleAlert,
     },
 };
 use invuso_core::Decimal;
@@ -157,9 +158,18 @@ pub(super) fn fit_currency(
     }
 }
 
+/// A line about the translation of the lines above the list (TRL-01).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TranslationNote {
+    pub text: String,
+    /// Drawn as a hint (no engine, failure) rather than as information.
+    pub warning: bool,
+}
+
 /// The lines in the look of the printed receipt (user wish in AP-19):
-/// correction or translation large, the printed text small underneath
-/// (OCR-35), `quantity × unit price`, the total and who had it (OCR-33).
+/// correction or translation large, the printed text small underneath,
+/// swapped by a switch (OCR-35); `quantity × unit price`, the total and
+/// who had it (OCR-33).
 /// Below the lines their sum against the expense's total (OCR-14, OCR-32).
 /// Without `on_open` the list only shows the lines (expense detail).
 #[component]
@@ -174,9 +184,16 @@ pub(super) fn ReceiptItems(
     assignable: bool,
     #[props(default)] on_open: Option<EventHandler<u64>>,
     #[props(default)] on_add: Option<EventHandler<()>>,
+    #[props(default)] translation: Option<TranslationNote>,
 ) -> Element {
     let format = NumberFormat::current();
+    let mut show_original = use_signal(|| false);
     let lines = line_items(&items);
+    // The switch only makes sense once some line reads differently.
+    let has_other_text = lines
+        .iter()
+        .any(|line| !line.original_text.is_empty() && line.text() != line.original_text);
+    let original_first = show_original() && has_other_text;
     let sum = line_items_sum(&lines).ok();
     let difference = match (total, sum) {
         (Some(total), Some(sum)) => Some(total.amount_minor() - sum),
@@ -185,7 +202,32 @@ pub(super) fn ReceiptItems(
 
     rsx! {
         section { class: "flex flex-col gap-2",
-            h2 { class: "px-1 text-sm font-medium text-floral-white-300", {t!("items.title").to_string()} }
+            div { class: "flex min-h-11 items-center justify-between gap-3 px-1",
+                h2 { class: "text-sm font-medium text-floral-white-300", {t!("items.title").to_string()} }
+                if has_other_text {
+                    button {
+                        class: "flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors",
+                        r#type: "button",
+                        aria_pressed: if original_first { "true" } else { "false" },
+                        onclick: move |_| show_original.toggle(),
+                        Icon { icon: LdLanguages, class: "h-4 w-4" }
+                        if original_first {
+                            {t!("items.show_translation").to_string()}
+                        } else {
+                            {t!("items.show_original").to_string()}
+                        }
+                    }
+                }
+            }
+            if let Some(note) = translation {
+                p {
+                    class: "px-1 text-sm",
+                    class: if note.warning { "text-pale-oak-200" } else { "text-floral-white-400" },
+                    role: "status",
+                    aria_live: "polite",
+                    "{note.text}"
+                }
+            }
             div { class: "flex flex-col drop-shadow-lg",
                 div { class: "receipt-edge-top h-2", aria_hidden: "true" }
                 div { class: "flex flex-col bg-floral-white-50 px-3 pb-3 font-mono text-jet-black-950",
@@ -199,6 +241,7 @@ pub(super) fn ReceiptItems(
                             currency,
                             people: people.clone(),
                             assignable,
+                            original_first,
                             onclick: on_open.map(|open| EventHandler::new(move |_: ()| open.call(draft.key))),
                         }
                     }
@@ -262,18 +305,24 @@ fn ItemRow(
     currency: Currency,
     people: Vec<Person>,
     assignable: bool,
+    /// The printed text large and the translation small (OCR-35).
+    original_first: bool,
     onclick: Option<EventHandler<()>>,
 ) -> Element {
     let format = NumberFormat::current();
     let text = item.text().to_string();
-    let shown_text = if text.trim().is_empty() {
+    // The other text when the line reads differently from the print.
+    let other = (item.original_text != text && !item.original_text.is_empty())
+        .then(|| item.original_text.clone());
+    let (main, original) = match other {
+        Some(printed) if original_first => (printed, Some(text)),
+        other => (text, other),
+    };
+    let shown_text = if main.trim().is_empty() {
         t!("items.no_text").to_string()
     } else {
-        text.clone()
+        main
     };
-    // The printed text when the line shows something else (OCR-35).
-    let original = (item.original_text != text && !item.original_text.is_empty())
-        .then(|| item.original_text.clone());
     let quantity_line = (item.quantity != Decimal::ONE || item.unit_price_minor.is_some())
         .then(|| {
             let unit = item

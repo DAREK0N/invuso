@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Insets
 import android.graphics.drawable.ColorDrawable
+import android.icu.util.ULocale
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,9 +20,17 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.translation.TranslationCapability
+import android.view.translation.TranslationContext
+import android.view.translation.TranslationManager
+import android.view.translation.TranslationRequest
+import android.view.translation.TranslationRequestValue
+import android.view.translation.TranslationResponse
+import android.view.translation.TranslationSpec
 import android.webkit.WebView
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import java.io.File
 import java.lang.ref.WeakReference
 
@@ -31,7 +40,8 @@ typealias BuildConfig = com.darekon.invuso.BuildConfig
 /// Thin platform bridge (AGENTS.md 5, stage 4). It only does what neither
 /// Dioxus nor the WebView can: edge-to-edge window chrome with the real
 /// system-bar insets, routing the Android back key into the Dioxus router,
-/// and opening the system camera or photo picker for receipt images.
+/// opening the system camera or photo picker for receipt images, and the
+/// device's on-device translator (Java-only API).
 /// No business logic, no state beyond the running pick, no UI.
 class MainActivity : WryActivity() {
     private val receiptImages = ReceiptImages(this)
@@ -81,6 +91,17 @@ class MainActivity : WryActivity() {
 
     /// Implemented in Rust. status 0 = saved, 1 = cancelled, 2 = failed.
     external fun receiptImageResult(status: Int, message: String?)
+
+    /// Called from Rust (`platform/android.rs`): translates `texts` with the
+    /// device's on-device translator; the outcome arrives through
+    /// `translationResult` with the same `requestId`.
+    fun translateTexts(requestId: Long, source: String, target: String, texts: Array<String>) {
+        SystemTranslation.translate(this, requestId, source, target, texts)
+    }
+
+    /// Implemented in Rust. status 0 = done (one text per input), 1 = no
+    /// engine for the pair, 2 = failed.
+    external fun translationResult(requestId: Long, status: Int, texts: Array<String>?)
 
     @Suppress("DEPRECATION")
     private fun systemBack() {
@@ -372,5 +393,90 @@ class ReceiptImages(private val activity: MainActivity) {
         const val SAVED = 0
         const val CANCELLED = 1
         const val FAILED = 2
+    }
+}
+
+/// Android 12+ `TranslationManager`: used only if the device reports the
+/// pair as installed on the device; everything else answers "unavailable",
+/// so the app falls back to its own engine.
+object SystemTranslation {
+    private const val DONE = 0
+    private const val UNAVAILABLE = 1
+    private const val FAILED = 2
+
+    fun translate(
+        activity: MainActivity,
+        id: Long,
+        source: String,
+        target: String,
+        texts: Array<String>,
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return finish(activity, id, UNAVAILABLE, null)
+        }
+        // The capability query blocks on the system service.
+        Thread {
+            try {
+                run(activity, id, source, target, texts)
+            } catch (_: Throwable) {
+                finish(activity, id, FAILED, null)
+            }
+        }.start()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun run(
+        activity: MainActivity,
+        id: Long,
+        source: String,
+        target: String,
+        texts: Array<String>,
+    ) {
+        val manager = activity.getSystemService(TranslationManager::class.java)
+            ?: return finish(activity, id, UNAVAILABLE, null)
+        val format = TranslationSpec.DATA_FORMAT_TEXT
+        val installed = manager.getOnDeviceTranslationCapabilities(format, format).any {
+            it.state == TranslationCapability.STATE_ON_DEVICE &&
+                it.sourceSpec.locale.language == source &&
+                it.targetSpec.locale.language == target
+        }
+        if (!installed) {
+            return finish(activity, id, UNAVAILABLE, null)
+        }
+        val context = TranslationContext.Builder(
+            TranslationSpec(ULocale(source), format),
+            TranslationSpec(ULocale(target), format),
+        ).build()
+        manager.createOnDeviceTranslator(context, { it.run() }) { translator ->
+            if (translator == null) {
+                finish(activity, id, UNAVAILABLE, null)
+                return@createOnDeviceTranslator
+            }
+            val request = TranslationRequest.Builder()
+                .setTranslationRequestValues(texts.map { TranslationRequestValue.forText(it) })
+                .build()
+            try {
+                translator.translate(request, null, { it.run() }) { response ->
+                    translator.destroy()
+                    if (response.translationStatus != TranslationResponse.TRANSLATION_STATUS_SUCCESS) {
+                        finish(activity, id, FAILED, null)
+                    } else {
+                        val values = response.translationResponseValues
+                        val translated = Array(texts.size) { values.get(it)?.text?.toString() ?: "" }
+                        finish(activity, id, DONE, translated)
+                    }
+                }
+            } catch (_: Throwable) {
+                translator.destroy()
+                finish(activity, id, FAILED, null)
+            }
+        }
+    }
+
+    private fun finish(activity: MainActivity, id: Long, status: Int, texts: Array<String>?) {
+        try {
+            activity.translationResult(id, status, texts)
+        } catch (_: Throwable) {
+        }
     }
 }

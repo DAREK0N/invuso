@@ -154,6 +154,7 @@ mod tests {
             base_currency: Currency::from_code("EUR").unwrap(),
             start_date: None,
             end_date: None,
+            target_language: None,
         })
         .unwrap()
     }

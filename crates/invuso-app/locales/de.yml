@@ -106,6 +106,8 @@ language:
   fr: "Französisch"
   es: "Spanisch"
   it: "Italienisch"
+  ko: "Koreanisch"
+  zh: "Chinesisch"
 
 settings:
   manage_section: "Verwaltung"
@@ -226,6 +228,10 @@ group:
   color: "Farbe"
   base_currency: "Basiswährung"
   base_currency_hint: "Alle Salden der Gruppe werden in dieser Währung berechnet."
+  target_language: "Übersetzen in"
+  target_language_hint: "Sprache, in die Kassenzettel dieser Gruppe übersetzt werden."
+  language_global: "Wie in den Einstellungen (%{language})"
+  language_global_unknown: "Wie in den Einstellungen"
   start_date: "Beginn (optional)"
   end_date: "Ende (optional)"
   date_invalid: "Bitte wähle ein gültiges Datum."
@@ -442,6 +448,13 @@ receipt:
 
 items:
   title: "Positionen"
+  translating: "Positionen werden übersetzt …"
+  translated_from: "Übersetzt aus: %{from}"
+  translation_unavailable: "Für %{from} → %{to} ist auf diesem Gerät keine Übersetzung verfügbar. Korrekturen werden trotzdem gemerkt."
+  translation_failed: "Übersetzung fehlgeschlagen: %{message}"
+  remember_error: "Korrekturen konnten nicht für den nächsten Beleg gemerkt werden."
+  show_original: "Original"
+  show_translation: "Übersetzung"
   empty: "Noch keine Positionen"
   sum: "Summe Positionen"
   total: "GESAMT"

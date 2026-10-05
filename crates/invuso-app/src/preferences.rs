@@ -295,6 +295,8 @@ pub fn language_name(code: &str) -> String {
         "fr" => t!("language.fr").to_string(),
         "es" => t!("language.es").to_string(),
         "it" => t!("language.it").to_string(),
+        "ko" => t!("language.ko").to_string(),
+        "zh" => t!("language.zh").to_string(),
         other => other.to_string(),
     }
 }

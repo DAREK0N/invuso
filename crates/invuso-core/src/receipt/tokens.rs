@@ -176,6 +176,11 @@ pub(super) fn is_unit_word(token: &str) -> bool {
     UNIT_WORDS.contains(&lower.as_str())
 }
 
+/// Units counting pieces (`St`, `Stk.`, `pcs`), not weights.
+pub(super) fn is_piece_word(token: &str) -> bool {
+    is_unit_word(token) && !token.eq_ignore_ascii_case("kg")
+}
+
 /// `x`, `X`, `×`, `*` or `@` between quantity and unit price.
 pub(super) fn is_times(token: &str) -> bool {
     matches!(token, "x" | "X" | "×" | "*" | "@")

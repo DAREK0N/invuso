@@ -14,9 +14,10 @@ pub struct NewGroup {
     pub base_currency: Currency,
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+    pub target_language: Option<String>,
 }
 
-const COLUMNS: &str = "id, name, icon, color, base_currency, start_date, end_date";
+const COLUMNS: &str = "id, name, icon, color, base_currency, start_date, end_date, target_language";
 
 impl Db {
     /// Creates the group with "Ich" as its first member (AP-08), in one
@@ -32,14 +33,15 @@ impl Db {
             base_currency: new.base_currency,
             start_date,
             end_date,
+            target_language: language(new.target_language.as_deref()),
         };
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
             tx.execute(
                 "INSERT INTO expense_group
-                     (id, name, icon, color, base_currency, start_date, end_date, archived,
-                      created_at, updated_at, origin_device_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?8, ?9)",
+                     (id, name, icon, color, base_currency, start_date, end_date,
+                      target_language, archived, created_at, updated_at, origin_device_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9, ?10)",
                 params![
                     group.id.as_str(),
                     group.name,
@@ -48,6 +50,7 @@ impl Db {
                     group.base_currency.code(),
                     group.start_date,
                     group.end_date,
+                    group.target_language,
                     now_ms(),
                     self.device_id()
                 ],
@@ -103,7 +106,7 @@ impl Db {
         self.set_setting(ACTIVE_GROUP, id.map_or("", GroupId::as_str))
     }
 
-    /// Saves name, icon, color, base currency and period.
+    /// Saves name, icon, color, base currency, period and target language.
     pub fn update_group(&self, group: &Group) -> Result<(), StorageError> {
         let name = people::valid_name(&group.name)?;
         let (start_date, end_date) =
@@ -112,7 +115,7 @@ impl Db {
             Ok(conn.execute(
                 "UPDATE expense_group
                  SET name = ?2, icon = ?3, color = ?4, base_currency = ?5, start_date = ?6,
-                     end_date = ?7, updated_at = ?8
+                     end_date = ?7, target_language = ?8, updated_at = ?9
                  WHERE id = ?1 AND deleted_at IS NULL",
                 params![
                     group.id.as_str(),
@@ -122,6 +125,7 @@ impl Db {
                     group.base_currency.code(),
                     start_date,
                     end_date,
+                    language(group.target_language.as_deref()),
                     now_ms()
                 ],
             )?)
@@ -188,7 +192,15 @@ fn group_from_row(row: &Row<'_>) -> rusqlite::Result<Group> {
         })?,
         start_date: row.get(5)?,
         end_date: row.get(6)?,
+        target_language: row.get(7)?,
     })
+}
+
+/// A blank language means "follow the global setting".
+fn language(code: Option<&str>) -> Option<String> {
+    code.map(str::trim)
+        .filter(|code| !code.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -210,6 +222,7 @@ mod tests {
             base_currency: eur(),
             start_date: None,
             end_date: None,
+            target_language: None,
         }
     }
 
@@ -247,10 +260,12 @@ mod tests {
             .create_group(NewGroup {
                 start_date: Some("2026-03-01".into()),
                 end_date: Some(" 2026-03-14 ".into()),
+                target_language: Some(" ja ".into()),
                 ..new("  Japan Reise ")
             })
             .unwrap();
         assert_eq!(group.name, "Japan Reise");
+        assert_eq!(group.target_language.as_deref(), Some("ja"));
         assert_eq!(group.end_date.as_deref(), Some("2026-03-14"));
         assert_eq!(db.group(&group.id).unwrap(), Some(group));
     }
@@ -285,10 +300,19 @@ mod tests {
             base_currency: Currency::from_code("JPY").unwrap(),
             start_date: Some("2026-03-01".into()),
             end_date: Some("2026-03-14".into()),
+            target_language: Some("en".into()),
             ..group
         };
         db.update_group(&updated).unwrap();
-        assert_eq!(db.group(&updated.id).unwrap(), Some(updated));
+        assert_eq!(db.group(&updated.id).unwrap(), Some(updated.clone()));
+        // Blank follows the global target language again (TRL-05).
+        let follows = Group {
+            target_language: Some(" ".into()),
+            ..updated
+        };
+        db.update_group(&follows).unwrap();
+        let stored = db.group(&follows.id).unwrap().unwrap();
+        assert_eq!(stored.target_language, None);
     }
 
     #[test]
@@ -302,6 +326,7 @@ mod tests {
             db.create_group(NewGroup {
                 start_date: Some("2026-03-14".into()),
                 end_date: Some("2026-03-01".into()),
+                target_language: None,
                 ..new("Japan")
             }),
             Err(StorageError::Group(GroupError::EndBeforeStart))

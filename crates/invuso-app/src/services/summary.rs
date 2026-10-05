@@ -91,6 +91,7 @@ mod tests {
             base_currency: cur(base),
             start_date: None,
             end_date: None,
+            target_language: None,
         })
         .unwrap()
     }

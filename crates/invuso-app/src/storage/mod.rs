@@ -20,6 +20,7 @@ mod people;
 mod profile;
 mod receipts;
 mod settings;
+mod translations;
 
 pub(crate) use db::now_ms;
 pub use db::{Db, StorageError};
@@ -36,3 +37,4 @@ pub use settings::{
     CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY,
     LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST,
 };
+pub use translations::UNKNOWN_LANGUAGE;

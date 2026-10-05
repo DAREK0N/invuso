@@ -17,12 +17,13 @@ use invuso_core::domain::{
     is_iso_date, validate_participants, validate_payments, validate_split,
 };
 use invuso_core::fx;
-use invuso_core::receipt::ParsedReceipt;
+use invuso_core::receipt::{ParsedReceipt, detect_language};
 use invuso_core::split::allocate;
 
 use super::detail::ReceiptCard;
 use super::items::{
-    self, ItemAction, ItemDraft, ItemSheet, ReceiptItems, drafts_from_parsed, drafts_from_saved,
+    self, ItemAction, ItemDraft, ItemSheet, ReceiptItems, TranslationNote, drafts_from_parsed,
+    drafts_from_saved,
 };
 use super::recognition::ReceiptRecognition;
 use super::split::{ShareRow, SplitDraft, SplitKind, split_error_text, sum_hint};
@@ -34,11 +35,14 @@ use crate::components::{
     MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, TextField, TopBar,
 };
 use crate::format::{NumberFormat, amount_text, fit_amount_text, format_money, parse_amount};
-use crate::platform::ImageKind;
-use crate::preferences::{category_name, default_home_currency, display_date};
+use crate::platform::{ImageKind, system_translator};
+use crate::preferences::{
+    category_name, default_home_currency, display_date, language_name, suggested_target_language,
+};
 use crate::services::expenses::{SaveExpenseError, save_expense, update_expense};
 use crate::services::rates::{CurrencyApi, Frankfurter};
 use crate::services::receipts::{self, capture_receipt};
+use crate::services::translation::{MachineTranslation, remember_review, translate_lines};
 use crate::state::{DataRevision, ToastAction, Toaster};
 use crate::storage::{
     Db, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, NearRate, NewExpense, NewExpensePayment,
@@ -70,6 +74,23 @@ struct FormData {
     /// Opened to check a scanned receipt (idee.md 7.2 step 5): starts
     /// split by line items and saves the expense as scanned.
     review: bool,
+    /// Global target language of translations (SET-02); a group's own one
+    /// takes precedence (TRL-05).
+    target_language: String,
+    /// Language the attached receipt was detected in (TRL-02).
+    receipt_language: Option<String>,
+}
+
+/// Translation of the recognized lines (idee.md 7.2 step 4).
+#[derive(Debug, Clone, PartialEq)]
+enum TranslationState {
+    Running,
+    Finished {
+        source: Option<String>,
+        target: String,
+        machine: MachineTranslation,
+    },
+    Failed(String),
 }
 
 /// Someone who paid (part of) the expense (EXP-02, EXP-03).
@@ -264,10 +285,76 @@ fn ExpenseForm(data: FormData) -> Element {
     let mut picking = use_signal(|| false);
     let mut receipt_error = use_signal(|| None::<String>);
     let can_take_photo = use_hook(|| receipts::supports(ImageKind::Camera));
+    // `None` until the recognition is read; then the receipt's language, if
+    // it could be told (TRL-02). When editing, the stored one.
+    let mut source_language = use_signal(|| editing.then(|| data.receipt_language.clone()));
+    let mut translation = use_signal(|| None::<TranslationState>);
+    let mut translation_run = use_signal(|| 0_u64);
 
     let groups = data.groups.clone();
     let home_currency = data.home_currency;
     let base_currency = use_memo(move || base_of(&groups, group().as_ref(), home_currency));
+    let groups = data.groups.clone();
+    let global_language = data.target_language.clone();
+    let target_language = use_memo(move || {
+        group()
+            .and_then(|id| groups.iter().find(|g| g.id == id))
+            .and_then(|g| g.target_language.clone())
+            .unwrap_or_else(|| global_language.clone())
+    });
+    let originals = use_memo(move || {
+        let mut texts: Vec<String> = items
+            .read()
+            .iter()
+            .map(|d| d.item.original_text.clone())
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        texts.sort();
+        texts.dedup();
+        texts
+    });
+
+    // Translates the recognized lines into the target language once the
+    // receipt's language is known, again when the group (and so the target
+    // language) changes (idee.md 7.2 step 4). A saved expense keeps the
+    // translations it was saved with.
+    let translate_db = db.clone();
+    use_effect(move || {
+        let Some(source) = source_language() else {
+            return;
+        };
+        let (target, texts) = (target_language(), originals());
+        if editing || texts.is_empty() {
+            return;
+        }
+        let run = *translation_run.peek() + 1;
+        translation_run.set(run);
+        translation.set(Some(TranslationState::Running));
+        let db = translate_db.clone();
+        spawn(async move {
+            let translator = system_translator();
+            let outcome =
+                translate_lines(&db, &translator, source.as_deref(), &target, &texts).await;
+            // A newer run (other group, other lines) replaced this one.
+            if *translation_run.peek() != run {
+                return;
+            }
+            match outcome {
+                Ok(result) => {
+                    for draft in items.write().iter_mut() {
+                        draft.item.translated_text =
+                            result.texts.get(&draft.item.original_text).cloned();
+                    }
+                    translation.set(Some(TranslationState::Finished {
+                        source,
+                        target,
+                        machine: result.machine,
+                    }));
+                }
+                Err(error) => translation.set(Some(TranslationState::Failed(error.to_string()))),
+            }
+        });
+    });
     let default_weights = use_memo(move || {
         people
             .read()
@@ -435,6 +522,12 @@ fn ExpenseForm(data: FormData) -> Element {
             return;
         };
 
+        let remember = (
+            receipt.read().as_ref().map(|r| r.id.clone()),
+            source_language().flatten(),
+            target_language(),
+            line_items.clone(),
+        );
         let new = NewExpense {
             group_id: group(),
             title: title(),
@@ -462,6 +555,7 @@ fn ExpenseForm(data: FormData) -> Element {
         save_error.set(None);
         saving.set(true);
         let worker_db = save_db.clone();
+        let remember_db = save_db.clone();
         let edit_id = save_existing.as_ref().map(|e| e.id.clone());
         let opened_from = opened_from.clone();
         let (mut revision, mut toaster) = (revision, toaster);
@@ -476,6 +570,20 @@ fn ExpenseForm(data: FormData) -> Element {
             .await;
             match outcome {
                 Ok(Ok(saved)) => {
+                    // Corrections are a convenience for the next receipt;
+                    // the expense is saved either way.
+                    let (receipt_id, source, target, lines) = &remember;
+                    if remember_review(
+                        &remember_db,
+                        receipt_id.as_deref(),
+                        source.as_deref(),
+                        target,
+                        lines,
+                    )
+                    .is_err()
+                    {
+                        toaster.show(t!("items.remember_error").to_string(), None);
+                    }
                     revision.bump();
                     let message = match (saved.later_rate, editing) {
                         (true, _) => t!("expense.saved_later_rate"),
@@ -596,6 +704,8 @@ fn ExpenseForm(data: FormData) -> Element {
         if items.peek().is_empty() {
             items.set(drafts_from_parsed(&parsed));
         }
+        let language = detect_language(parsed.rows.iter().map(|row| row.text.as_str()));
+        source_language.set(Some(language.map(str::to_string)));
     };
 
     let add_item = move |_| {
@@ -953,6 +1063,7 @@ fn ExpenseForm(data: FormData) -> Element {
                         sheet.set(Some(Sheet::Item(key)));
                     },
                     on_add: add_item,
+                    translation: translation_note(translation.read().as_ref(), &item_list),
                 }
             }
             ErrorBanner { error: save_error() }
@@ -1291,9 +1402,14 @@ fn load(
     receipt: Option<&str>,
 ) -> Result<FormData, StorageError> {
     let me = db.me()?.ok_or(StorageError::NotFound)?;
-    let home_currency = db
-        .profile()?
+    let profile = db.profile()?;
+    let home_currency = profile
+        .as_ref()
         .map_or_else(default_home_currency, |p| p.home_currency);
+    let target_language = profile.map_or_else(
+        || suggested_target_language(None).to_string(),
+        |p| p.target_language,
+    );
     let groups = db.groups()?;
     let existing = match id {
         Some(id) => Some(db.expense(id)?.ok_or(StorageError::NotFound)?),
@@ -1325,6 +1441,10 @@ fn load(
         Some(receipt) => db.receipt(receipt)?,
         None => None,
     };
+    let receipt_language = match &receipt {
+        Some(receipt) => db.receipt_language(&receipt.id)?,
+        None => None,
+    };
     Ok(FormData {
         receipt,
         me,
@@ -1337,7 +1457,46 @@ fn load(
         existing,
         opened_from,
         review: false,
+        target_language,
+        receipt_language,
     })
+}
+
+/// The line above the receipt lines saying how the translation went.
+fn translation_note(
+    state: Option<&TranslationState>,
+    items: &[ItemDraft],
+) -> Option<TranslationNote> {
+    let note = |text: String, warning: bool| Some(TranslationNote { text, warning });
+    match state? {
+        TranslationState::Running => note(t!("items.translating").to_string(), false),
+        TranslationState::Failed(message)
+        | TranslationState::Finished {
+            machine: MachineTranslation::Failed(message),
+            ..
+        } => note(
+            t!("items.translation_failed", message = message).to_string(),
+            true,
+        ),
+        TranslationState::Finished {
+            source: Some(source),
+            target,
+            machine,
+        } if source != target => {
+            let (from, to) = (language_name(source), language_name(target));
+            match machine {
+                MachineTranslation::Unavailable => note(
+                    t!("items.translation_unavailable", from = from, to = to).to_string(),
+                    true,
+                ),
+                _ if items.iter().any(|d| d.item.translated_text.is_some()) => {
+                    note(t!("items.translated_from", from = from).to_string(), false)
+                }
+                _ => None,
+            }
+        }
+        TranslationState::Finished { .. } => None,
+    }
 }
 
 /// Without an active group: the group of the last expense if it still
@@ -1505,6 +1664,7 @@ mod tests {
             base_currency: Currency::from_code("JPY").unwrap(),
             start_date: None,
             end_date: None,
+            target_language: None,
         }
     }
 
@@ -1549,6 +1709,7 @@ mod tests {
                 base_currency: Currency::from_code("EUR").unwrap(),
                 start_date: None,
                 end_date: None,
+                target_language: None,
             })
             .unwrap()
         };

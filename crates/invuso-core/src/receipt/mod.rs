@@ -7,10 +7,12 @@
 //! Japanese specifics of OCR-17 (`小計`, `合計`, `お釣り`, `内税`/`外税`,
 //! counts glued to names, amounts without minor units).
 
+mod language;
 mod parse;
 mod rows;
 mod tokens;
 
+pub use language::detect_language;
 pub use parse::parse_receipt;
 
 /// The printed rows as plain text, top to bottom, rebuilt the same way the

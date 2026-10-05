@@ -49,6 +49,9 @@ pub struct Group {
     /// Local calendar dates `YYYY-MM-DD`; both optional.
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+    /// ISO 639-1 code receipts of this group are translated into; `None`
+    /// follows the global setting (TRL-05).
+    pub target_language: Option<String>,
 }
 
 /// A person in a group (idee.md 4.1 `GroupMember`).
