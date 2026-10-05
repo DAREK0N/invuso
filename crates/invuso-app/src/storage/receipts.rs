@@ -1,4 +1,6 @@
+use invuso_core::receipt::{BoundingBox, RecognizedText, text_rows};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 use super::db::{new_id, now_ms};
 use super::{Db, StorageError};
@@ -12,6 +14,75 @@ pub struct ReceiptFiles {
     pub image_paths: Vec<String>,
     /// `None` if the image could not be decoded for a preview.
     pub thumbnail_path: Option<String>,
+}
+
+/// One piece of recognized text with its box (OCR-01).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrFragment {
+    pub text: String,
+    /// In pixels of the upright original image.
+    pub bbox: BoundingBox,
+    /// Mean probability of its characters, 0–1.
+    pub confidence: f32,
+}
+
+/// The recognized text of a receipt, as stored with it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReceiptText {
+    pub engine: String,
+    pub fragments: Vec<OcrFragment>,
+    /// The fragments as printed rows, one per line (`ocr_raw_text`).
+    pub raw_text: String,
+    /// Mean confidence of all fragments; `None` if nothing was found.
+    pub confidence: Option<f32>,
+    /// The fragments' boxes are in the photo turned back by this angle
+    /// around its centre (rows level); needed to mark them in the photo.
+    pub skew_degrees: f32,
+}
+
+impl ReceiptText {
+    pub fn new(engine: &str, fragments: Vec<OcrFragment>, skew_degrees: f32) -> Self {
+        let raw_text = text_rows(&recognized(&fragments)).join("\n");
+        let confidence = (!fragments.is_empty())
+            .then(|| fragments.iter().map(|f| f.confidence).sum::<f32>() / fragments.len() as f32);
+        Self {
+            engine: engine.to_string(),
+            fragments,
+            raw_text,
+            confidence,
+            skew_degrees,
+        }
+    }
+
+    /// The fragments as the receipt parser takes them.
+    pub fn recognized(&self) -> Vec<RecognizedText> {
+        recognized(&self.fragments)
+    }
+}
+
+fn recognized(fragments: &[OcrFragment]) -> Vec<RecognizedText> {
+    fragments
+        .iter()
+        .map(|f| RecognizedText {
+            text: f.text.clone(),
+            bbox: f.bbox,
+        })
+        .collect()
+}
+
+/// Stored form of the boxes in `receipt.ocr_boxes`.
+#[derive(Serialize, Deserialize)]
+struct StoredBoxes {
+    skew_degrees: f32,
+    fragments: Vec<StoredFragment>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredFragment {
+    text: String,
+    #[serde(rename = "box")]
+    bbox: [i32; 4],
+    confidence: f32,
 }
 
 impl Db {
@@ -79,6 +150,94 @@ impl Db {
     }
 }
 
+impl Db {
+    /// Stores the recognized text of a receipt and marks it `analyzed`.
+    /// Earlier results are replaced; the image itself stays untouched.
+    pub fn save_receipt_text(&self, id: &str, text: &ReceiptText) -> Result<(), StorageError> {
+        let boxes = StoredBoxes {
+            skew_degrees: text.skew_degrees,
+            fragments: text
+                .fragments
+                .iter()
+                .map(|f| StoredFragment {
+                    text: f.text.clone(),
+                    bbox: [f.bbox.left, f.bbox.top, f.bbox.right, f.bbox.bottom],
+                    confidence: f.confidence,
+                })
+                .collect(),
+        };
+        let boxes = serde_json::to_string(&boxes)
+            .map_err(|_| StorageError::InvalidInput("unserializable OCR result"))?;
+        self.with(|conn| {
+            let now = now_ms();
+            let changed = conn.execute(
+                "UPDATE receipt
+                 SET ocr_raw_text = ?2, ocr_engine = ?3, ocr_confidence = ?4, ocr_boxes = ?5,
+                     parsed_at = ?6, status = 'analyzed', updated_at = ?6
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![
+                    id,
+                    text.raw_text,
+                    text.engine,
+                    text.confidence.map(f64::from),
+                    boxes,
+                    now
+                ],
+            )?;
+            if changed == 0 {
+                return Err(StorageError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    /// The recognized text of a receipt; `None` until it was analyzed.
+    pub fn receipt_text(&self, id: &str) -> Result<Option<ReceiptText>, StorageError> {
+        let row = self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT ocr_engine, ocr_boxes, ocr_raw_text, ocr_confidence FROM receipt
+                     WHERE id = ?1 AND deleted_at IS NULL AND ocr_boxes IS NOT NULL",
+                    [id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<f64>>(3)?,
+                        ))
+                    },
+                )
+                .optional()?)
+        })?;
+        let Some((engine, boxes, raw_text, confidence)) = row else {
+            return Ok(None);
+        };
+        let stored: StoredBoxes = serde_json::from_str(&boxes)
+            .map_err(|_| StorageError::InvalidInput("unreadable OCR result"))?;
+        Ok(Some(ReceiptText {
+            engine: engine.unwrap_or_default(),
+            fragments: stored
+                .fragments
+                .into_iter()
+                .map(|f| OcrFragment {
+                    text: f.text,
+                    bbox: BoundingBox {
+                        left: f.bbox[0],
+                        top: f.bbox[1],
+                        right: f.bbox[2],
+                        bottom: f.bbox[3],
+                    },
+                    confidence: f.confidence,
+                })
+                .collect(),
+            raw_text: raw_text.unwrap_or_default(),
+            confidence: confidence.map(|c| c as f32),
+            skew_degrees: stored.skew_degrees,
+        }))
+    }
+}
+
 /// A new expense may only take a receipt that exists and no other expense
 /// holds; one receipt belongs to one expense (idee.md 4.2).
 pub(super) fn check_unattached(conn: &Connection, id: &str) -> Result<(), StorageError> {
@@ -131,6 +290,57 @@ mod tests {
             None
         );
         assert_eq!(db.receipt("missing").unwrap(), None);
+    }
+
+    #[test]
+    fn stores_and_reads_the_recognized_text() {
+        let db = Db::open_in_memory().unwrap();
+        let receipt = db.create_receipt("receipts/a.jpg", None).unwrap();
+        let fragment = |text: &str, left, top| OcrFragment {
+            text: text.to_string(),
+            bbox: BoundingBox {
+                left,
+                top,
+                right: left + 100,
+                bottom: top + 20,
+            },
+            confidence: 0.75,
+        };
+        let text = ReceiptText::new(
+            "test",
+            vec![
+                fragment("1,99", 300, 102),
+                fragment("Milch", 10, 100),
+                fragment("SUMME", 10, 150),
+            ],
+            -2.5,
+        );
+        assert_eq!(text.raw_text, "Milch 1,99\nSUMME");
+        assert_eq!(text.confidence, Some(0.75));
+        db.save_receipt_text(&receipt.id, &text).unwrap();
+        assert_eq!(db.receipt_text(&receipt.id).unwrap(), Some(text));
+        let status: String = db
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT status FROM receipt WHERE id = ?1",
+                    [&receipt.id],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(status, "analyzed");
+
+        // Nothing recognized is a result too, unlike "not analyzed yet".
+        let blank = db.create_receipt("receipts/b.jpg", None).unwrap();
+        assert_eq!(db.receipt_text(&blank.id).unwrap(), None);
+        let empty = ReceiptText::new("test", Vec::new(), 0.0);
+        assert_eq!(empty.confidence, None);
+        db.save_receipt_text(&blank.id, &empty).unwrap();
+        assert_eq!(db.receipt_text(&blank.id).unwrap(), Some(empty.clone()));
+        assert!(matches!(
+            db.save_receipt_text("missing", &empty),
+            Err(StorageError::NotFound)
+        ));
     }
 
     #[test]

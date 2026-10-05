@@ -20,6 +20,7 @@ use invuso_core::fx;
 use invuso_core::split::allocate;
 
 use super::detail::ReceiptCard;
+use super::recognition::ReceiptRecognition;
 use super::split::{ShareRow, SplitDraft, SplitKind, split_error_text, sum_hint};
 use crate::Route;
 use crate::clock;
@@ -578,9 +579,21 @@ fn ExpenseForm(data: FormData) -> Element {
             match receipt() {
                 Some(attached) => rsx! {
                     div { class: "flex flex-col gap-2",
-                        ReceiptCard { key: "{attached.id}", receipt: attached }
+                        ReceiptCard { key: "{attached.id}", receipt: attached.clone() }
                         // Replacing the receipt of a saved expense is RCP-08.
                         if !editing {
+                            ReceiptRecognition {
+                                key: "{attached.id}",
+                                receipt_id: attached.id.clone(),
+                                currency,
+                                on_total: move |total: Money| {
+                                    // Only fills an empty amount; anything typed wins.
+                                    if amount_text_signal.peek().is_empty() && total.amount_minor() > 0 {
+                                        amount_text_signal.set(amount_text(total, NumberFormat::current()));
+                                        amount_error.set(None);
+                                    }
+                                },
+                            }
                             button {
                                 class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-floral-white-300 active:bg-jet-black-800 transition-colors",
                                 r#type: "button",

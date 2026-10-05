@@ -8,6 +8,7 @@ use super::StorageError;
 const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0001_initial.sql"),
     include_str!("../../migrations/0002_default_categories.sql"),
+    include_str!("../../migrations/0003_receipt_ocr_boxes.sql"),
 ];
 
 /// Applies every migration the database has not seen yet, each in its own

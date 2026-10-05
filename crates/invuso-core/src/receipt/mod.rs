@@ -12,6 +12,16 @@ mod tokens;
 
 pub use parse::parse_receipt;
 
+/// The printed rows as plain text, top to bottom, rebuilt the same way the
+/// parser sees them; for archiving the raw OCR text (idee.md 4.1
+/// `ocr_raw_text`).
+pub fn text_rows(fragments: &[RecognizedText]) -> Vec<String> {
+    rows::group_rows(fragments)
+        .into_iter()
+        .map(|row| row.text)
+        .collect()
+}
+
 use rust_decimal::Decimal;
 use thiserror::Error;
 
@@ -145,5 +155,31 @@ impl ParsedReceipt {
                 sum.checked_add(item.total_price)
             })
             .map_err(|_| ReceiptError::Overflow)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_rows_join_boxes_of_one_printed_row() {
+        let text = |text: &str, left, top| RecognizedText {
+            text: text.to_string(),
+            bbox: BoundingBox {
+                left,
+                top,
+                right: left + 80,
+                bottom: top + 20,
+            },
+        };
+        let fragments = [
+            text("SUMME", 10, 60),
+            text("0,99", 300, 31),
+            text("Brot", 10, 30),
+            text("  ", 10, 90),
+        ];
+        assert_eq!(text_rows(&fragments), ["Brot 0,99", "SUMME"]);
+        assert!(text_rows(&[]).is_empty());
     }
 }

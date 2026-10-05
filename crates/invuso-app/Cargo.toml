@@ -22,6 +22,9 @@ serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
 image.workspace = true
+rten.workspace = true
+rten-tensor.workspace = true
+rten-imageproc.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Only to ask Android for the app's private files directory (platform/).

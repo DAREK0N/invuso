@@ -439,6 +439,19 @@ receipt:
   choose: "Gallery"
   image_error: "The image cannot be shown. It stays archived."
 
+ocr:
+  starting: "Preparing text recognition …"
+  detecting: "Looking for text …"
+  reading: "Reading text: line %{done} of %{total}"
+  items_one: "1 item recognized"
+  items_other: "%{count} items recognized"
+  found_total: "%{items} · total %{total}"
+  no_total: "No total found. Please check the amount."
+  differs: "The items add up to %{sum}. Please check the amount."
+  unreadable: "No readable text was found on the receipt."
+  failed: "Text recognition failed."
+  retry: "Recognize again"
+
 scan:
   working: "Adding the image …"
   error_title: "The image could not be added"

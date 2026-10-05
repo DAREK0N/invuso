@@ -36,3 +36,25 @@ time = { version = "0.3.55", features = ["local-offset"] }
 # Receipt thumbnails (CORE-06); same version dioxus-desktop already pulls
 # in, pure Rust decoders only.
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+# On-device text recognition (OCR-01, decision 10.1): PP-OCRv6 ONNX models
+# run in pure Rust; imageproc traces the detector's text regions.
+rten = "0.27.0"
+rten-tensor = "0.27.0"
+rten-imageproc = "0.27.0"
+
+# `dx serve` builds in debug; unoptimized inference would take minutes per
+# receipt, so the OCR and image crates are always optimized.
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-imageproc]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3

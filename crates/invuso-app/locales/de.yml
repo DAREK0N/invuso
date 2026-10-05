@@ -439,6 +439,19 @@ receipt:
   choose: "Galerie"
   image_error: "Das Bild kann nicht angezeigt werden. Es bleibt archiviert."
 
+ocr:
+  starting: "Texterkennung wird vorbereitet …"
+  detecting: "Text wird gesucht …"
+  reading: "Text wird gelesen: Zeile %{done} von %{total}"
+  items_one: "1 Position erkannt"
+  items_other: "%{count} Positionen erkannt"
+  found_total: "%{items} · Summe %{total}"
+  no_total: "Keine Gesamtsumme gefunden. Bitte den Betrag prüfen."
+  differs: "Die Positionen ergeben %{sum}. Bitte den Betrag prüfen."
+  unreadable: "Auf dem Kassenzettel wurde kein lesbarer Text gefunden."
+  failed: "Die Texterkennung ist fehlgeschlagen."
+  retry: "Erneut erkennen"
+
 scan:
   working: "Bild wird übernommen …"
   error_title: "Bild konnte nicht übernommen werden"

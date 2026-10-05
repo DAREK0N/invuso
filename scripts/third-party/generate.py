@@ -169,6 +169,7 @@ def main():
                "Lucide Contributors 2022; Cole Bemis 2013-2022 |")
     out.append(f"| Tailwind CSS (erzeugtes Stylesheet) | {tailwind_version} | MIT | Tailwind Labs, Inc. |")
     out.append("| Mozilla-Root-Zertifikate (über webpki-roots) | – | CDLA-Permissive-2.0 | – |")
+    out.append("| PaddleOCR PP-OCRv6 small (Texterkennungsmodelle und Wörterbuch, ONNX über RapidOCR) | PP-OCRv6 | Apache-2.0 | PaddlePaddle Authors |")
     out.append("")
 
     out.append("## Rust-Crates\n")

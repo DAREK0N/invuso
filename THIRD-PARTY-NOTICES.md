@@ -12,6 +12,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | Lucide Icons (über dioxus-free-icons) | 0.265.0 | ISC; Feather-Anteile MIT | Lucide Contributors 2022; Cole Bemis 2013-2022 |
 | Tailwind CSS (erzeugtes Stylesheet) | 4.1.5 | MIT | Tailwind Labs, Inc. |
 | Mozilla-Root-Zertifikate (über webpki-roots) | – | CDLA-Permissive-2.0 | – |
+| PaddleOCR PP-OCRv6 small (Texterkennungsmodelle und Wörterbuch, ONNX über RapidOCR) | PP-OCRv6 | Apache-2.0 | PaddlePaddle Authors |
 
 ## Rust-Crates
 
@@ -195,6 +196,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | num-integer | 0.1.47 | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | num-rational | 0.4.2 | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
+| num_cpus | 1.17.0 | MIT OR Apache-2.0 | Copyright (c) 2015-2025 Sean McArthur |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | Copyright (c) 2018, Daniel Wagner-Hall |
 | num_threads | 0.1.7 | MIT OR Apache-2.0 | Copyright 2021 Jacob Pratt; Copyright (c) 2021 Jacob Pratt |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | Copyright (c) Aleksey Kladov |
@@ -242,6 +244,16 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | rgb | 0.8.53 | MIT | Copyright (c) 2019 Kornel |
 | ring | 0.17.14 | Apache-2.0 AND ISC | Copyright (c) 2009 The Go Authors. All rights reserved.; Copyright 2015 The Chromium Authors. All rights reserved.; Copyright 2015-2025 Brian Smith. |
+| rten | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-base | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-gemm | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-imageproc | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-onnx | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-parallel | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-shape-inference | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-simd | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-tensor | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
+| rten-vecmath | 0.27.0 | MIT OR Apache-2.0 | Copyright (c) Robert Knight |
 | rusqlite | 0.40.2 | MIT | Copyright (c) 2014 The rusqlite developers |
 | rust-i18n | 3.1.5 | MIT | Copyright (c) 2021 Longbridge |
 | rust-i18n-support | 3.1.5 | MIT | Copyright (c) the contributors of https://github.com/longbridge/rust-i18n |
@@ -305,6 +317,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | tracing-subscriber | 0.3.23 | MIT | Copyright (c) 2019 Tokio Contributors |
 | triomphe | 0.1.16 | MIT OR Apache-2.0 | Copyright (c) 2019 Manish Goregaokar |
 | tungstenite | 0.28.0 | MIT OR Apache-2.0 | Copyright (c) 2017 Alexey Galakhov; Copyright (c) 2016 Jason Housley |
+| typeid | 1.0.3 | MIT OR Apache-2.0 | Copyright (c) David Tolnay |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | Copyright 2014 Paho Lurie-Gregg; Copyright (c) 2014 Paho Lurie-Gregg |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | COPYRIGHT AND PERMISSION NOTICE; Copyright © 1991-2023 Unicode, Inc. |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | Copyright (c) 2015 The Rust Project Developers |
