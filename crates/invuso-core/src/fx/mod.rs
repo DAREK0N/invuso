@@ -112,6 +112,23 @@ pub fn chain(first: &Rate, second: &Rate) -> Result<Rate, FxError> {
     Rate::new(first.base, second.quote, value)
 }
 
+/// The rate two amounts were actually exchanged at, e.g. 30 000 ¥ that
+/// cost 186.20 € on the card give `1 JPY = 0.0062066… EUR` (CASH-03,
+/// CASH-04). Both amounts must be positive and in different currencies.
+pub fn implied_rate(from: Money, to: Money) -> Result<Rate, FxError> {
+    if from.currency() == to.currency() {
+        return Err(FxError::SelfRateNotOne);
+    }
+    if from.amount_minor() <= 0 || to.amount_minor() <= 0 {
+        return Err(FxError::NonPositiveRate);
+    }
+    let value = to
+        .to_decimal()
+        .checked_div(from.to_decimal())
+        .ok_or(FxError::Overflow)?;
+    Rate::new(from.currency(), to.currency(), value)
+}
+
 /// Picks the rate for `date` from `(date, rate)` entries: the one of that
 /// day, otherwise the closest earlier one (idee.md 8.4). `None` if every
 /// known rate is newer than `date`.
@@ -228,6 +245,50 @@ mod tests {
             chain(&eur_jpy, &eur_chf),
             Err(FxError::ChainMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn implied_rate_converts_back_to_the_paid_amount() {
+        // 30 000 ¥ cost 186.20 € on the card.
+        let rate = implied_rate(
+            Money::new(30_000, cur("JPY")),
+            Money::new(18_620, cur("EUR")),
+        )
+        .unwrap();
+        assert_eq!(rate.base(), cur("JPY"));
+        assert_eq!(rate.quote(), cur("EUR"));
+        assert_eq!(
+            convert(Money::new(30_000, cur("JPY")), &rate).unwrap(),
+            Money::new(18_620, cur("EUR"))
+        );
+        // 200 € became 31 000 ¥: 155 ¥ per euro.
+        let exchange = implied_rate(
+            Money::new(20_000, cur("EUR")),
+            Money::new(31_000, cur("JPY")),
+        )
+        .unwrap();
+        assert_eq!(exchange.value(), d("155"));
+        // Three decimals: 10 € became 3.312 KWD.
+        let kwd =
+            implied_rate(Money::new(1_000, cur("EUR")), Money::new(3_312, cur("KWD"))).unwrap();
+        assert_eq!(kwd.value(), d("0.3312"));
+    }
+
+    #[test]
+    fn implied_rate_needs_two_positive_amounts_in_different_currencies() {
+        let eur = Money::new(100, cur("EUR"));
+        assert_eq!(
+            implied_rate(eur, Money::new(200, cur("EUR"))),
+            Err(FxError::SelfRateNotOne)
+        );
+        assert_eq!(
+            implied_rate(Money::new(0, cur("JPY")), eur),
+            Err(FxError::NonPositiveRate)
+        );
+        assert_eq!(
+            implied_rate(Money::new(100, cur("JPY")), Money::new(-1, cur("EUR"))),
+            Err(FxError::NonPositiveRate)
+        );
     }
 
     #[test]

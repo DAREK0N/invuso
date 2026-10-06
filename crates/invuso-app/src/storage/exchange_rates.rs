@@ -17,6 +17,12 @@ const PIVOT: &str = "EUR";
 /// them, so they never hide newer rates of the legs they were made of.
 pub const CROSS_SOURCE: &str = "cross";
 
+/// `source` of a rate money was actually exchanged at (cash withdrawal or
+/// exchange, CASH-03/04). Archived with its movement only: it includes the
+/// bank's or exchange office's margin, so lookups skip it and it never
+/// converts other expenses (user decision in AP-22).
+pub const MANUAL_SOURCE: &str = "manual";
+
 /// A rate as a provider reported it: `1 base = value quote` on `rate_date`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewExchangeRate {
@@ -117,8 +123,9 @@ impl Db {
     pub fn last_rate_fetch(&self) -> Result<Option<i64>, StorageError> {
         self.with(|conn| {
             Ok(conn.query_row(
-                "SELECT MAX(fetched_at) FROM exchange_rate WHERE deleted_at IS NULL",
-                [],
+                "SELECT MAX(fetched_at) FROM exchange_rate
+                 WHERE deleted_at IS NULL AND source NOT IN (?1, ?2)",
+                [CROSS_SOURCE, MANUAL_SOURCE],
                 |row| row.get(0),
             )?)
         })
@@ -258,6 +265,35 @@ pub(super) fn rate_id_for_expense(
     }
 }
 
+/// Archives a rate money was actually exchanged at on `date`
+/// (`YYYY-MM-DD`) as [`MANUAL_SOURCE`] and returns its id.
+pub(super) fn insert_manual_rate(
+    conn: &Connection,
+    device_id: &str,
+    rate: &Rate,
+    date: &str,
+) -> Result<String, StorageError> {
+    let id = new_id();
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO exchange_rate
+             (id, base, quote, rate, rate_date, fetched_at, source,
+              created_at, updated_at, origin_device_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, ?6, ?8)",
+        params![
+            id,
+            rate.base().code(),
+            rate.quote().code(),
+            rate.value().to_string(),
+            date,
+            now,
+            MANUAL_SOURCE,
+            device_id
+        ],
+    )?;
+    Ok(id)
+}
+
 fn pick_quote(
     conn: &Connection,
     base: Currency,
@@ -309,11 +345,14 @@ fn pick_leg(
 ) -> Result<Option<(Rate, ExchangeRate)>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {COLUMNS} FROM exchange_rate
-         WHERE deleted_at IS NULL AND source <> ?3
+         WHERE deleted_at IS NULL AND source NOT IN (?3, ?4)
            AND ((base = ?1 AND quote = ?2) OR (base = ?2 AND quote = ?1))"
     ))?;
     let rows = statement
-        .query_map([from.code(), to.code(), CROSS_SOURCE], rate_from_row)?
+        .query_map(
+            [from.code(), to.code(), CROSS_SOURCE, MANUAL_SOURCE],
+            rate_from_row,
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     let keyed: Vec<_> = rows
         .into_iter()

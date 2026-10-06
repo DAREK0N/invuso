@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdChevronRight, LdCircleAlert, LdPin, LdPlus, LdReceipt, LdUsers},
+    icons::ld_icons::{
+        LdBanknote, LdChevronRight, LdCircleAlert, LdPin, LdPlus, LdReceipt, LdUsers,
+    },
 };
 use invuso_core::domain::{Category, CategoryId, Group, Money, local_date};
 
@@ -14,6 +16,7 @@ use crate::components::{
     TopBar,
 };
 use crate::preferences::{day_heading, period_text};
+use crate::services::cash::{CashValue, cash_value};
 use crate::services::receipts;
 use crate::services::summary::group_summary;
 use crate::state::DataRevision;
@@ -41,10 +44,21 @@ struct HomeData {
     has_groups: bool,
     recent: Vec<RecentExpense>,
     categories: BTreeMap<CategoryId, Category>,
+    /// Cash of "Ich" (HOME-01).
+    cash: HomeCash,
 }
 
-/// `/`: the active group with total and own balance (HOME-02) and the
-/// latest expenses of all groups (HOME-03). Both lead on by tapping.
+/// Cash of "Ich" as its card on Home shows it (HOME-01).
+#[derive(Debug, Clone, PartialEq)]
+struct HomeCash {
+    /// Currencies with cash on hand; empty ones are left out.
+    balances: Vec<Money>,
+    value: CashValue,
+}
+
+/// `/`: the active group with total and own balance (HOME-02), the cash of
+/// "Ich" (HOME-01) and the latest expenses of all groups (HOME-03). All
+/// lead on by tapping.
 #[component]
 pub fn Home() -> Element {
     let db = use_context::<Db>();
@@ -72,6 +86,7 @@ pub fn Home() -> Element {
                         Some(active) => rsx! { ActiveGroupCard { active } },
                         None => rsx! { NoActiveGroupCard { has_groups: data.has_groups } },
                     }
+                    CashCard { cash: data.cash.clone() }
                     RecentExpenses {
                         recent: data.recent.clone(),
                         categories: data.categories.clone(),
@@ -105,7 +120,26 @@ fn load(db: &Db) -> Result<HomeData, StorageError> {
         .into_iter()
         .map(|c| (c.id.clone(), c))
         .collect();
+    let cash = match db.me()? {
+        Some(me) => {
+            let balances: Vec<Money> = db
+                .cash_balances(&me.id)?
+                .into_iter()
+                .filter(|b| !b.is_zero())
+                .collect();
+            let value = cash_value(db, &balances, db.expense_base_currency(None)?)?;
+            HomeCash { balances, value }
+        }
+        None => HomeCash {
+            balances: Vec::new(),
+            value: CashValue {
+                total: Money::zero(db.expense_base_currency(None)?),
+                missing: Vec::new(),
+            },
+        },
+    };
     Ok(HomeData {
+        cash,
         active,
         has_groups: !db.groups()?.is_empty(),
         recent: db.recent_expenses(RECENT_EXPENSES)?,
@@ -158,6 +192,56 @@ fn ActiveGroupCard(active: ActiveGroup) -> Element {
                         OwnBalance { balance: own }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Cash per currency and its total value (HOME-01); tapping opens the cash
+/// screen.
+#[component]
+fn CashCard(cash: HomeCash) -> Element {
+    let nav = use_navigator();
+    // One currency needs no total next to it.
+    let show_total = cash.balances.len() > 1
+        || cash
+            .balances
+            .first()
+            .is_some_and(|b| b.currency() != cash.value.total.currency());
+
+    rsx! {
+        section { class: "flex flex-col gap-2",
+            h2 { class: "flex items-center gap-1.5 px-1 text-sm font-medium text-floral-white-300",
+                Icon { icon: LdBanknote, class: "h-4 w-4" }
+                {t!("cash.home_title").to_string()}
+            }
+            button {
+                class: "flex w-full items-center gap-3 rounded-2xl border border-jet-black-800 bg-jet-black-900 px-4 py-4 text-left active:bg-jet-black-800 transition-colors ease-apple",
+                r#type: "button",
+                onclick: move |_| {
+                    nav.push(Route::Cash { person: String::new() });
+                },
+                if cash.balances.is_empty() {
+                    span { class: "min-w-0 flex-1 text-sm text-floral-white-400", {t!("cash.home_empty").to_string()} }
+                } else {
+                    span { class: "flex min-w-0 flex-1 flex-col gap-1",
+                        for balance in cash.balances.iter().copied() {
+                            MoneyText {
+                                key: "{balance.currency().code()}",
+                                amount: balance,
+                                class: if balance.is_negative() { "text-2xl font-semibold text-watermelon-300" } else { "text-2xl font-semibold text-floral-white-50" },
+                            }
+                        }
+                        if show_total {
+                            span { class: "text-sm text-floral-white-400",
+                                {t!("cash.value").to_string()}
+                                " "
+                                MoneyText { amount: cash.value.total }
+                            }
+                        }
+                    }
+                }
+                Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
             }
         }
     }

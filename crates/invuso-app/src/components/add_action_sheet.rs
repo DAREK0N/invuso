@@ -54,7 +54,7 @@ pub fn AddActionSheet(on_close: EventHandler<()>) -> Element {
                 }
                 ActionRow {
                     label: t!("add_sheet.cash").to_string(),
-                    to: Route::Cash {},
+                    to: Route::Cash { person: String::new() },
                     on_close,
                     Icon { icon: LdBanknote, class: "h-5 w-5" }
                 }

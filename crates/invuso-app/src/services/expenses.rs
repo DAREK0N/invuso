@@ -35,7 +35,14 @@ pub fn save_expense(
 ) -> Result<SavedExpense, SaveExpenseError> {
     validate_occurred_at(&new.occurred_at).map_err(StorageError::from)?;
     let base = db.expense_base_currency(new.group_id.as_ref())?;
-    let (quote, later_rate) = rate_for_day(db, primary, fallback, &new, base)?;
+    let (quote, later_rate) = rate_for_day(
+        db,
+        primary,
+        fallback,
+        new.total.currency(),
+        &new.occurred_at,
+        base,
+    )?;
     let expense = db.create_expense(new, &quote)?;
     Ok(SavedExpense {
         expense,
@@ -67,7 +74,14 @@ pub fn update_expense(
     };
     let (quote, later_rate) = match kept {
         Some(quote) => (quote, false),
-        None => rate_for_day(db, primary, fallback, &new, base)?,
+        None => rate_for_day(
+            db,
+            primary,
+            fallback,
+            new.total.currency(),
+            &new.occurred_at,
+            base,
+        )?,
     };
     let expense = db.update_expense(id, new, &quote)?;
     Ok(SavedExpense {
@@ -76,20 +90,21 @@ pub fn update_expense(
     })
 }
 
-/// The rate for the expense's day and whether it is from a later day.
+/// The rate `currency → base` for the day of `occurred_at` and whether it
+/// is from a later day.
 ///
 /// Order: the archived rate of the day or the closest earlier one
 /// (idee.md 8.4); if the archive has none, the day is fetched and archived
 /// (FX-09); if that fails too, the closest later archived rate.
-fn rate_for_day(
+pub(super) fn rate_for_day(
     db: &Db,
     primary: &dyn RateProvider,
     fallback: &dyn RateProvider,
-    new: &NewExpense,
+    currency: Currency,
+    occurred_at: &str,
     base: Currency,
 ) -> Result<(RateQuote, bool), SaveExpenseError> {
-    let currency = new.total.currency();
-    let date = local_date(&new.occurred_at).to_string();
+    let date = local_date(occurred_at).to_string();
 
     let mut quote = db.rate_on(currency, base, &date)?;
     if quote.is_none() {

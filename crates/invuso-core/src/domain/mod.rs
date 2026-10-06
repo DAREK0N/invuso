@@ -1,5 +1,6 @@
 //! Entities and value objects shared by all other modules.
 
+mod cash;
 mod currency;
 mod expense;
 mod group;
@@ -9,6 +10,7 @@ mod payment_method;
 mod person;
 mod settlement;
 
+pub use cash::{CashError, CashMovementId, CashMovementKind, cash_balances, cash_correction};
 pub use currency::{Currency, CurrencyError};
 pub use expense::{
     Category, CategoryId, Expense, ExpenseError, ExpenseId, ExpensePayment, ExpenseSource,

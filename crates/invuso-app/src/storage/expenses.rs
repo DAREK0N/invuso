@@ -119,48 +119,8 @@ impl Db {
         new: NewExpense,
         rate: &RateQuote,
     ) -> Result<Expense, StorageError> {
-        let title = validate_new(&new)?;
-        let id = ExpenseId::new(new_id());
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
-            let (base, fx_rate_id) = prepare(&tx, self.device_id(), &new, rate)?;
-            if let Some(receipt) = &new.receipt_id {
-                receipts::check_unattached(&tx, receipt)?;
-            }
-            let now = now_ms();
-            tx.execute(
-                "INSERT INTO expense
-                     (id, group_id, title, category_id, occurred_at, occurred_date,
-                      total_minor, currency, fx_rate_id, total_base_minor, base_currency,
-                      split_mode, source, reviewed, created_at, updated_at, origin_device_id,
-                      receipt_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14, ?15,
-                         ?16)",
-                params![
-                    id.as_str(),
-                    new.group_id.as_ref().map(GroupId::as_str),
-                    title,
-                    new.category_id.as_ref().map(CategoryId::as_str),
-                    new.occurred_at,
-                    local_date(&new.occurred_at),
-                    new.total.amount_minor(),
-                    new.total.currency().code(),
-                    fx_rate_id,
-                    base.amount_minor(),
-                    base.currency().code(),
-                    new.split.code(),
-                    new.source.code(),
-                    now,
-                    self.device_id(),
-                    new.receipt_id
-                ],
-            )?;
-            insert_parts(&tx, self.device_id(), &id, &new, now)?;
-            if let Some(receipt) = &new.receipt_id {
-                // Saving the expense is the user's check of what was read
-                // (idee.md 4.1 `Receipt.status`).
-                receipts::mark_reviewed(&tx, receipt, now)?;
-            }
             // Preselection of the next expense form.
             settings::set(
                 &tx,
@@ -168,9 +128,9 @@ impl Db {
                 new.group_id.as_ref().map_or("", GroupId::as_str),
             )?;
             settings::set(&tx, LAST_EXPENSE_CURRENCY, new.total.currency().code())?;
+            let expense = insert_expense(&tx, self.device_id(), new, rate)?;
             tx.commit()?;
-            let source = new.source;
-            Ok(saved(id.clone(), title, new, fx_rate_id, base, source))
+            Ok(expense)
         })
     }
 
@@ -752,6 +712,59 @@ fn validate_new(new: &NewExpense) -> Result<String, StorageError> {
     }
     validate_split(new.total.amount_minor(), &new.split)?;
     Ok(title)
+}
+
+/// Inserts a new expense with its parts, like [`Db::create_expense`] but
+/// inside the caller's transaction and without changing the preselection
+/// of the expense form (e.g. the fee of a cash withdrawal, CASH-03).
+pub(super) fn insert_expense(
+    conn: &Connection,
+    device_id: &str,
+    new: NewExpense,
+    rate: &RateQuote,
+) -> Result<Expense, StorageError> {
+    let title = validate_new(&new)?;
+    let id = ExpenseId::new(new_id());
+    let (base, fx_rate_id) = prepare(conn, device_id, &new, rate)?;
+    if let Some(receipt) = &new.receipt_id {
+        receipts::check_unattached(conn, receipt)?;
+    }
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO expense
+             (id, group_id, title, category_id, occurred_at, occurred_date,
+              total_minor, currency, fx_rate_id, total_base_minor, base_currency,
+              split_mode, source, reviewed, created_at, updated_at, origin_device_id,
+              receipt_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14, ?15,
+                 ?16)",
+        params![
+            id.as_str(),
+            new.group_id.as_ref().map(GroupId::as_str),
+            title,
+            new.category_id.as_ref().map(CategoryId::as_str),
+            new.occurred_at,
+            local_date(&new.occurred_at),
+            new.total.amount_minor(),
+            new.total.currency().code(),
+            fx_rate_id,
+            base.amount_minor(),
+            base.currency().code(),
+            new.split.code(),
+            new.source.code(),
+            now,
+            device_id,
+            new.receipt_id
+        ],
+    )?;
+    insert_parts(conn, device_id, &id, &new, now)?;
+    if let Some(receipt) = &new.receipt_id {
+        // Saving the expense is the user's check of what was read
+        // (idee.md 4.1 `Receipt.status`).
+        receipts::mark_reviewed(conn, receipt, now)?;
+    }
+    let source = new.source;
+    Ok(saved(id, title, new, fx_rate_id, base, source))
 }
 
 /// Checks the references of `new` and converts its total: returns the

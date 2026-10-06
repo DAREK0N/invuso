@@ -34,6 +34,25 @@ pub fn occurred_at(date: &str, time: &str) -> Option<String> {
     Some(format_occurred_at(local, offset))
 }
 
+/// Unix seconds of a valid `occurred_at`, so times recorded with different
+/// UTC offsets (at home and on a trip) compare by when they happened.
+/// `None` if it is not valid.
+pub fn instant(occurred_at: &str) -> Option<i64> {
+    invuso_core::domain::validate_occurred_at(occurred_at).ok()?;
+    let local = parse_local(occurred_at.get(0..10)?, occurred_at.get(11..16)?)?;
+    let second: u8 = occurred_at.get(17..19)?.parse().ok()?;
+    let offset = match occurred_at.get(19..)? {
+        "Z" => UtcOffset::UTC,
+        text => {
+            let sign: i8 = if text.starts_with('-') { -1 } else { 1 };
+            let hours: i8 = text.get(1..3)?.parse().ok()?;
+            let minutes: i8 = text.get(4..6)?.parse().ok()?;
+            UtcOffset::from_hms(sign * hours, sign * minutes, 0).ok()?
+        }
+    };
+    Some(local.assume_offset(offset).unix_timestamp() + i64::from(second))
+}
+
 /// Day of the week of a `YYYY-MM-DD` date, Monday = 0 … Sunday = 6.
 pub fn weekday(date: &str) -> Option<u8> {
     Some(parse_date(date)?.weekday().number_days_from_monday())
@@ -133,6 +152,22 @@ mod tests {
         assert_eq!(previous_day("2024-03-01").as_deref(), Some("2024-02-29"));
         assert_eq!(previous_day("2026-01-01").as_deref(), Some("2025-12-31"));
         assert_eq!(previous_day("x"), None);
+    }
+
+    #[test]
+    fn instants_compare_across_offsets() {
+        // 08:13 in Berlin is after 12:30 in Tokyo on the same day.
+        let berlin = instant("2026-10-06T08:13:00+02:00").unwrap();
+        let tokyo = instant("2026-10-06T12:30:00+09:00").unwrap();
+        assert!(berlin > tokyo);
+        assert_eq!(
+            instant("2026-10-06T06:13:00Z"),
+            Some(berlin),
+            "same instant in UTC"
+        );
+        assert_eq!(instant("2026-10-06T02:43:00-03:30"), Some(berlin));
+        assert_eq!(instant("2026-10-06T08:13:59+02:00"), Some(berlin + 59));
+        assert_eq!(instant("gestern"), None);
     }
 
     #[test]

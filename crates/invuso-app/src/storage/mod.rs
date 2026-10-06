@@ -8,6 +8,7 @@
     expect(dead_code, reason = "repositories are wired up by the M1 screens")
 )]
 
+mod cash;
 mod categories;
 mod db;
 mod exchange_rates;
@@ -23,6 +24,7 @@ mod settings;
 mod settlements;
 mod translations;
 
+pub use cash::{CashEntry, NewExchange, NewWithdrawal, WithdrawalFee};
 pub(crate) use db::now_ms;
 pub use db::{Db, StorageError};
 pub use exchange_rates::{NearRate, NewExchangeRate, RateQuote};

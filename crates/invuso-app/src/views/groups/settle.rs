@@ -18,8 +18,8 @@ use super::form::GroupNotFound;
 use crate::clock::{local_now, occurred_at};
 use crate::components::{
     Avatar, AvatarSize, BottomSheet, Button, ButtonVariant, CardSection, CompactAmountInput,
-    DateTimeField, EmptyState, ErrorBanner, MoneyText, PaymentIconGlyph, PaymentMethodIcon,
-    PersonOption, PersonPicker, TopBar,
+    DateTimeField, EmptyState, ErrorBanner, MethodChoice, MoneyText, PaymentIconGlyph,
+    PaymentMethodIcon, PersonOption, PersonPicker, TopBar,
 };
 use crate::format::{NumberFormat, amount_text, format_money, parse_amount};
 use crate::platform::{TextShare, text_share};
@@ -679,28 +679,6 @@ fn PersonButton(label: String, person: Option<Person>, onclick: EventHandler<()>
                     span { class: "truncate text-base text-floral-white-400", {t!("settle.choose").to_string()} }
                 }
             }
-        }
-    }
-}
-
-/// Selectable payment method row; `children` is its icon.
-#[component]
-fn MethodChoice(
-    label: String,
-    selected: bool,
-    onclick: EventHandler<()>,
-    children: Element,
-) -> Element {
-    rsx! {
-        button {
-            class: "flex min-h-14 w-full items-center gap-3 rounded-2xl px-3 text-left active:bg-jet-black-800 transition-colors ease-apple",
-            class: if selected { "bg-cerulean-900" },
-            r#type: "button",
-            role: "option",
-            aria_selected: if selected { "true" } else { "false" },
-            onclick: move |_| onclick.call(()),
-            {children}
-            span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", "{label}" }
         }
     }
 }

@@ -57,8 +57,9 @@ pub enum Route {
 
         #[route("/receipts")]
         ReceiptArchive {},
-        #[route("/cash")]
-        Cash {},
+        // `person` empty shows the cash of "Ich" (AP-22).
+        #[route("/cash?:person")]
+        Cash { person: String },
 
         #[route("/converter")]
         Converter {},
