@@ -29,6 +29,8 @@ pub enum ReceiptError {
     Platform(String),
     #[error("the image could not be stored: {0}")]
     Io(#[from] std::io::Error),
+    #[error("the image could not be read: {0}")]
+    Image(String),
     #[error(transparent)]
     Storage(#[from] StorageError),
 }
@@ -93,14 +95,31 @@ fn archive(
     Ok(db.create_receipt(&original, thumbnail_path.as_deref())?)
 }
 
+impl From<image::ImageError> for ReceiptError {
+    fn from(error: image::ImageError) -> Self {
+        Self::Image(error.to_string())
+    }
+}
+
 /// JPEG preview of an image, turned upright by its EXIF orientation.
 fn thumbnail(bytes: &[u8]) -> Result<Vec<u8>, image::ImageError> {
+    thumbnail_of(&decode_upright(bytes)?)
+}
+
+/// Decodes an image file turned upright by its EXIF orientation, the way
+/// the WebView shows it.
+pub(crate) fn decode_upright(bytes: &[u8]) -> Result<DynamicImage, image::ImageError> {
     let mut decoder = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()?
         .into_decoder()?;
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
+    Ok(image)
+}
+
+/// JPEG preview of an upright image.
+pub(crate) fn thumbnail_of(image: &DynamicImage) -> Result<Vec<u8>, image::ImageError> {
     let small = image.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE).into_rgb8();
     let mut jpeg = Vec::new();
     JpegEncoder::new_with_quality(&mut jpeg, 80).encode_image(&small)?;

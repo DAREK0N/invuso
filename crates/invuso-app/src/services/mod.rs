@@ -11,6 +11,7 @@ pub mod expenses;
 pub mod export;
 pub mod ocr;
 pub mod rates;
+pub mod receipt_edit;
 pub mod receipts;
 pub mod settlements;
 pub mod summary;

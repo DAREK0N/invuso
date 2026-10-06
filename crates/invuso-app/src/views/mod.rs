@@ -10,6 +10,7 @@ mod not_found;
 mod onboarding;
 mod placeholder;
 mod receipt;
+mod receipt_adjust;
 mod settings;
 
 pub use cash::*;
@@ -20,6 +21,7 @@ pub use home::*;
 pub use not_found::*;
 pub use onboarding::*;
 pub use receipt::*;
+pub use receipt_adjust::*;
 pub use settings::*;
 
 use placeholder::PlaceholderPage;

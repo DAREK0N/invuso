@@ -4,7 +4,8 @@
 //! No binarization or grayscale conversion: the PP-OCRv6 models were
 //! trained on colour photos, and thresholding loses the faint strokes of
 //! thermal paper. Straightening a skewed photo is left to the detector's
-//! rotated boxes; perspective correction comes with RCP-05.
+//! rotated boxes; perspective correction is the user's step before (RCP-05,
+//! `services::receipt_edit`).
 
 use std::io::Cursor;
 
@@ -47,7 +48,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<RgbImage, OcrError> {
 /// Spreads the brightness range of a dull photo (grey paper, dim light)
 /// over the full scale; every channel gets the same mapping, so colours
 /// keep their hue.
-pub(super) fn stretch_contrast(image: &mut RgbImage) {
+pub(crate) fn stretch_contrast(image: &mut RgbImage) {
     let mut histogram = [0u64; 256];
     for pixel in image.pixels() {
         histogram[luma(pixel.0) as usize] += 1;
@@ -76,7 +77,7 @@ pub(super) fn stretch_contrast(image: &mut RgbImage) {
 
 /// Brightness that separates a bright receipt from the background it lies
 /// on (Otsu's threshold over the whole photo).
-pub(super) fn paper_threshold(image: &RgbImage) -> u8 {
+pub(crate) fn paper_threshold(image: &RgbImage) -> u8 {
     let mut histogram = [0u64; 256];
     for pixel in image.pixels() {
         histogram[luma(pixel.0) as usize] += 1;
@@ -107,7 +108,7 @@ pub(super) fn paper_threshold(image: &RgbImage) -> u8 {
 }
 
 /// Integer luma (ITU-R BT.601).
-pub(super) fn luma([r, g, b]: [u8; 3]) -> u8 {
+pub(crate) fn luma([r, g, b]: [u8; 3]) -> u8 {
     ((299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000) as u8
 }
 

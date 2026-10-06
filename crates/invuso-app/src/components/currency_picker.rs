@@ -14,7 +14,15 @@ use crate::storage::{Db, FAVORITE_CURRENCY_LIST, RECENT_CURRENCY_LIST};
 /// favorites on top; the star of each row adds or removes a favorite (UI-15).
 /// Every pick counts as recently used, whichever screen the picker is on.
 #[component]
-pub fn CurrencyPicker(selected: Currency, on_select: EventHandler<Currency>) -> Element {
+pub fn CurrencyPicker(
+    selected: Currency,
+    on_select: EventHandler<Currency>,
+    /// No row is marked: `selected` only stands in, e.g. on a receipt
+    /// before its currency was picked.
+    #[props(default)]
+    nothing_selected: bool,
+) -> Element {
+    let selected = (!nothing_selected).then_some(selected);
     let db = use_context::<Db>();
     let mut query = use_signal(String::new);
     let all = use_hook(Currency::selectable);
@@ -158,7 +166,7 @@ pub fn CurrencyPicker(selected: Currency, on_select: EventHandler<Currency>) -> 
 #[component]
 fn CurrencyRow(
     currency: Currency,
-    selected: Currency,
+    selected: Option<Currency>,
     favorite: bool,
     on_select: EventHandler<Currency>,
     on_toggle_favorite: EventHandler<Currency>,
@@ -184,7 +192,7 @@ fn CurrencyRow(
                     code: currency.code().to_string(),
                     name: currency.name().to_string(),
                     detail,
-                    selected: currency == selected,
+                    selected: selected == Some(currency),
                     onclick: move |_| on_select.call(currency),
                 }
             }

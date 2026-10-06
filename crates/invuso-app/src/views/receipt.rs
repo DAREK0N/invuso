@@ -4,12 +4,12 @@ use dioxus_free_icons::{
     icons::ld_icons::{LdCamera, LdCircleAlert, LdImage},
 };
 
-use super::PlaceholderPage;
+use super::{PlaceholderPage, ReceiptAdjuster};
 use crate::Route;
 use crate::components::{Button, ButtonVariant, EmptyState, TopBar};
 use crate::platform::ImageKind;
 use crate::services::receipts::capture_receipt;
-use crate::storage::Db;
+use crate::storage::{Db, ReceiptFiles};
 
 /// `source` of [`Route::Scan`] that opens the camera.
 pub const SOURCE_CAMERA: &str = "camera";
@@ -21,13 +21,17 @@ pub const SOURCE_GALLERY: &str = "gallery";
 enum ScanState {
     /// Camera or picker open, or the image being archived.
     Working,
+    /// Archived; the user turns and crops it (RCP-05).
+    Adjusting(ReceiptFiles),
     Failed(String),
 }
 
 /// `/scan?source=…`: opens the camera or the photo picker right away,
-/// archives the image (idee.md 7.2 steps 1–2) and continues to its review
-/// (step 5, `ReceiptReview`), where text recognition runs (RCP-01..03). Backing out of the
-/// picker returns to where the plus button was tapped.
+/// archives the image, lets the user turn, crop and straighten it
+/// (idee.md 7.2 steps 1–2, RCP-05) and continues to its review (step 5,
+/// `ReceiptReview`), where text recognition runs (RCP-01..03). Backing out
+/// of the picker or the adjusting returns to where the plus button was
+/// tapped; the photo stays archived.
 #[component]
 pub fn Scan(source: String) -> Element {
     let db = use_context::<Db>();
@@ -44,11 +48,7 @@ pub fn Scan(source: String) -> Element {
         let db = db.clone();
         spawn(async move {
             match capture_receipt(db, kind).await {
-                Ok(Some(receipt)) => {
-                    nav.replace(Route::ReceiptReview {
-                        receipt_id: receipt.id,
-                    });
-                }
+                Ok(Some(receipt)) => state.set(ScanState::Adjusting(receipt)),
                 Ok(None) if nav.can_go_back() => nav.go_back(),
                 Ok(None) => {
                     nav.replace(Route::Home {});
@@ -59,6 +59,14 @@ pub fn Scan(source: String) -> Element {
     });
     use_hook(move || start.call(kind));
 
+    let leave = move || {
+        if nav.can_go_back() {
+            nav.go_back();
+        } else {
+            nav.replace(Route::Home {});
+        }
+    };
+
     rsx! {
         TopBar { title: t!("page.scan").to_string(), show_back: true }
         match state() {
@@ -66,6 +74,17 @@ pub fn Scan(source: String) -> Element {
                 div { class: "flex flex-col items-center gap-4 px-8 py-16 text-center", role: "status",
                     div { class: "h-10 w-10 animate-spin rounded-full border-4 border-jet-black-700 border-t-cerulean-400" }
                     p { class: "text-sm text-floral-white-300", {t!("scan.working").to_string()} }
+                }
+            },
+            ScanState::Adjusting(receipt) => rsx! {
+                ReceiptAdjuster {
+                    receipt,
+                    on_done: move |receipt: ReceiptFiles| {
+                        nav.replace(Route::ReceiptReview {
+                            receipt_id: receipt.id,
+                        });
+                    },
+                    on_cancel: move |_| leave(),
                 }
             },
             ScanState::Failed(message) => rsx! {

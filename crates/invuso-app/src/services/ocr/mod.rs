@@ -9,7 +9,7 @@
 
 mod jobs;
 mod paddle;
-mod preprocess;
+pub(crate) mod preprocess;
 
 use std::path::Path;
 
@@ -79,7 +79,8 @@ pub fn analyze_receipt(
 ) -> Result<ReceiptText, OcrError> {
     let receipt = db.receipt(receipt_id)?.ok_or(OcrError::NoReceipt)?;
     // Several pages come with RCP-06; until then a receipt has one image.
-    let path = receipt.image_paths.first().ok_or(OcrError::NoReceipt)?;
+    // A corrected copy (RCP-05) is what the user wants read.
+    let path = receipt.page(0).ok_or(OcrError::NoReceipt)?;
     let bytes = std::fs::read(data_dir.join(path)).map_err(|e| OcrError::Image(e.to_string()))?;
     let image = preprocess::prepare(&bytes)?;
     let recognition = engine.recognize(&image, progress)?;
@@ -285,5 +286,123 @@ mod tests {
         }
         assert!(german > 0, "no German samples");
         println!("{japanese_matched} Japanese receipts match their total");
+    }
+
+    /// AP-34: a receipt photographed at an angle is read better once its
+    /// four corners are straightened (RCP-05). The German AP-S1 photos are
+    /// put into a strong perspective, as a tilted phone sees them; the
+    /// corners given back are a little off, as a finger sets them.
+    #[test]
+    #[ignore = "needs the AP-S1 sample photos in spikes/ocr/samples"]
+    fn straightening_a_tilted_receipt_reads_more() {
+        use invuso_core::domain::Currency;
+        use invuso_core::receipt::{TotalCheck, parse_receipt};
+
+        use crate::services::receipt_edit::{
+            ImageEdit, Point, detect_corners, photograph_at_an_angle,
+        };
+
+        let app = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |name: &str| std::fs::read(app.join("assets/ocr").join(name)).unwrap();
+        let dictionary = String::from_utf8(read("ppocrv6_dict.txt")).unwrap();
+        let engine = PaddleOcr::load(
+            read("PP-OCRv6_det_small.onnx"),
+            read("PP-OCRv6_rec_small.onnx"),
+            &dictionary,
+        )
+        .unwrap();
+        let euro = Currency::from_code("EUR").unwrap();
+        // Items found (printed only: a tilted photo can yield wrong ones)
+        // and whether they add up to the printed total.
+        let read_receipt = |image: &mut RgbImage| {
+            preprocess::stretch_contrast(image);
+            let recognition = engine.recognize(image, &mut |_| {}).unwrap();
+            let text = ReceiptText::new(engine.name(), recognition.fragments, 0.0);
+            let parsed = parse_receipt(&text.recognized(), euro).unwrap();
+            (parsed.items.len(), parsed.check == TotalCheck::Matches)
+        };
+
+        // Narrow at the top and turned a little; the photo has the
+        // receipt's proportions, so straightening gives them back.
+        let corners = [
+            Point::new(0.30, 0.06),
+            Point::new(0.74, 0.12),
+            Point::new(0.94, 0.95),
+            Point::new(0.06, 0.90),
+        ];
+        let set_by_finger = [
+            Point::new(0.29, 0.055),
+            Point::new(0.75, 0.115),
+            Point::new(0.945, 0.955),
+            Point::new(0.055, 0.905),
+        ];
+        let samples = app.join("../../spikes/ocr/samples");
+        let mut paths: Vec<_> = std::fs::read_dir(&samples)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("de_"))
+            })
+            .collect();
+        paths.sort();
+        // Matching totals per variant: tilted, straightened by finger, the
+        // same with each filter, and with the corners found automatically.
+        let names = ["tilted", "finger", "+contrast", "+sharpen", "auto"];
+        let mut matched = [0usize; 5];
+        for path in &paths {
+            let receipt = preprocess::decode(&std::fs::read(path).unwrap()).unwrap();
+            let scale = 4000.0 / f64::from(receipt.width().max(receipt.height()));
+            let (width, height) = (
+                (f64::from(receipt.width()) * scale) as u32,
+                (f64::from(receipt.height()) * scale) as u32,
+            );
+            let tilted = photograph_at_an_angle(&receipt, &corners, width, height);
+            let finger = ImageEdit::default().with_upright_corners(set_by_finger);
+            let detected = detect_corners(&tilted);
+            let variants = [
+                Some(tilted.clone()),
+                finger.apply(&tilted),
+                ImageEdit {
+                    contrast: true,
+                    ..finger
+                }
+                .apply(&tilted),
+                ImageEdit {
+                    sharpen: true,
+                    ..finger
+                }
+                .apply(&tilted),
+                detected.and_then(|c| ImageEdit::default().with_upright_corners(c).apply(&tilted)),
+            ];
+            print!("{:24}", path.file_name().unwrap().to_string_lossy());
+            for (index, variant) in variants.into_iter().enumerate() {
+                match variant {
+                    Some(mut image) => {
+                        let (items, total) = read_receipt(&mut image);
+                        matched[index] += usize::from(total);
+                        print!(
+                            "  {} {items:>2} {}",
+                            names[index],
+                            if total { "ok" } else { "--" }
+                        );
+                    }
+                    None => print!("  {} none", names[index]),
+                }
+            }
+            println!();
+        }
+        println!("matching totals: {names:?} {matched:?}");
+        let (matched_before, matched_after) = (matched[0], matched[1]);
+        assert!(!paths.is_empty(), "no German samples");
+        // 2026-10-06: 2 of 5 tilted, 5 of 5 straightened by finger, with
+        // either filter and with the corners found automatically.
+        assert!(
+            matched_after > matched_before,
+            "{matched_before} → {matched_after}"
+        );
+        assert_eq!(matched_after, paths.len());
+        assert_eq!(matched[4], paths.len(), "automatic corners");
     }
 }

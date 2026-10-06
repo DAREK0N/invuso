@@ -8,9 +8,10 @@ use crate::Route;
 use crate::appearance::{AppLanguage, Appearance, UiLanguage};
 use crate::components::{
     AvatarEntry, AvatarStack, BottomSheet, Button, CurrencyPicker, EmptyState, ErrorBanner,
-    LanguagePicker, LinkRow, RadioRow, TextField, TopBar,
+    LanguagePicker, LinkRow, RadioRow, SwitchRow, TextField, TopBar,
 };
 use crate::preferences::language_name;
+use crate::services::receipt_edit;
 use crate::state::DataRevision;
 use crate::storage::{Db, Profile};
 
@@ -256,6 +257,7 @@ fn ManageSection() -> Element {
                 }
             }
         }
+        ReceiptSection {}
         section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",
             h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
                 {t!("settings.data_section").to_string()}
@@ -404,6 +406,45 @@ fn TargetLanguageSheet(
                     },
                 }
             }
+        }
+    }
+}
+
+/// Receipt settings: suggest the corners of a new photo (RCP-05).
+#[component]
+fn ReceiptSection() -> Element {
+    let db = use_context::<Db>();
+    let mut auto = use_signal({
+        let db = db.clone();
+        move || receipt_edit::auto_corners(&db).map_err(|e| e.to_string())
+    });
+    let mut error = use_signal(|| None::<String>);
+
+    rsx! {
+        section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",
+            h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
+                {t!("settings.receipt_section").to_string()}
+            }
+            match auto() {
+                Ok(on) => rsx! {
+                    div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                        SwitchRow {
+                            label: t!("settings.auto_corners").to_string(),
+                            hint: t!("settings.auto_corners_hint").to_string(),
+                            checked: on,
+                            onchange: move |on: bool| match receipt_edit::set_auto_corners(&db, on) {
+                                Ok(()) => {
+                                    error.set(None);
+                                    auto.set(Ok(on));
+                                }
+                                Err(e) => error.set(Some(e.to_string())),
+                            },
+                        }
+                    }
+                },
+                Err(message) => rsx! { ErrorBanner { error: Some(message) } },
+            }
+            ErrorBanner { error: error() }
         }
     }
 }

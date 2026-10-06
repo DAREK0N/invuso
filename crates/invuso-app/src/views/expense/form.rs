@@ -55,6 +55,7 @@ use crate::storage::{
     Db, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, NearRate, NewExpense, NewExpensePayment,
     ReceiptFiles, StorageError,
 };
+use crate::views::ReceiptAdjuster;
 
 /// What the form reads from the database once; it keeps its own state
 /// while open.
@@ -252,6 +253,11 @@ fn ExpenseForm(data: FormData) -> Element {
             .unwrap_or_default()
     });
     let mut currency = use_signal(|| start_currency);
+    // A receipt starts without a currency (AP-34): until the user picks
+    // one, `currency` only stands in, nothing is read or saved with it.
+    // Suggesting it from the receipt is OCR-16 (AP-38).
+    let mut currency_chosen = use_signal(|| !review);
+    let read_currency = use_memo(move || currency_chosen().then_some(currency()));
     let mut title = use_signal(|| {
         prefill
             .as_ref()
@@ -346,6 +352,8 @@ fn ExpenseForm(data: FormData) -> Element {
     let mut receipt = use_signal(|| data.receipt.clone());
     let mut picking = use_signal(|| false);
     let mut receipt_error = use_signal(|| None::<String>);
+    // A photo just taken, while the user adjusts it.
+    let mut adjusting = use_signal(|| None::<ReceiptFiles>);
     let can_take_photo = use_hook(|| receipts::supports(ImageKind::Camera));
     // `None` until the recognition is read; then the receipt's language, if
     // it could be told (TRL-02). When editing, the stored one.
@@ -429,7 +437,7 @@ fn ExpenseForm(data: FormData) -> Element {
     let preview = use_memo(move || {
         revision.track();
         let (from, to, day) = (currency(), base_currency(), date());
-        if from == to || !is_iso_date(&day) {
+        if from == to || !is_iso_date(&day) || !currency_chosen() {
             return Ok(None);
         }
         preview_db
@@ -532,6 +540,8 @@ fn ExpenseForm(data: FormData) -> Element {
             own_rate.set(None);
         }
         currency.set(new_currency);
+        currency_chosen.set(true);
+        amount_error.set(None);
     };
 
     let edit_payer = use_callback(move |(index, text): (usize, String)| {
@@ -576,7 +586,10 @@ fn ExpenseForm(data: FormData) -> Element {
         let mut valid = true;
         let total =
             parse_amount(&amount_text_signal(), cur, format).filter(|m| m.amount_minor() > 0);
-        if total.is_none() {
+        if !currency_chosen() {
+            amount_error.set(Some(t!("expense.currency_required").to_string()));
+            valid = false;
+        } else if total.is_none() {
             amount_error.set(Some(t!("expense.amount_required").to_string()));
             valid = false;
         }
@@ -726,7 +739,8 @@ fn ExpenseForm(data: FormData) -> Element {
         let db = pick_db.clone();
         spawn(async move {
             match capture_receipt(db, kind).await {
-                Ok(Some(picked)) => receipt.set(Some(picked)),
+                // Turned and cropped first (RCP-05), then attached.
+                Ok(Some(picked)) => adjusting.set(Some(picked)),
                 Ok(None) => {}
                 Err(error) => receipt_error.set(Some(error.to_string())),
             }
@@ -882,9 +896,12 @@ fn ExpenseForm(data: FormData) -> Element {
                         amount_error.set(None);
                     },
                     on_currency_click: move |_| sheet.set(Some(Sheet::Currency)),
+                    currency_unset: !currency_chosen(),
                 }
                 if let Some(error) = amount_error() {
                     p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
+                } else if !currency_chosen() {
+                    p { class: "px-1 text-sm text-pale-oak-200", {t!("expense.currency_unset_hint").to_string()} }
                 }
                 match &*preview.read() {
                     Err(message) => rsx! { ErrorBanner { error: Some(message.clone()) } },
@@ -1003,7 +1020,7 @@ fn ExpenseForm(data: FormData) -> Element {
                             ReceiptRecognition {
                                 key: "{attached.id}",
                                 receipt_id: attached.id.clone(),
-                                currency,
+                                currency: read_currency,
                                 on_read,
                             }
                             button {
@@ -1048,6 +1065,17 @@ fn ExpenseForm(data: FormData) -> Element {
                     }
                 },
                 None => rsx! {},
+            }
+            if let Some(picked) = adjusting() {
+                ReceiptAdjuster {
+                    receipt: picked,
+                    on_done: move |files: ReceiptFiles| {
+                        adjusting.set(None);
+                        receipt.set(Some(files));
+                    },
+                    // Not attached, but kept in the archive like any photo.
+                    on_cancel: move |_| adjusting.set(None),
+                }
             }
             div { class: "flex flex-col gap-2",
                 span { class: "text-sm font-medium text-floral-white-300", {t!("expense.group").to_string()} }
@@ -1272,7 +1300,11 @@ fn ExpenseForm(data: FormData) -> Element {
                     title: t!("expense.currency").to_string(),
                     on_close: move |_| sheet.set(None),
                     div { class: "flex max-h-[70vh] flex-col gap-2 overflow-y-auto overscroll-contain px-3 pt-2",
-                        CurrencyPicker { selected: cur, on_select: pick_currency }
+                        CurrencyPicker {
+                            selected: cur,
+                            on_select: pick_currency,
+                            nothing_selected: !currency_chosen(),
+                        }
                     }
                 }
             },

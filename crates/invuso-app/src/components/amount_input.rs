@@ -23,6 +23,9 @@ pub fn AmountInput(
     /// (idee.md 7.3: the number pad first).
     #[props(default)]
     autofocus: bool,
+    /// No currency chosen yet: the button asks for one, no symbol shows.
+    #[props(default)]
+    currency_unset: bool,
 ) -> Element {
     // When a keystroke is rejected or rewritten (e.g. a separator added),
     // the parent's text may stay the same and this component would not
@@ -37,7 +40,11 @@ pub fn AmountInput(
     // The field is as wide as its text, so the symbol sits right at the
     // number; `ch` is the width of a digit with tabular numbers.
     let width = shown.chars().count().max(1);
-    let symbol = currency_symbol(currency);
+    let symbol = if currency_unset {
+        String::new()
+    } else {
+        currency_symbol(currency).to_string()
+    };
     let symbol_color = if shown.is_empty() {
         "text-floral-white-600"
     } else {
@@ -54,6 +61,7 @@ pub fn AmountInput(
                 currency,
                 label: if currency_label.is_empty() { label.clone() } else { currency_label },
                 onclick: on_currency_click,
+                unset: currency_unset,
             }
             // Tapping anywhere right of the button focuses the input.
             label {

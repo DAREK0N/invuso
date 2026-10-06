@@ -307,15 +307,12 @@ fn NoteAndPlace(expense: Expense) -> Element {
     }
 }
 
-/// The receipt's thumbnail; tapping shows the original in full screen
-/// with zoom (RCP-04).
+/// The receipt's thumbnail; tapping shows the image in full screen with
+/// zoom (RCP-04): the corrected copy if there is one (RCP-05).
 #[component]
 pub(super) fn ReceiptCard(receipt: ReceiptFiles) -> Element {
     let mut open = use_signal(|| false);
-    let original = receipt
-        .image_paths
-        .first()
-        .map(|path| receipts::file_url(path));
+    let original = receipt.page(0).map(receipts::file_url);
     let has_original = original.is_some();
     let label = t!("receipt.open").to_string();
 

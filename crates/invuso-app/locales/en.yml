@@ -90,6 +90,7 @@ profile:
   missing_text: "Restart the app to create your profile."
 
 currency_picker:
+  choose: "Currency"
   search: "Search currency"
   favorites: "Favorites"
   all: "All currencies"
@@ -115,6 +116,9 @@ settings:
   manage_section: "Manage"
   about_section: "About Invuso"
   app_section: "App"
+  receipt_section: "Receipts"
+  auto_corners: "Detect corners automatically"
+  auto_corners_hint: "Places the corners on the receipt's edge after taking a photo; you can still move them."
   data_section: "Data"
   app_language: "App language"
 
@@ -447,6 +451,8 @@ age:
   days: "%{count} days ago"
 
 expense:
+  currency_required: "Please choose the currency of the receipt."
+  currency_unset_hint: "Receipts start without a currency. Choose it and the amount and lines are filled in."
   amount: "Amount"
   currency: "Currency"
   amount_required: "Please enter an amount greater than 0."
@@ -685,6 +691,7 @@ packs:
   delete_text: "%{pair} is removed from the device. Remembered translations and corrections are kept."
 
 ocr:
+  choose_currency: "Text recognized. Choose the currency to fill in the amount and lines."
   starting: "Preparing text recognition …"
   detecting: "Looking for text …"
   reading: "Reading text: line %{done} of %{total}"
@@ -701,6 +708,30 @@ scan:
   working: "Adding the image …"
   error_title: "The image could not be added"
   retry: "Try again"
+
+adjust:
+  title: "Adjust receipt"
+  hint: "Drag the corners onto the corners of the receipt."
+  invalid: "The corners cross or are too close together."
+  loading: "Loading the image …"
+  error_title: "The image cannot be edited."
+  use_original: "Use original"
+  rotate_left: "Rotate left"
+  rotate_right: "Rotate right"
+  reset: "Whole image"
+  apply: "Apply"
+  saving: "Straightening …"
+  save_error: "The edited image could not be saved: %{error}"
+  auto: "Automatic"
+  contrast: "Contrast"
+  sharpen: "Sharpen"
+  detecting: "Finding the corners …"
+  not_found: "No receipt edge found – place the corners by hand."
+  detect_error: "The corners could not be found: %{error}"
+  corner_top_left: "Top left corner"
+  corner_top_right: "Top right corner"
+  corner_bottom_right: "Bottom right corner"
+  corner_bottom_left: "Bottom left corner"
 
 cash:
   load_error_title: "Cash cannot be loaded"

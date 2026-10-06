@@ -16,11 +16,13 @@ use crate::storage::Db;
 /// stays usable, then what the parser read. Hands what was read to the
 /// form once through `on_read` (idee.md 7.2 step 3), so it can fill an
 /// empty amount and the line items; a reading with nothing in it does not
-/// count, so a later currency change can still fill them.
+/// count, so a later currency change can still fill them. Without a
+/// currency (`None`, a receipt before the user picked one) nothing is read
+/// into the form yet.
 #[component]
 pub(super) fn ReceiptRecognition(
     receipt_id: String,
-    currency: ReadSignal<Currency>,
+    currency: ReadSignal<Option<Currency>>,
     on_read: EventHandler<ParsedReceipt>,
 ) -> Element {
     let db = use_context::<Db>();
@@ -39,7 +41,7 @@ pub(super) fn ReceiptRecognition(
     let parsed = use_memo(move || match &*stored.read() {
         // Parsing a few hundred boxes takes microseconds; redone when the
         // currency changes, since it decides how amounts are read.
-        Ok(Some(text)) => Some(parse_receipt(&text.recognized(), currency()).ok()),
+        Ok(Some(text)) => currency().map(|c| parse_receipt(&text.recognized(), c).ok()),
         _ => None,
     });
 
@@ -94,6 +96,9 @@ pub(super) fn ReceiptRecognition(
             p { class: "text-sm text-watermelon-300", role: "alert", "{message}" }
         },
         (None, Ok(None)) => rsx! { Progress { job: OcrJob::Starting } },
+        (None, Ok(Some(_))) if currency().is_none() => rsx! {
+            Line { icon_alert: false, text: t!("ocr.choose_currency").to_string() }
+        },
         (None, Ok(Some(_))) => match parsed() {
             Some(Some(receipt)) => rsx! { Outcome { receipt } },
             _ => rsx! { Line { icon_alert: true, text: t!("ocr.unreadable").to_string() } },

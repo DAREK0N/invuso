@@ -10,10 +10,22 @@ use super::{Db, StorageError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiptFiles {
     pub id: String,
-    /// Originals in page order (several only with RCP-06).
+    /// Originals in page order (several only with RCP-06); never changed.
     pub image_paths: Vec<String>,
+    /// Turned, cropped and straightened copy of each page (RCP-05), `None`
+    /// where the original was taken as it is.
+    pub edited_paths: Vec<Option<String>>,
     /// `None` if the image could not be decoded for a preview.
     pub thumbnail_path: Option<String>,
+}
+
+impl ReceiptFiles {
+    /// The image of a page that is shown and recognized: the corrected
+    /// copy if there is one, else the original.
+    pub fn page(&self, index: usize) -> Option<&str> {
+        let edited = self.edited_paths.get(index).and_then(Option::as_deref);
+        edited.or_else(|| self.image_paths.get(index).map(String::as_str))
+    }
 }
 
 /// One piece of recognized text with its box (OCR-01).
@@ -116,8 +128,46 @@ impl Db {
         Ok(ReceiptFiles {
             id,
             image_paths: vec![image_path.to_string()],
+            edited_paths: vec![None],
             thumbnail_path: thumbnail_path.map(str::to_string),
         })
+    }
+
+    /// Records the corrected copy of the receipt's first page and its new
+    /// thumbnail (RCP-05). A recognition of the old image no longer fits,
+    /// so the receipt goes back to `new`; the original stays untouched.
+    pub fn save_receipt_edit(
+        &self,
+        id: &str,
+        edited_path: &str,
+        thumbnail_path: Option<&str>,
+    ) -> Result<ReceiptFiles, StorageError> {
+        self.with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let now = now_ms();
+            let changed = tx.execute(
+                "UPDATE receipt
+                 SET thumbnail_path = ?2, ocr_raw_text = NULL, ocr_engine = NULL,
+                     ocr_confidence = NULL, ocr_boxes = NULL, parsed_at = NULL,
+                     status = 'new', updated_at = ?3
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id, thumbnail_path, now],
+            )?;
+            if changed == 0 {
+                return Err(StorageError::NotFound);
+            }
+            // Several pages come with RCP-06; until then the first one.
+            tx.execute(
+                "UPDATE receipt_image SET edited_path = ?2, updated_at = ?3
+                 WHERE id = (SELECT id FROM receipt_image
+                             WHERE receipt_id = ?1 AND deleted_at IS NULL
+                             ORDER BY position, id LIMIT 1)",
+                params![id, edited_path, now],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        self.receipt(id)?.ok_or(StorageError::NotFound)
     }
 
     /// The receipt's files, `None` if it does not exist or is deleted.
@@ -134,16 +184,19 @@ impl Db {
                 return Ok(None);
             };
             let mut statement = conn.prepare(
-                "SELECT path FROM receipt_image
+                "SELECT path, edited_path FROM receipt_image
                  WHERE receipt_id = ?1 AND deleted_at IS NULL
                  ORDER BY position, id",
             )?;
-            let image_paths = statement
-                .query_map([id], |row| row.get(0))?
-                .collect::<Result<Vec<String>, _>>()?;
+            let (image_paths, edited_paths) = statement
+                .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<Vec<(String, Option<String>)>, _>>()?
+                .into_iter()
+                .unzip();
             Ok(Some(ReceiptFiles {
                 id: id.to_string(),
                 image_paths,
+                edited_paths,
                 thumbnail_path,
             }))
         })
@@ -350,6 +403,41 @@ mod tests {
         assert_eq!(db.receipt_text(&blank.id).unwrap(), Some(empty.clone()));
         assert!(matches!(
             db.save_receipt_text("missing", &empty),
+            Err(StorageError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn an_edit_keeps_the_original_and_drops_the_old_recognition() {
+        let db = Db::open_in_memory().unwrap();
+        let receipt = db
+            .create_receipt("receipts/a.jpg", Some("receipts/a_thumb.jpg"))
+            .unwrap();
+        assert_eq!(receipt.page(0), Some("receipts/a.jpg"));
+        db.save_receipt_text(&receipt.id, &ReceiptText::new("test", Vec::new(), 0.0))
+            .unwrap();
+
+        let edited = db
+            .save_receipt_edit(
+                &receipt.id,
+                "receipts/a_edited.jpg",
+                Some("receipts/a_edited_thumb.jpg"),
+            )
+            .unwrap();
+        assert_eq!(edited.image_paths, ["receipts/a.jpg"]);
+        assert_eq!(
+            edited.edited_paths,
+            [Some("receipts/a_edited.jpg".to_string())]
+        );
+        assert_eq!(edited.page(0), Some("receipts/a_edited.jpg"));
+        assert_eq!(
+            edited.thumbnail_path.as_deref(),
+            Some("receipts/a_edited_thumb.jpg")
+        );
+        assert_eq!(db.receipt(&receipt.id).unwrap(), Some(edited));
+        assert_eq!(db.receipt_text(&receipt.id).unwrap(), None);
+        assert!(matches!(
+            db.save_receipt_edit("missing", "receipts/x.jpg", None),
             Err(StorageError::NotFound)
         ));
     }

@@ -90,6 +90,7 @@ profile:
   missing_text: "Starte die App neu, um das Profil anzulegen."
 
 currency_picker:
+  choose: "Währung"
   search: "Währung suchen"
   favorites: "Favoriten"
   all: "Alle Währungen"
@@ -115,6 +116,9 @@ settings:
   manage_section: "Verwaltung"
   about_section: "Über Invuso"
   app_section: "App"
+  receipt_section: "Kassenzettel"
+  auto_corners: "Ecken automatisch erkennen"
+  auto_corners_hint: "Setzt die Ecken nach dem Foto auf die Kante des Belegs; du kannst sie danach noch verschieben."
   data_section: "Daten"
   app_language: "Sprache der App"
 
@@ -447,6 +451,8 @@ age:
   days: "vor %{count} Tagen"
 
 expense:
+  currency_required: "Bitte die Währung des Kassenzettels wählen."
+  currency_unset_hint: "Die Währung wird bei Kassenzetteln nicht vorbelegt. Wähle sie, dann werden Betrag und Positionen übernommen."
   amount: "Betrag"
   currency: "Währung"
   amount_required: "Bitte einen Betrag größer als 0 eingeben."
@@ -685,6 +691,7 @@ packs:
   delete_text: "%{pair} wird vom Gerät entfernt. Gemerkte Übersetzungen und Korrekturen bleiben erhalten."
 
 ocr:
+  choose_currency: "Text erkannt. Wähle die Währung, um Betrag und Positionen zu übernehmen."
   starting: "Texterkennung wird vorbereitet …"
   detecting: "Text wird gesucht …"
   reading: "Text wird gelesen: Zeile %{done} von %{total}"
@@ -701,6 +708,30 @@ scan:
   working: "Bild wird übernommen …"
   error_title: "Bild konnte nicht übernommen werden"
   retry: "Erneut versuchen"
+
+adjust:
+  title: "Kassenzettel anpassen"
+  hint: "Ziehe die Ecken auf die Ecken des Kassenzettels."
+  invalid: "Die Ecken überkreuzen sich oder liegen zu dicht beieinander."
+  loading: "Bild wird geladen …"
+  error_title: "Das Bild kann nicht bearbeitet werden."
+  use_original: "Original verwenden"
+  rotate_left: "Nach links drehen"
+  rotate_right: "Nach rechts drehen"
+  reset: "Ganzes Bild"
+  apply: "Übernehmen"
+  saving: "Wird entzerrt …"
+  save_error: "Das bearbeitete Bild konnte nicht gespeichert werden: %{error}"
+  auto: "Automatisch"
+  contrast: "Kontrast"
+  sharpen: "Schärfen"
+  detecting: "Ecken werden erkannt …"
+  not_found: "Keine Belegkante gefunden – setze die Ecken von Hand."
+  detect_error: "Ecken konnten nicht erkannt werden: %{error}"
+  corner_top_left: "Ecke oben links"
+  corner_top_right: "Ecke oben rechts"
+  corner_bottom_right: "Ecke unten rechts"
+  corner_bottom_left: "Ecke unten links"
 
 cash:
   load_error_title: "Bargeld kann nicht geladen werden"
