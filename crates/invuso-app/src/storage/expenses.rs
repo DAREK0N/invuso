@@ -3,16 +3,16 @@ use std::str::FromStr;
 
 use invuso_core::Decimal;
 use invuso_core::domain::{
-    CategoryId, Currency, Expense, ExpenseError, ExpenseId, ExpensePayment, ExpenseSource, GroupId,
-    LineItem, LineItemKind, Money, PaymentMethod, PaymentMethodId, Person, PersonId, item_lines,
-    local_date, validate_occurred_at, validate_payments, validate_split,
+    CategoryId, Currency, Expense, ExpenseError, ExpenseId, ExpensePayment, ExpenseSource,
+    GeoPoint, GroupId, LineItem, LineItemKind, Money, PaymentMethod, PaymentMethodId, Person,
+    PersonId, item_lines, local_date, validate_occurred_at, validate_payments, validate_split,
 };
-use invuso_core::fx;
+use invuso_core::fx::{self, Rate};
 use invuso_core::split::SplitMode;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::db::{new_id, now_ms};
-use super::exchange_rates::{RateQuote, rate_id_for_expense};
+use super::exchange_rates::{RateQuote, insert_manual_rate, rate_id_for_expense};
 use super::settings::{HOME_CURRENCY, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP};
 use super::{Db, StorageError, categories, groups, payment_methods, people, receipts, settings};
 
@@ -48,6 +48,17 @@ pub struct NewExpense {
     pub line_items: Vec<LineItem>,
     /// Only read when creating; an edit keeps how the expense was entered.
     pub source: ExpenseSource,
+    /// Free text; blank counts as none (EXP-10).
+    pub note: Option<String>,
+    /// Place as typed; blank counts as none (EXP-10).
+    pub location: Option<String>,
+    pub coordinates: Option<GeoPoint>,
+    /// A rate the user typed in, e.g. the card statement's (EXP-08),
+    /// between the expense's currency and the base currency, in the
+    /// direction it was typed (`1 EUR = 166.67 JPY`), so saving it again
+    /// gives the very same rate. It is archived as "manual" with the
+    /// expense and replaces the rate passed to [`Db::create_expense`].
+    pub own_rate: Option<Rate>,
 }
 
 /// One payer of an expense as the timeline shows it (GRP-21). Names of
@@ -134,8 +145,9 @@ impl Db {
         })
     }
 
-    /// Replaces everything about an expense except its group (moving is
-    /// EXP-11) and its source (EXP-05). The old payments and shares are
+    /// Replaces everything about an expense except its source (EXP-05),
+    /// including its group (moving it, EXP-11; payers and participants
+    /// must be members of the new one). The old payments and shares are
     /// soft-deleted, so history and sync keep them. `rate` works as in
     /// [`Db::create_expense`]; passing the expense's own archived rate keeps
     /// it (FX-04).
@@ -145,23 +157,19 @@ impl Db {
         new: NewExpense,
         rate: &RateQuote,
     ) -> Result<Expense, StorageError> {
+        let new = tidy(new);
         let title = validate_new(&new)?;
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
-            let (group_id, source, receipt_id): (Option<String>, String, Option<String>) = tx
+            let (source, receipt_id): (String, Option<String>) = tx
                 .query_row(
-                    "SELECT group_id, source, receipt_id FROM expense
+                    "SELECT source, receipt_id FROM expense
                      WHERE id = ?1 AND deleted_at IS NULL",
                     [id.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?
                 .ok_or(StorageError::NotFound)?;
-            if group_id.as_deref() != new.group_id.as_ref().map(GroupId::as_str) {
-                return Err(StorageError::InvalidInput(
-                    "an expense cannot change its group",
-                ));
-            }
             let source = ExpenseSource::from_code(&source)?;
             let (base, fx_rate_id) = prepare(&tx, self.device_id(), &new, rate)?;
             let now = now_ms();
@@ -169,7 +177,8 @@ impl Db {
                 "UPDATE expense
                  SET title = ?2, category_id = ?3, occurred_at = ?4, occurred_date = ?5,
                      total_minor = ?6, currency = ?7, fx_rate_id = ?8, total_base_minor = ?9,
-                     base_currency = ?10, split_mode = ?11, updated_at = ?12
+                     base_currency = ?10, split_mode = ?11, updated_at = ?12, group_id = ?13,
+                     note = ?14, location = ?15, latitude = ?16, longitude = ?17
                  WHERE id = ?1",
                 params![
                     id.as_str(),
@@ -183,7 +192,12 @@ impl Db {
                     base.amount_minor(),
                     base.currency().code(),
                     new.split.code(),
-                    now
+                    now,
+                    new.group_id.as_ref().map(GroupId::as_str),
+                    new.note,
+                    new.location,
+                    new.coordinates.map(GeoPoint::latitude),
+                    new.coordinates.map(GeoPoint::longitude)
                 ],
             )?;
             tx.execute(
@@ -440,6 +454,37 @@ impl Db {
         })
     }
 
+    /// The payment method each person paid an expense with last (PAY-06),
+    /// as long as it is neither archived nor deleted. Payments of edited
+    /// expenses count from the edit, since editing writes them anew.
+    pub fn last_payment_methods(
+        &self,
+    ) -> Result<BTreeMap<PersonId, PaymentMethodId>, StorageError> {
+        self.with(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT p.person_id, p.payment_method_id
+                 FROM expense_payment p
+                 JOIN expense e ON e.id = p.expense_id
+                 JOIN payment_method m ON m.id = p.payment_method_id
+                 WHERE p.deleted_at IS NULL AND e.deleted_at IS NULL
+                   AND m.deleted_at IS NULL AND m.archived = 0
+                 ORDER BY p.created_at, p.rowid",
+            )?;
+            let mut last = BTreeMap::new();
+            for row in statement.query_map([], |row| {
+                Ok((
+                    PersonId::new(row.get::<_, String>(0)?),
+                    PaymentMethodId::new(row.get::<_, String>(1)?),
+                ))
+            })? {
+                let (person, method) = row?;
+                // Ordered oldest first, so the newest one stays.
+                last.insert(person, method);
+            }
+            Ok(last)
+        })
+    }
+
     /// One expense with its payments and split.
     pub fn expense(&self, id: &ExpenseId) -> Result<Option<Expense>, StorageError> {
         self.with(|conn| Ok(load_expenses(conn, "e.id = ?1", id.as_str())?.pop()))
@@ -462,7 +507,7 @@ fn load_expenses(
     let mut statement = conn.prepare(&format!(
         "SELECT e.id, e.group_id, e.title, e.category_id, e.occurred_at, e.total_minor,
                 e.currency, e.fx_rate_id, e.total_base_minor, e.base_currency, e.split_mode,
-                e.source, e.receipt_id
+                e.source, e.receipt_id, e.note, e.location, e.latitude, e.longitude
          FROM expense e WHERE {filter} AND e.deleted_at IS NULL
          ORDER BY e.occurred_date, substr(e.occurred_at, 12, 8), e.created_at, e.id"
     ))?;
@@ -482,6 +527,12 @@ fn load_expenses(
                 row.get::<_, String>(10)?,
                 row.get::<_, String>(11)?,
                 row.get::<_, Option<String>>(12)?,
+                (
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<f64>>(15)?,
+                    row.get::<_, Option<f64>>(16)?,
+                ),
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -544,8 +595,13 @@ fn load_expenses(
                 split_mode,
                 source,
                 receipt_id,
+                (note, location, latitude, longitude),
             )| {
                 let currency = stored_currency(&currency)?;
+                let coordinates = match (latitude, longitude) {
+                    (Some(lat), Some(lon)) => Some(GeoPoint::new(lat, lon)?),
+                    _ => None,
+                };
                 let items = line_items.remove(&id).unwrap_or_default();
                 let split =
                     stored_split(&split_mode, shares.remove(&id).unwrap_or_default(), &items)?;
@@ -571,6 +627,9 @@ fn load_expenses(
                     split,
                     source: ExpenseSource::from_code(&source)?,
                     receipt_id,
+                    note,
+                    location,
+                    coordinates,
                     payments,
                     line_items: items,
                 })
@@ -687,6 +746,16 @@ fn load_line_items(
     Ok(items)
 }
 
+/// Trims the free texts of `new`; blank ones become `None` (EXP-10).
+fn tidy(new: NewExpense) -> NewExpense {
+    let tidy = |text: Option<String>| text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    NewExpense {
+        note: tidy(new.note),
+        location: tidy(new.location),
+        ..new
+    }
+}
+
 /// Checks what needs no database and returns the trimmed title.
 fn validate_new(new: &NewExpense) -> Result<String, StorageError> {
     let title = new.title.trim().to_string();
@@ -723,6 +792,7 @@ pub(super) fn insert_expense(
     new: NewExpense,
     rate: &RateQuote,
 ) -> Result<Expense, StorageError> {
+    let new = tidy(new);
     let title = validate_new(&new)?;
     let id = ExpenseId::new(new_id());
     let (base, fx_rate_id) = prepare(conn, device_id, &new, rate)?;
@@ -735,9 +805,9 @@ pub(super) fn insert_expense(
              (id, group_id, title, category_id, occurred_at, occurred_date,
               total_minor, currency, fx_rate_id, total_base_minor, base_currency,
               split_mode, source, reviewed, created_at, updated_at, origin_device_id,
-              receipt_id)
+              receipt_id, note, location, latitude, longitude)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14, ?15,
-                 ?16)",
+                 ?16, ?17, ?18, ?19, ?20)",
         params![
             id.as_str(),
             new.group_id.as_ref().map(GroupId::as_str),
@@ -754,7 +824,11 @@ pub(super) fn insert_expense(
             new.source.code(),
             now,
             device_id,
-            new.receipt_id
+            new.receipt_id,
+            new.note,
+            new.location,
+            new.coordinates.map(GeoPoint::latitude),
+            new.coordinates.map(GeoPoint::longitude)
         ],
     )?;
     insert_parts(conn, device_id, &id, &new, now)?;
@@ -776,7 +850,14 @@ fn prepare(
     rate: &RateQuote,
 ) -> Result<(Money, Option<String>), StorageError> {
     let base = base_currency(conn, new.group_id.as_ref())?;
-    if rate.rate.base() != new.total.currency() || rate.rate.quote() != base {
+    let currency = new.total.currency();
+    let own = new.own_rate.as_ref();
+    let used = match own {
+        Some(own) if own.base() == base && own.quote() == currency => own.inverse(),
+        Some(own) => *own,
+        None => rate.rate,
+    };
+    if used.base() != currency || used.quote() != base {
         return Err(StorageError::InvalidInput("rate does not fit the expense"));
     }
     check_people(conn, new.group_id.as_ref(), new)?;
@@ -788,9 +869,19 @@ fn prepare(
     if let Some(category) = &new.category_id {
         categories::check_category(conn, category)?;
     }
-    let total_in_base = fx::convert(new.total, &rate.rate)
+    let total_in_base = fx::convert(new.total, &used)
         .map_err(|_| StorageError::InvalidInput("amount cannot be converted"))?;
-    let fx_rate_id = rate_id_for_expense(conn, device_id, rate)?;
+    let fx_rate_id = match own {
+        // Archived with the expense, in the same transaction, for the day
+        // it happened; lookups never pick it (FX-10).
+        Some(own) => Some(insert_manual_rate(
+            conn,
+            device_id,
+            own,
+            local_date(&new.occurred_at),
+        )?),
+        None => rate_id_for_expense(conn, device_id, rate)?,
+    };
     Ok((total_in_base, fx_rate_id))
 }
 
@@ -934,6 +1025,9 @@ fn saved(
         split: new.split,
         source,
         receipt_id: new.receipt_id,
+        note: new.note,
+        location: new.location,
+        coordinates: new.coordinates,
         line_items: new.line_items,
         payments: new
             .payments
@@ -1066,7 +1160,7 @@ mod tests {
     use invuso_core::Decimal;
     use std::collections::BTreeMap;
 
-    use invuso_core::domain::{ExpenseError, PaymentMethodKind, Person};
+    use invuso_core::domain::{ExpenseError, PaymentMethod, PaymentMethodKind, Person};
     use invuso_core::fx::Rate;
     use invuso_core::split::{ExpenseEntry, SplitError, balances};
 
@@ -1146,6 +1240,10 @@ mod tests {
             receipt_id: None,
             line_items: Vec::new(),
             source: ExpenseSource::Manual,
+            note: None,
+            location: None,
+            coordinates: None,
+            own_rate: None,
         }
     }
 
@@ -1603,28 +1701,117 @@ mod tests {
     }
 
     #[test]
-    fn editing_keeps_group_and_rejects_invalid_input() {
+    fn editing_moves_the_group_and_rejects_invalid_input() {
         let s = setup("EUR");
         let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
         let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone()]));
         let saved =
             s.db.create_expense(hotel(&s, equal.clone()), &rate)
                 .unwrap();
+        // Moving it out of the group makes it personal (EXP-11).
         let personal = NewExpense {
             group_id: None,
             ..hotel(&s, equal.clone())
         };
-        assert!(matches!(
-            s.db.update_expense(&saved.id, personal, &rate),
-            Err(StorageError::InvalidInput(_))
-        ));
+        let moved = s.db.update_expense(&saved.id, personal, &rate).unwrap();
+        assert_eq!(moved.group_id, None);
+        assert!(s.db.group_timeline(&s.group).unwrap().is_empty());
+        let saved =
+            s.db.update_expense(&saved.id, hotel(&s, equal.clone()), &rate)
+                .unwrap();
+        assert_eq!(saved.group_id, Some(s.group.clone()));
+
         let empty = hotel(&s, SplitMode::Equal(BTreeSet::new()));
         assert!(s.db.update_expense(&saved.id, empty, &rate).is_err());
-        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(saved));
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(saved.clone()));
         assert!(matches!(
             s.db.update_expense(&ExpenseId::new("nope"), hotel(&s, equal), &rate),
             Err(StorageError::NotFound)
         ));
+    }
+
+    #[test]
+    fn last_used_method_per_person() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let card = |name: &str, owner: &Person| {
+            s.db.create_payment_method(NewPaymentMethod {
+                name: name.into(),
+                kind: PaymentMethodKind::CreditCard,
+                owner_person_id: Some(owner.id.clone()),
+                last4: None,
+                color: "cerulean".into(),
+                icon: "credit-card".into(),
+            })
+            .unwrap()
+        };
+        let (visa, amex, annas) = (
+            card("Visa", &s.me),
+            card("Amex", &s.me),
+            card("Anna", &s.anna),
+        );
+        let paid = |method: &PaymentMethod, person: &Person| NewExpense {
+            payments: vec![NewExpensePayment {
+                person_id: person.id.clone(),
+                payment_method_id: Some(method.id.clone()),
+                amount_minor: 4_000,
+            }],
+            ..hotel(&s, SplitMode::Equal(BTreeSet::from([s.me.id.clone()])))
+        };
+        assert!(s.db.last_payment_methods().unwrap().is_empty());
+        s.db.create_expense(paid(&visa, &s.me), &rate).unwrap();
+        let latest = s.db.create_expense(paid(&amex, &s.me), &rate).unwrap();
+        s.db.create_expense(paid(&annas, &s.anna), &rate).unwrap();
+        let last = s.db.last_payment_methods().unwrap();
+        assert_eq!(last.get(&s.me.id), Some(&amex.id));
+        assert_eq!(last.get(&s.anna.id), Some(&annas.id));
+
+        // Deleted expenses and archived methods no longer count.
+        s.db.delete_expense(&latest.id).unwrap();
+        assert_eq!(
+            s.db.last_payment_methods().unwrap().get(&s.me.id),
+            Some(&visa.id)
+        );
+        s.db.set_payment_method_archived(&visa.id, true).unwrap();
+        assert_eq!(s.db.last_payment_methods().unwrap().get(&s.me.id), None);
+    }
+
+    #[test]
+    fn note_location_and_coordinates_are_stored() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone()]));
+        let shinjuku = GeoPoint::new(35.6909, 139.7003).unwrap();
+        let saved =
+            s.db.create_expense(
+                NewExpense {
+                    note: Some(
+                        " mit Aussicht 
+"
+                        .into(),
+                    ),
+                    location: Some(" Shinjuku ".into()),
+                    coordinates: Some(shinjuku),
+                    ..hotel(&s, equal.clone())
+                },
+                &rate,
+            )
+            .unwrap();
+        assert_eq!(saved.note.as_deref(), Some("mit Aussicht"));
+        let stored = s.db.expense(&saved.id).unwrap().unwrap();
+        assert_eq!(stored, saved);
+        assert_eq!(stored.location.as_deref(), Some("Shinjuku"));
+        assert_eq!(stored.coordinates, Some(shinjuku));
+
+        // Editing can clear all three.
+        let cleared =
+            s.db.update_expense(&saved.id, hotel(&s, equal), &rate)
+                .unwrap();
+        assert_eq!(s.db.expense(&saved.id).unwrap(), Some(cleared.clone()));
+        assert_eq!(
+            (cleared.note, cleared.location, cleared.coordinates),
+            (None, None, None)
+        );
     }
 
     #[test]

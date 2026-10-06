@@ -134,6 +134,9 @@ mod tests {
             split,
             source: ExpenseSource::Manual,
             receipt_id: None,
+            note: None,
+            location: None,
+            coordinates: None,
             payments: payers
                 .iter()
                 .map(|(person, amount)| ExpensePayment {

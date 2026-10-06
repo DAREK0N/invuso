@@ -4,7 +4,7 @@
 //! with fixed formats.
 
 use invuso_core::Decimal;
-use invuso_core::domain::{Currency, Money};
+use invuso_core::domain::{Currency, GeoPoint, Money};
 use invuso_core::fx::expression::{Expression, Operator, Part};
 
 /// Up to this many integer digits can be typed: 10^12 even in a currency
@@ -393,6 +393,17 @@ pub fn format_number(value: Decimal, format: NumberFormat) -> String {
     )
 }
 
+/// Coordinates for reading, about one metre exact: `35,69090 · 139,70030`.
+/// The dot keeps them apart where the decimal separator is a comma.
+pub fn coordinates_text(point: GeoPoint, format: NumberFormat) -> String {
+    let degrees = |value: f64| format!("{value:.5}").replacen('.', &format.decimal.to_string(), 1);
+    format!(
+        "{} · {}",
+        degrees(point.latitude()),
+        degrees(point.longitude())
+    )
+}
+
 const MINUTE_MS: i64 = 60 * 1000;
 const HOUR_MS: i64 = 60 * MINUTE_MS;
 const DAY_MS: i64 = 24 * HOUR_MS;
@@ -418,6 +429,13 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+
+    #[test]
+    fn coordinates_read_in_the_app_language() {
+        let point = GeoPoint::new(35.6909, -139.7).unwrap();
+        assert_eq!(coordinates_text(point, DE), "35,69090 · -139,70000");
+        assert_eq!(coordinates_text(point, EN), "35.69090 · -139.70000");
+    }
 
     const DE: NumberFormat = NumberFormat {
         decimal: ',',

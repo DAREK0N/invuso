@@ -136,6 +136,10 @@ mod tests {
                 receipt_id: None,
                 line_items: Vec::new(),
                 source: invuso_core::domain::ExpenseSource::Manual,
+                note: None,
+                location: None,
+                coordinates: None,
+                own_rate: None,
             },
             &rate,
         )

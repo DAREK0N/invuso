@@ -4,7 +4,9 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdCircleAlert, LdPencil, LdReceipt, LdTrash2},
+    icons::ld_icons::{
+        LdCircleAlert, LdCopy, LdMapPin, LdPencil, LdReceipt, LdStickyNote, LdTrash2,
+    },
 };
 use invuso_core::Decimal;
 use invuso_core::domain::{
@@ -20,7 +22,7 @@ use crate::components::{
     Avatar, AvatarSize, Button, ButtonVariant, CategoryIconGlyph, EmptyState, ErrorBanner,
     ImageViewer, MoneyText, PaymentIconGlyph, TopBar,
 };
-use crate::format::{NumberFormat, format_number, format_rate};
+use crate::format::{NumberFormat, coordinates_text, format_number, format_rate};
 use crate::preferences::{category_name, day_heading, display_date};
 use crate::services::receipts;
 use crate::state::{DataRevision, ToastAction, Toaster};
@@ -130,9 +132,11 @@ pub fn ExpenseDetail(id: String) -> Element {
                 let detail = detail.as_ref().clone();
                 let expense = detail.expense.clone();
                 let edit_id = expense.id.as_str().to_string();
+                let copy_id = edit_id.clone();
                 rsx! {
                     div { class: "mx-4 flex flex-col gap-5 pt-6 safe-area-x",
                         Head { detail: detail.clone(), today: today.clone() }
+                        NoteAndPlace { expense: expense.clone() }
                         if let Some(receipt) = detail.receipt.clone() {
                             ReceiptCard { receipt }
                         }
@@ -158,13 +162,29 @@ pub fn ExpenseDetail(id: String) -> Element {
                                 Icon { icon: LdPencil, class: "h-5 w-5" }
                                 {t!("common.edit").to_string()}
                             }
+                            // A new expense filled from this one (EXP-12).
                             Button {
-                                variant: ButtonVariant::Danger,
+                                variant: ButtonVariant::Secondary,
                                 class: "flex-1",
-                                onclick: move |_| delete.call(expense.clone()),
-                                Icon { icon: LdTrash2, class: "h-5 w-5" }
-                                {t!("common.delete").to_string()}
+                                onclick: move |_| {
+                                    nav.push(Route::ExpenseNew {
+                                        // The copy's group comes with it; none
+                                        // given, saving leads to its timeline.
+                                        group: String::new(),
+                                        receipt: String::new(),
+                                        copy: copy_id.clone(),
+                                    });
+                                },
+                                Icon { icon: LdCopy, class: "h-5 w-5" }
+                                {t!("expense.duplicate").to_string()}
                             }
+                        }
+                        Button {
+                            variant: ButtonVariant::Danger,
+                            class: "w-full",
+                            onclick: move |_| delete.call(expense.clone()),
+                            Icon { icon: LdTrash2, class: "h-5 w-5" }
+                            {t!("common.delete").to_string()}
                         }
                     }
                 }
@@ -212,12 +232,17 @@ fn Head(detail: Detail, today: String) -> Element {
             quote = rate.quote().code()
         )
         .to_string();
-        match &quote.rate_date {
+        let line = match &quote.rate_date {
             Some(date) => format!(
                 "{line} · {}",
                 t!("converter.rate_date", date = display_date(date))
             ),
             None => line,
+        };
+        if quote.is_manual() {
+            format!("{line} · {}", t!("expense_detail.own_rate"))
+        } else {
+            line
         }
     });
 
@@ -239,6 +264,44 @@ fn Head(detail: Detail, today: String) -> Element {
             }
             if let Some(rate_text) = rate_text {
                 p { class: "text-sm tabular-nums text-floral-white-400", "{rate_text}" }
+            }
+        }
+    }
+}
+
+/// Where the expense happened and the note about it (EXP-10); nothing when
+/// neither was given.
+#[component]
+fn NoteAndPlace(expense: Expense) -> Element {
+    let point = expense
+        .coordinates
+        .map(|p| coordinates_text(p, NumberFormat::current()));
+    if expense.location.is_none() && point.is_none() && expense.note.is_none() {
+        return rsx! {};
+    }
+    let row = "flex items-start gap-3 px-4 py-3";
+    rsx! {
+        div { class: "flex flex-col divide-y divide-jet-black-800 overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+            if expense.location.is_some() || point.is_some() {
+                div { class: row,
+                    Icon { icon: LdMapPin, class: "mt-0.5 h-5 w-5 shrink-0 text-floral-white-400" }
+                    div { class: "flex min-w-0 flex-col",
+                        span { class: "sr-only", {t!("expense_detail.location").to_string()} }
+                        if let Some(place) = &expense.location {
+                            span { class: "text-base break-words text-floral-white-100", "{place}" }
+                        }
+                        if let Some(point) = &point {
+                            span { class: "text-sm tabular-nums text-floral-white-400", "{point}" }
+                        }
+                    }
+                }
+            }
+            if let Some(note) = &expense.note {
+                div { class: row,
+                    Icon { icon: LdStickyNote, class: "mt-0.5 h-5 w-5 shrink-0 text-floral-white-400" }
+                    span { class: "sr-only", {t!("expense_detail.note").to_string()} }
+                    p { class: "min-w-0 whitespace-pre-line break-words text-base text-floral-white-100", "{note}" }
+                }
             }
         }
     }

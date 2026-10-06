@@ -2,6 +2,7 @@
 //! and changing it later (EXP-05).
 
 use invuso_core::domain::{Currency, Expense, ExpenseId, local_date, validate_occurred_at};
+use invuso_core::fx::Rate;
 use thiserror::Error;
 
 use super::rates::{RateProvider, refresh_on_date};
@@ -25,7 +26,8 @@ pub struct SavedExpense {
     pub later_rate: bool,
 }
 
-/// Picks the rate for the expense's day and saves it. Blocks on the network
+/// Picks the rate for the expense's day and saves it; an own rate
+/// (EXP-08) is used as typed and needs no lookup. Blocks on the network
 /// when the day has to be fetched, so it must run on a background thread.
 pub fn save_expense(
     db: &Db,
@@ -35,14 +37,18 @@ pub fn save_expense(
 ) -> Result<SavedExpense, SaveExpenseError> {
     validate_occurred_at(&new.occurred_at).map_err(StorageError::from)?;
     let base = db.expense_base_currency(new.group_id.as_ref())?;
-    let (quote, later_rate) = rate_for_day(
-        db,
-        primary,
-        fallback,
-        new.total.currency(),
-        &new.occurred_at,
-        base,
-    )?;
+    let new = without_needless_rate(new, base);
+    let (quote, later_rate) = match &new.own_rate {
+        Some(own) => (typed(*own), false),
+        None => rate_for_day(
+            db,
+            primary,
+            fallback,
+            new.total.currency(),
+            &new.occurred_at,
+            base,
+        )?,
+    };
     let expense = db.create_expense(new, &quote)?;
     Ok(SavedExpense {
         expense,
@@ -50,10 +56,13 @@ pub fn save_expense(
     })
 }
 
-/// Saves the changes to an expense. Same currency on the same day keeps
-/// the archived rate the expense was saved with, so editing the amount or
-/// the split never brings in a newer rate (FX-04); another currency or day
-/// picks the rate like [`save_expense`]. May block on the network.
+/// Saves the changes to an expense. Same currency on the same day (and in
+/// a group with the same base currency) keeps the archived rate the expense
+/// was saved with, so editing the amount or the split never brings in a
+/// newer rate (FX-04); another currency, day or base currency picks the
+/// rate like [`save_expense`]. An own rate (EXP-08) is kept as long as it
+/// stays the same, and dropping it goes back to the rate of the day. May
+/// block on the network.
 pub fn update_expense(
     db: &Db,
     primary: &dyn RateProvider,
@@ -64,6 +73,7 @@ pub fn update_expense(
     validate_occurred_at(&new.occurred_at).map_err(StorageError::from)?;
     let old = db.expense(id)?.ok_or(StorageError::NotFound)?;
     let base = db.expense_base_currency(new.group_id.as_ref())?;
+    let mut new = without_needless_rate(new, base);
     let currency = new.total.currency();
     let unchanged = local_date(&old.occurred_at) == local_date(&new.occurred_at)
         && old.total.currency() == currency
@@ -72,9 +82,15 @@ pub fn update_expense(
         (Some(rate_id), true) => db.archived_rate(rate_id, currency, base)?,
         _ => None,
     };
-    let (quote, later_rate) = match kept {
-        Some(quote) => (quote, false),
-        None => rate_for_day(
+    let kept = kept.filter(|quote| quote.manual_rate() == new.own_rate);
+    if kept.is_some() {
+        // Already archived with the expense; no second copy.
+        new.own_rate = None;
+    }
+    let (quote, later_rate) = match (kept, &new.own_rate) {
+        (Some(quote), _) => (quote, false),
+        (None, Some(own)) => (typed(*own), false),
+        (None, None) => rate_for_day(
             db,
             primary,
             fallback,
@@ -88,6 +104,29 @@ pub fn update_expense(
         expense,
         later_rate,
     })
+}
+
+/// An own rate only means something between two currencies.
+fn without_needless_rate(new: NewExpense, base: Currency) -> NewExpense {
+    if new.total.currency() == base {
+        NewExpense {
+            own_rate: None,
+            ..new
+        }
+    } else {
+        new
+    }
+}
+
+/// Stands in for the rate of the day when there is an own rate: storage
+/// converts with the own rate and archives it with the expense.
+fn typed(rate: Rate) -> RateQuote {
+    RateQuote {
+        rate,
+        rate_date: None,
+        fetched_at: None,
+        legs: Vec::new(),
+    }
 }
 
 /// The rate `currency → base` for the day of `occurred_at` and whether it
@@ -220,6 +259,10 @@ mod tests {
             receipt_id: None,
             line_items: Vec::new(),
             source: invuso_core::domain::ExpenseSource::Manual,
+            note: None,
+            location: None,
+            coordinates: None,
+            own_rate: None,
         }
     }
 
@@ -338,5 +381,224 @@ mod tests {
         let edited = update_expense(&db, &primary, &fallback, &saved.expense.id, in_euro).unwrap();
         assert_eq!(edited.expense.fx_rate_id, None);
         assert_eq!(edited.expense.total_in_base, Money::new(1_990, cur("EUR")));
+    }
+
+    fn yen_to_euro(value: &str) -> Rate {
+        Rate::new(cur("JPY"), cur("EUR"), Decimal::from_str(value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn own_rate_is_archived_as_manual_and_stays() {
+        let (db, me) = setup();
+        db.archive_rates("frankfurter", 1, &[eur_to("JPY", "160", "2026-10-01")])
+            .unwrap();
+        let (primary, fallback) = (Fake::offline(), Fake::offline());
+        let card = NewExpense {
+            own_rate: Some(yen_to_euro("0.006")),
+            ..ramen(&me)
+        };
+        let saved = save_expense(&db, &primary, &fallback, card.clone()).unwrap();
+        // 3 000 ¥ × 0.006 = 18 €, not 3 000 / 160 = 18,75 €.
+        assert_eq!(saved.expense.total_in_base, Money::new(1_800, cur("EUR")));
+        let rate_id = saved.expense.fx_rate_id.clone().unwrap();
+        let archived = db
+            .archived_rate(&rate_id, cur("JPY"), cur("EUR"))
+            .unwrap()
+            .unwrap();
+        assert!(archived.is_manual());
+        assert_eq!(archived.rate_date.as_deref(), Some("2026-10-03"));
+        assert_eq!(
+            primary.calls.load(Ordering::Relaxed) + fallback.calls.load(Ordering::Relaxed),
+            0
+        );
+
+        // A later rate of the same day neither changes the expense nor is
+        // the own rate ever picked for another one (FX-04, FX-10).
+        db.archive_rates("frankfurter", 2, &[eur_to("JPY", "150", "2026-10-03")])
+            .unwrap();
+        let id = saved.expense.id.clone();
+        let stored = db.expense(&id).unwrap().unwrap();
+        assert_eq!(stored.total_in_base, Money::new(1_800, cur("EUR")));
+        let other = save_expense(&db, &primary, &fallback, ramen(&me)).unwrap();
+        assert_eq!(other.expense.total_in_base, Money::new(2_000, cur("EUR")));
+
+        // Saving again with the same own rate keeps the archived one.
+        let edited = update_expense(&db, &primary, &fallback, &id, card).unwrap();
+        assert_eq!(edited.expense.fx_rate_id, Some(rate_id.clone()));
+        assert_eq!(edited.expense.total_in_base, Money::new(1_800, cur("EUR")));
+
+        // Another own rate is archived anew.
+        let changed = NewExpense {
+            own_rate: Some(yen_to_euro("0.0065")),
+            ..ramen(&me)
+        };
+        let edited = update_expense(&db, &primary, &fallback, &id, changed).unwrap();
+        assert_ne!(edited.expense.fx_rate_id, Some(rate_id));
+        assert_eq!(edited.expense.total_in_base, Money::new(1_950, cur("EUR")));
+
+        // Dropping it goes back to the rate of the day.
+        let edited = update_expense(&db, &primary, &fallback, &id, ramen(&me)).unwrap();
+        assert_eq!(edited.expense.total_in_base, Money::new(2_000, cur("EUR")));
+        let quote = db
+            .archived_rate(&edited.expense.fx_rate_id.unwrap(), cur("JPY"), cur("EUR"))
+            .unwrap()
+            .unwrap();
+        assert!(!quote.is_manual());
+    }
+
+    #[test]
+    fn own_rate_works_in_the_direction_it_was_typed() {
+        let (db, me) = setup();
+        let typed =
+            Rate::new(cur("EUR"), cur("JPY"), Decimal::from_str("166.67").unwrap()).unwrap();
+        let card = NewExpense {
+            own_rate: Some(typed),
+            ..ramen(&me)
+        };
+        let (primary, fallback) = (Fake::offline(), Fake::offline());
+        let saved = save_expense(&db, &primary, &fallback, card.clone()).unwrap();
+        // 3 000 / 166.67 = 17.9996 → 18,00 €.
+        assert_eq!(saved.expense.total_in_base, Money::new(1_800, cur("EUR")));
+        let quote = db
+            .archived_rate(
+                saved.expense.fx_rate_id.as_ref().unwrap(),
+                cur("JPY"),
+                cur("EUR"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(quote.manual_rate(), Some(typed));
+        // The form hands back what it read; nothing is archived twice.
+        let again = update_expense(&db, &primary, &fallback, &saved.expense.id, card).unwrap();
+        assert_eq!(again.expense.fx_rate_id, saved.expense.fx_rate_id);
+    }
+
+    #[test]
+    fn own_rate_is_ignored_in_the_base_currency() {
+        let (db, me) = setup();
+        let coffee = NewExpense {
+            total: Money::new(350, cur("EUR")),
+            payments: vec![NewExpensePayment {
+                person_id: me.id.clone(),
+                payment_method_id: None,
+                amount_minor: 350,
+            }],
+            own_rate: Some(yen_to_euro("0.006")),
+            ..ramen(&me)
+        };
+        let saved = save_expense(&db, &Fake::offline(), &Fake::offline(), coffee).unwrap();
+        assert_eq!(saved.expense.fx_rate_id, None);
+        assert_eq!(saved.expense.total_in_base, Money::new(350, cur("EUR")));
+    }
+
+    #[test]
+    fn moving_to_another_group_moves_its_balances() {
+        use crate::services::summary::group_summary;
+        use crate::storage::{NewGroup, NewPerson};
+
+        let (db, me) = setup();
+        db.archive_rates("frankfurter", 1, &[eur_to("JPY", "160", "2026-10-01")])
+            .unwrap();
+        let anna = db
+            .create_person(NewPerson {
+                name: "Anna".into(),
+                color: "cerulean".into(),
+                is_me: false,
+                note: None,
+            })
+            .unwrap();
+        let group = |name: &str, base: &str| {
+            let group = db
+                .create_group(NewGroup {
+                    name: name.into(),
+                    icon: "plane".into(),
+                    color: "cerulean".into(),
+                    base_currency: cur(base),
+                    start_date: None,
+                    end_date: None,
+                    target_language: None,
+                })
+                .unwrap();
+            // The one who creates a group is in it already.
+            db.add_group_member(&group.id, &anna.id).unwrap();
+            group
+        };
+        let (trip, flat) = (group("Japan", "EUR"), group("WG", "JPY"));
+        let (primary, fallback) = (Fake::offline(), Fake::offline());
+        let shared = NewExpense {
+            group_id: Some(trip.id.clone()),
+            split: SplitMode::Equal(BTreeSet::from([me.id.clone(), anna.id.clone()])),
+            note: Some("  ".into()),
+            location: Some(" Shinjuku ".into()),
+            ..ramen(&me)
+        };
+        let saved = save_expense(&db, &primary, &fallback, shared.clone()).unwrap();
+        assert_eq!(saved.expense.note, None);
+        assert_eq!(saved.expense.location.as_deref(), Some("Shinjuku"));
+        let before = group_summary(&db, &trip).unwrap();
+        // 18,75 € shared by two; the leftover cent is mine (idee.md 8.4).
+        assert_eq!(before.people[&anna.id].balance, -937);
+
+        let moved = NewExpense {
+            group_id: Some(flat.id.clone()),
+            ..shared
+        };
+        let edited = update_expense(&db, &primary, &fallback, &saved.expense.id, moved).unwrap();
+        assert_eq!(edited.expense.group_id, Some(flat.id.clone()));
+        // The WG settles in yen, so no rate is needed any more.
+        assert_eq!(edited.expense.fx_rate_id, None);
+        assert_eq!(edited.expense.location.as_deref(), Some("Shinjuku"));
+
+        let trip_after = group_summary(&db, &trip).unwrap();
+        assert_eq!(trip_after.expense_count, 0);
+        assert!(trip_after.people.values().all(|p| p.balance == 0));
+        let flat_after = group_summary(&db, &flat).unwrap();
+        assert_eq!(flat_after.expense_count, 1);
+        assert_eq!(flat_after.people[&me.id].balance, 1_500);
+        assert_eq!(flat_after.people[&anna.id].balance, -1_500);
+    }
+
+    #[test]
+    fn moving_needs_members_of_the_new_group() {
+        use crate::storage::{NewGroup, NewPerson};
+
+        let (db, me) = setup();
+        let ben = db
+            .create_person(NewPerson {
+                name: "Ben".into(),
+                color: "cerulean".into(),
+                is_me: false,
+                note: None,
+            })
+            .unwrap();
+        let new_group = |name: &str| {
+            db.create_group(NewGroup {
+                name: name.into(),
+                icon: "plane".into(),
+                color: "cerulean".into(),
+                base_currency: cur("JPY"),
+                start_date: None,
+                end_date: None,
+                target_language: None,
+            })
+            .unwrap()
+        };
+        let (trip, flat) = (new_group("Japan"), new_group("WG"));
+        db.add_group_member(&trip.id, &ben.id).unwrap();
+        let (primary, fallback) = (Fake::offline(), Fake::offline());
+        let shared = NewExpense {
+            group_id: Some(trip.id.clone()),
+            split: SplitMode::Equal(BTreeSet::from([me.id.clone(), ben.id.clone()])),
+            ..ramen(&me)
+        };
+        let saved = save_expense(&db, &primary, &fallback, shared.clone()).unwrap();
+        // Ben is no member of the WG.
+        let moved = NewExpense {
+            group_id: Some(flat.id.clone()),
+            ..shared
+        };
+        assert!(update_expense(&db, &primary, &fallback, &saved.expense.id, moved).is_err());
+        let stored = db.expense(&saved.expense.id).unwrap().unwrap();
+        assert_eq!(stored.group_id, Some(trip.id));
     }
 }

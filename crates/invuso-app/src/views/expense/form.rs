@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use dioxus::prelude::*;
@@ -6,8 +6,8 @@ use dioxus::router::Navigator;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdCamera, LdCheck, LdChevronRight, LdCircleAlert, LdImage, LdPlus, LdTrash2,
-        LdTriangleAlert, LdUser, LdX,
+        LdCamera, LdCheck, LdChevronRight, LdCircleAlert, LdImage, LdLocateFixed, LdMapPin, LdPlus,
+        LdTrash2, LdTriangleAlert, LdUser, LdX,
     },
 };
 use invuso_core::Decimal;
@@ -16,7 +16,7 @@ use invuso_core::domain::{
     GroupMember, LineItem, LineItemError, Money, PaymentMethod, PaymentMethodId, Person, PersonId,
     is_iso_date, validate_participants, validate_payments, validate_split,
 };
-use invuso_core::fx;
+use invuso_core::fx::{self, Rate};
 use invuso_core::receipt::{ParsedReceipt, detect_language};
 use invuso_core::split::allocate;
 
@@ -32,10 +32,14 @@ use crate::clock;
 use crate::components::{
     AmountInput, Avatar, AvatarSize, BottomSheet, Button, ButtonVariant, CategoryIconGlyph, Chip,
     CompactAmountInput, CurrencyPicker, DateTimeField, EmptyState, ErrorBanner, GroupIcon,
-    MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, TextField, TopBar,
+    MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, RateSheet,
+    TextField, TopBar,
 };
-use crate::format::{NumberFormat, amount_text, fit_amount_text, format_money, parse_amount};
-use crate::platform::ImageKind;
+use crate::format::{
+    NumberFormat, amount_text, coordinates_text, fit_amount_text, format_money, format_rate,
+    parse_amount,
+};
+use crate::platform::{ImageKind, LocationError, current_position};
 use crate::preferences::{
     category_name, default_home_currency, display_date, language_name, suggested_target_language,
 };
@@ -69,6 +73,12 @@ struct FormData {
     currency: Option<Currency>,
     /// The expense being edited (EXP-05); `None` for a new one.
     existing: Option<Expense>,
+    /// The expense a new one is copied from (EXP-12).
+    template: Option<Expense>,
+    /// The own rate of the edited expense as typed (EXP-08), if it has one.
+    own_rate: Option<Rate>,
+    /// Payment method each person paid with last (PAY-06).
+    last_methods: BTreeMap<PersonId, PaymentMethodId>,
     /// Group whose timeline opened the form (GRP-23).
     opened_from: Option<GroupId>,
     /// Receipt attached to the expense (RCP-03): the saved one when
@@ -115,22 +125,32 @@ enum Sheet {
     Method(usize),
     /// The line item with this key.
     Item(u64),
+    /// The own rate of the expense (EXP-08).
+    OwnRate,
 }
 
 /// `/expense/new`: records an expense by hand (EXP-01..04, EXP-06, EXP-07;
 /// idee.md 7.3), in `group` if given (GRP-23), with `receipt` attached if
-/// given (RCP-03). Saving leads to the group's timeline.
+/// given (RCP-03), filled from the expense `copy` if given (EXP-12).
+/// Saving leads to the group's timeline.
 #[component]
-pub fn ExpenseNew(group: String, receipt: String) -> Element {
+pub fn ExpenseNew(group: String, receipt: String, copy: String) -> Element {
     let db = use_context::<Db>();
+    let copying = !copy.is_empty();
     let data = use_hook(|| {
         let preset = (!group.is_empty()).then(|| GroupId::new(group));
         let receipt = (!receipt.is_empty()).then_some(receipt);
-        load(&db, None, preset, receipt.as_deref()).map_err(|e| e.to_string())
+        let copy = copying.then(|| ExpenseId::new(copy));
+        load(&db, None, preset, receipt.as_deref(), copy.as_ref()).map_err(|e| e.to_string())
     });
+    let title = if copying {
+        t!("page.expense_copy")
+    } else {
+        t!("page.expense_new")
+    };
 
     rsx! {
-        TopBar { title: t!("page.expense_new").to_string(), show_back: true }
+        TopBar { title: title.to_string(), show_back: true }
         match data {
             Err(message) => rsx! { LoadError { message } },
             Ok(data) => rsx! { ExpenseForm { data } },
@@ -145,7 +165,7 @@ pub fn ExpenseEdit(id: String) -> Element {
     let db = use_context::<Db>();
     // `None` stands for "not found".
     let data = use_hook(|| {
-        load(&db, Some(&ExpenseId::new(id)), None, None).map_err(|e| match e {
+        load(&db, Some(&ExpenseId::new(id)), None, None, None).map_err(|e| match e {
             StorageError::NotFound => None,
             other => Some(other.to_string()),
         })
@@ -174,7 +194,7 @@ pub fn ExpenseEdit(id: String) -> Element {
 pub fn ReceiptReview(receipt_id: String) -> Element {
     let db = use_context::<Db>();
     let data = use_hook(|| {
-        load(&db, None, None, Some(&receipt_id))
+        load(&db, None, None, Some(&receipt_id), None)
             .map(|data| FormData {
                 review: true,
                 ..data
@@ -210,6 +230,8 @@ fn ExpenseForm(data: FormData) -> Element {
     let nav = use_navigator();
     let existing = data.existing.clone();
     let editing = existing.is_some();
+    // What the form starts from: the edited expense, or the one copied.
+    let prefill = existing.clone().or_else(|| data.template.clone());
     let review = data.review;
     let opened_from = data.opened_from.clone();
 
@@ -224,19 +246,33 @@ fn ExpenseForm(data: FormData) -> Element {
         .unwrap_or_else(|| base_of(&data.groups, data.group.as_ref(), data.home_currency));
     let mut amount_text_signal = use_signal(|| {
         let format = NumberFormat::current();
-        existing
+        prefill
             .as_ref()
             .map(|e| amount_text(e.total, format))
             .unwrap_or_default()
     });
     let mut currency = use_signal(|| start_currency);
     let mut title = use_signal(|| {
-        existing
+        prefill
             .as_ref()
             .map(|e| e.title.clone())
             .unwrap_or_default()
     });
-    let mut category = use_signal(|| existing.as_ref().and_then(|e| e.category_id.clone()));
+    let mut category = use_signal(|| prefill.as_ref().and_then(|e| e.category_id.clone()));
+    let text_of = |field: fn(&Expense) -> &Option<String>| {
+        prefill
+            .as_ref()
+            .and_then(|e| field(e).clone())
+            .unwrap_or_default()
+    };
+    let mut note = use_signal(|| text_of(|e| &e.note));
+    let mut location = use_signal(|| text_of(|e| &e.location));
+    let mut coordinates = use_signal(|| prefill.as_ref().and_then(|e| e.coordinates));
+    let mut locating = use_signal(|| false);
+    let mut location_error = use_signal(|| None::<String>);
+    let mut own_rate = use_signal(|| data.own_rate);
+    // Who fell out when the expense was moved to another group (EXP-11).
+    let mut moved_note = use_signal(|| None::<String>);
     let (start_date, start_time) = use_hook(|| match &existing {
         Some(expense) => split_occurred_at(&expense.occurred_at),
         None => clock::local_now(),
@@ -245,17 +281,40 @@ fn ExpenseForm(data: FormData) -> Element {
     let mut time = use_signal(|| start_time.clone());
     let mut group = use_signal(|| data.group.clone());
     let mut people = use_signal(|| start_people.clone());
-    let mut payers = use_signal(|| match &existing {
-        Some(expense) => saved_payers(expense, &start_people),
-        None => vec![default_payer(&start_people, &data.me, &data.methods)],
+    let mut payers = use_signal(|| {
+        let saved = prefill
+            .as_ref()
+            .map(|expense| saved_payers(expense, &start_people))
+            .unwrap_or_default();
+        if saved.is_empty() {
+            vec![default_payer(
+                &start_people,
+                &data.me,
+                &data.methods,
+                &data.last_methods,
+            )]
+        } else {
+            saved
+        }
     });
-    let mut payers_manual = use_signal(|| existing.as_ref().is_some_and(|e| e.payments.len() > 1));
-    let mut split_draft = use_signal(|| match &existing {
-        Some(expense) => SplitDraft::from_mode(
-            &expense.split,
-            expense.total.currency(),
-            NumberFormat::current(),
-        ),
+    let mut payers_manual = use_signal(|| payers.peek().len() > 1);
+    let copied_into = start_people
+        .iter()
+        .map(|m| m.person.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut split_draft = use_signal(|| match &prefill {
+        Some(expense) => {
+            let mut draft = SplitDraft::from_mode(
+                &expense.split,
+                expense.total.currency(),
+                NumberFormat::current(),
+            );
+            // A copy can only be split among today's members.
+            if !editing {
+                draft.keep_only(&copied_into);
+            }
+            draft
+        }
         None => {
             let mut draft =
                 SplitDraft::equal(start_people.iter().map(|m| m.person.id.clone()).collect());
@@ -266,7 +325,7 @@ fn ExpenseForm(data: FormData) -> Element {
         }
     });
     let mut items = use_signal(|| {
-        existing
+        prefill
             .as_ref()
             .map(|e| drafts_from_saved(&e.line_items))
             .unwrap_or_default()
@@ -382,38 +441,81 @@ fn ExpenseForm(data: FormData) -> Element {
     let group_db = db.clone();
     let me = data.me.clone();
     let methods = data.methods.clone();
-    let select_group = use_callback(move |new_group: Option<GroupId>| {
-        sheet.set(None);
-        match people_of(&group_db, new_group.as_ref(), &me) {
-            Ok(list) => {
-                payers.set(vec![default_payer(&list, &me, &methods)]);
-                payers_manual.set(false);
-                // A scanned receipt is split by its lines once there is a
-                // group to split it in.
-                let kind = if review && new_group.is_some() {
-                    SplitKind::Items
-                } else {
-                    split_draft.peek().kind
-                };
-                let mut draft =
-                    SplitDraft::equal(list.iter().map(|m| m.person.id.clone()).collect());
-                draft.kind = kind;
-                split_draft.set(draft);
-                // Lines can only belong to members of the new group.
-                for draft in items.write().iter_mut() {
-                    draft
-                        .item
-                        .assigned_to
-                        .retain(|person, _| list.iter().any(|m| &m.person.id == person));
-                }
-                people.set(list);
-                payers_error.set(None);
-                participants_error.set(None);
+    let last_methods = data.last_methods.clone();
+    let all_groups = data.groups.clone();
+    let select_group =
+        use_callback(move |new_group: Option<GroupId>| {
+            sheet.set(None);
+            // An own rate is one between the currency and the old base.
+            if base_of(&all_groups, new_group.as_ref(), home_currency) != *base_currency.peek() {
+                own_rate.set(None);
             }
-            Err(e) => save_error.set(Some(format!("{} {e}", t!("expense.people_error")))),
-        }
-        group.set(new_group);
-    });
+            match people_of(&group_db, new_group.as_ref(), &me) {
+                Ok(list) => {
+                    if editing {
+                        // Moving (EXP-11): who is no member of the new group
+                        // drops out and is named; the rest stays as entered
+                        // (user decision in AP-27).
+                        let ids: BTreeSet<PersonId> =
+                            list.iter().map(|m| m.person.id.clone()).collect();
+                        let mut gone: Vec<String> = Vec::new();
+                        payers.with_mut(|all| {
+                            all.retain(|payer| {
+                                let stays = ids.contains(&payer.person.id);
+                                if !stays {
+                                    gone.push(payer.person.name.clone());
+                                }
+                                stays
+                            });
+                        });
+                        for member in people.peek().iter() {
+                            let id = &member.person.id;
+                            if !ids.contains(id) && split_draft.peek().participants.contains(id) {
+                                gone.push(member.person.name.clone());
+                            }
+                        }
+                        if payers.peek().is_empty() {
+                            payers.set(vec![default_payer(&list, &me, &methods, &last_methods)]);
+                        }
+                        if payers.peek().len() < 2 {
+                            payers_manual.set(false);
+                        }
+                        split_draft.write().keep_only(&ids);
+                        gone.sort();
+                        gone.dedup();
+                        moved_note.set((!gone.is_empty()).then(|| {
+                            t!("expense.moved_removed", names = gone.join(", ")).to_string()
+                        }));
+                    } else {
+                        payers.set(vec![default_payer(&list, &me, &methods, &last_methods)]);
+                        payers_manual.set(false);
+                        // A scanned receipt is split by its lines once there
+                        // is a group to split it in.
+                        let kind = if review && new_group.is_some() {
+                            SplitKind::Items
+                        } else {
+                            split_draft.peek().kind
+                        };
+                        let mut draft =
+                            SplitDraft::equal(list.iter().map(|m| m.person.id.clone()).collect());
+                        draft.kind = kind;
+                        split_draft.set(draft);
+                    }
+                    // Lines can only belong to members of the new group.
+                    for draft in items.write().iter_mut() {
+                        draft
+                            .item
+                            .assigned_to
+                            .retain(|person, _| list.iter().any(|m| &m.person.id == person));
+                    }
+                    people.set(list);
+                    payers_error.set(None);
+                    participants_error.set(None);
+                }
+                Err(e) => save_error.set(Some(format!("{} {e}", t!("expense.people_error")))),
+            }
+            group.set(new_group);
+        });
 
     let pick_currency = move |new_currency: Currency| {
         sheet.set(None);
@@ -426,6 +528,9 @@ fn ExpenseForm(data: FormData) -> Element {
         split_draft.write().fit_currency(new_currency, format);
         let old_currency = *currency.peek();
         items::fit_currency(&mut items.write(), old_currency, new_currency, format);
+        if new_currency != old_currency {
+            own_rate.set(None);
+        }
         currency.set(new_currency);
     };
 
@@ -450,9 +555,10 @@ fn ExpenseForm(data: FormData) -> Element {
     });
 
     let add_methods = data.methods.clone();
+    let add_last = data.last_methods.clone();
     let add_payer = use_callback(move |person: Person| {
         sheet.set(None);
-        let method = default_method(&person, &add_methods);
+        let method = default_method(&person, &add_methods, &add_last);
         payers.write().push(PayerDraft {
             person,
             method,
@@ -554,6 +660,10 @@ fn ExpenseForm(data: FormData) -> Element {
             } else {
                 ExpenseSource::Manual
             },
+            note: Some(note()),
+            location: Some(location()),
+            coordinates: coordinates(),
+            own_rate: own_rate(),
         };
         save_error.set(None);
         saving.set(true);
@@ -623,6 +733,19 @@ fn ExpenseForm(data: FormData) -> Element {
             picking.set(false);
         });
     });
+
+    // Only on the user's tap; Android asks for the permission first.
+    let locate = move |_| {
+        locating.set(true);
+        location_error.set(None);
+        spawn(async move {
+            match current_position().await {
+                Ok(point) => coordinates.set(Some(point)),
+                Err(error) => location_error.set(Some(location_error_text(&error))),
+            }
+            locating.set(false);
+        });
+    };
 
     let delete_db = db.clone();
     let delete_existing = existing.clone();
@@ -767,7 +890,12 @@ fn ExpenseForm(data: FormData) -> Element {
                     Err(message) => rsx! { ErrorBanner { error: Some(message.clone()) } },
                     Ok(None) => rsx! {},
                     Ok(Some(near)) => rsx! {
-                        BasePreview { total, near: near.clone(), base: base_currency() }
+                        BasePreview { total, near: near.clone(), base: base_currency(), own: own_rate() }
+                        OwnRateRow {
+                            own: own_rate(),
+                            on_edit: move |_| sheet.set(Some(Sheet::OwnRate)),
+                            on_clear: move |_| own_rate.set(None),
+                        }
                     },
                 }
             }
@@ -816,6 +944,55 @@ fn ExpenseForm(data: FormData) -> Element {
                     time.set(value);
                     date_error.set(None);
                 },
+            }
+            div { class: "flex flex-col gap-1",
+                TextField {
+                    id: "expense-location",
+                    label: t!("expense.location").to_string(),
+                    value: location(),
+                    placeholder: t!("expense.location_placeholder").to_string(),
+                    oninput: move |value| location.set(value),
+                }
+                match coordinates() {
+                    Some(point) => rsx! {
+                        div { class: "flex min-h-11 items-center gap-2 pl-1 text-sm tabular-nums text-floral-white-300",
+                            Icon { icon: LdMapPin, class: "h-4 w-4 shrink-0 text-cerulean-300" }
+                            span { class: "min-w-0 flex-1 truncate", {t!("expense.coordinates", point = coordinates_text(point, NumberFormat::current())).to_string()} }
+                            button {
+                                class: "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-floral-white-400 active:bg-jet-black-800 transition-colors",
+                                r#type: "button",
+                                aria_label: t!("expense.remove_coordinates").to_string(),
+                                onclick: move |_| coordinates.set(None),
+                                Icon { icon: LdX, class: "h-5 w-5" }
+                            }
+                        }
+                    },
+                    None => rsx! {
+                        button {
+                            class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors disabled:opacity-60",
+                            r#type: "button",
+                            disabled: locating(),
+                            onclick: locate,
+                            Icon { icon: LdLocateFixed, class: "h-4 w-4" }
+                            if locating() {
+                                {t!("expense.locating").to_string()}
+                            } else {
+                                {t!("expense.locate").to_string()}
+                            }
+                        }
+                    },
+                }
+                if let Some(error) = location_error() {
+                    p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
+                }
+            }
+            TextField {
+                id: "expense-note",
+                label: t!("expense.note").to_string(),
+                value: note(),
+                placeholder: t!("expense.note_placeholder").to_string(),
+                multiline: true,
+                oninput: move |value| note.set(value),
             }
             match receipt() {
                 Some(attached) => rsx! {
@@ -874,13 +1051,10 @@ fn ExpenseForm(data: FormData) -> Element {
             }
             div { class: "flex flex-col gap-2",
                 span { class: "text-sm font-medium text-floral-white-300", {t!("expense.group").to_string()} }
-                // Moving an expense to another group is EXP-11, so editing
-                // shows the group without letting it change.
+                // While editing, another group moves the expense (EXP-11).
                 button {
-                    class: "flex min-h-14 w-full items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-900 px-3 text-left transition-colors ease-apple",
-                    class: if !editing { "active:bg-jet-black-800" },
+                    class: "flex min-h-14 w-full items-center gap-3 rounded-2xl border border-jet-black-700 bg-jet-black-900 px-3 text-left transition-colors ease-apple active:bg-jet-black-800",
                     r#type: "button",
-                    disabled: editing,
                     onclick: move |_| sheet.set(Some(Sheet::Group)),
                     match &group_entry {
                         Some(entry) => rsx! {
@@ -892,9 +1066,10 @@ fn ExpenseForm(data: FormData) -> Element {
                             span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", {t!("expense.no_group").to_string()} }
                         },
                     }
-                    if !editing {
-                        Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
-                    }
+                    Icon { icon: LdChevronRight, class: "h-5 w-5 shrink-0 text-floral-white-500" }
+                }
+                if let Some(text) = moved_note() {
+                    p { class: "px-1 text-sm text-pale-oak-300", role: "status", "{text}" }
                 }
             }
             section { class: "flex flex-col gap-2",
@@ -1163,6 +1338,24 @@ fn ExpenseForm(data: FormData) -> Element {
                 },
                 None => rsx! {},
             },
+            Some(Sheet::OwnRate) => rsx! {
+                RateSheet {
+                    from: cur,
+                    to: base_currency(),
+                    reference: match &*preview.read() {
+                        Ok(Some(Some(near))) => Some(near.quote.rate),
+                        _ => None,
+                    },
+                    initial: own_rate(),
+                    title: t!("expense.own_rate_title").to_string(),
+                    hint: t!("expense.own_rate_hint").to_string(),
+                    on_submit: move |rate| {
+                        own_rate.set(Some(rate));
+                        sheet.set(None);
+                    },
+                    on_close: move |_| sheet.set(None),
+                }
+            },
             Some(Sheet::Item(key)) => {
                 let index = item_list.iter().position(|d| d.key == key);
                 match index {
@@ -1218,10 +1411,29 @@ fn leave(nav: Navigator, group: Option<&GroupId>, back: bool) {
 }
 
 /// The total in the base currency with the rate's day, and a warning when
-/// the archive has no rate of the expense's day yet (EXP-07).
+/// the archive has no rate of the expense's day yet (EXP-07); with an own
+/// rate (EXP-08) the total converted with that.
 #[component]
-fn BasePreview(total: Option<Money>, near: Option<NearRate>, base: Currency) -> Element {
+fn BasePreview(
+    total: Option<Money>,
+    near: Option<NearRate>,
+    base: Currency,
+    own: Option<Rate>,
+) -> Element {
     let format = NumberFormat::current();
+    if let Some(own) = own {
+        let converted = total
+            .and_then(|t| fx::convert(t, &toward(own, t.currency())).ok())
+            .unwrap_or(Money::zero(base));
+        let line = t!(
+            "expense.base_preview_own",
+            amount = format_money(converted, format)
+        )
+        .to_string();
+        return rsx! {
+            p { class: "px-1 text-sm tabular-nums text-floral-white-400", aria_live: "polite", "{line}" }
+        };
+    }
     let line = near.as_ref().map(|near| {
         let converted = total
             .and_then(|t| fx::convert(t, &near.quote.rate).ok())
@@ -1247,6 +1459,49 @@ fn BasePreview(total: Option<Money>, near: Option<NearRate>, base: Currency) -> 
                 span { {t!("expense.rate_missing").to_string()} }
             }
         }
+    }
+}
+
+/// The own rate (EXP-08) as typed, to change or drop; without one, the
+/// button to type it in.
+#[component]
+fn OwnRateRow(own: Option<Rate>, on_edit: EventHandler<()>, on_clear: EventHandler<()>) -> Element {
+    let link = "flex min-h-11 items-center rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors";
+    rsx! {
+        match own {
+            Some(rate) => {
+                let line = t!(
+                    "converter.rate_line",
+                    base = rate.base().code(),
+                    rate = format_rate(rate.value(), NumberFormat::current()),
+                    quote = rate.quote().code()
+                );
+                rsx! {
+                    div { class: "flex flex-wrap items-center gap-x-1",
+                        button { class: link, r#type: "button", onclick: move |_| on_edit.call(()),
+                            {t!("expense.own_rate_line", line = line).to_string()}
+                        }
+                        button { class: link, r#type: "button", onclick: move |_| on_clear.call(()),
+                            {t!("expense.use_day_rate").to_string()}
+                        }
+                    }
+                }
+            }
+            None => rsx! {
+                button { class: "{link} self-start", r#type: "button", onclick: move |_| on_edit.call(()),
+                    {t!("expense.own_rate_add").to_string()}
+                }
+            },
+        }
+    }
+}
+
+/// `rate` as the rate from `currency` to the other one.
+fn toward(rate: Rate, currency: Currency) -> Rate {
+    if rate.base() == currency {
+        rate
+    } else {
+        rate.inverse()
     }
 }
 
@@ -1403,6 +1658,7 @@ fn load(
     id: Option<&ExpenseId>,
     preset: Option<GroupId>,
     receipt: Option<&str>,
+    copy: Option<&ExpenseId>,
 ) -> Result<FormData, StorageError> {
     let me = db.me()?.ok_or(StorageError::NotFound)?;
     let profile = db.profile()?;
@@ -1418,10 +1674,23 @@ fn load(
         Some(id) => Some(db.expense(id)?.ok_or(StorageError::NotFound)?),
         None => None,
     };
+    // A copy that is gone opens an empty form.
+    let template = match (copy, &existing) {
+        (Some(copy), None) => db.expense(copy)?,
+        _ => None,
+    };
     let opened_from = preset.filter(|id| groups.iter().any(|g| &g.id == id));
-    let (group, currency) = match &existing {
-        Some(expense) => (expense.group_id.clone(), Some(expense.total.currency())),
-        None => {
+    let (group, currency) = match (&existing, &template) {
+        (Some(expense), _) => (expense.group_id.clone(), Some(expense.total.currency())),
+        // The copy's group, unless deleted since.
+        (None, Some(expense)) => (
+            expense
+                .group_id
+                .clone()
+                .filter(|id| groups.iter().any(|g| &g.id == id)),
+            Some(expense.total.currency()),
+        ),
+        (None, None) => {
             let group = match &opened_from {
                 Some(id) => Some(id.clone()),
                 None => match db.active_group()? {
@@ -1448,6 +1717,16 @@ fn load(
         Some(receipt) => db.receipt_language(&receipt.id)?,
         None => None,
     };
+    let own_rate = match existing.as_ref().map(|e| (e, &e.fx_rate_id)) {
+        Some((expense, Some(rate_id))) => db
+            .archived_rate(
+                rate_id,
+                expense.total.currency(),
+                expense.total_in_base.currency(),
+            )?
+            .and_then(|quote| quote.manual_rate()),
+        _ => None,
+    };
     Ok(FormData {
         receipt,
         me,
@@ -1458,6 +1737,9 @@ fn load(
         group,
         currency,
         existing,
+        template,
+        own_rate,
+        last_methods: db.last_payment_methods()?,
         opened_from,
         review: false,
         target_language,
@@ -1580,7 +1862,12 @@ fn base_of(groups: &[Group], group: Option<&GroupId>, home: Currency) -> Currenc
 }
 
 /// "Ich" pays by default, or the first person if "Ich" is not there.
-fn default_payer(people: &[GroupMember], me: &Person, methods: &[PaymentMethod]) -> PayerDraft {
+fn default_payer(
+    people: &[GroupMember],
+    me: &Person,
+    methods: &[PaymentMethod],
+    last: &BTreeMap<PersonId, PaymentMethodId>,
+) -> PayerDraft {
     let person = people
         .iter()
         .map(|m| &m.person)
@@ -1589,16 +1876,26 @@ fn default_payer(people: &[GroupMember], me: &Person, methods: &[PaymentMethod])
         .unwrap_or(me)
         .clone();
     PayerDraft {
-        method: default_method(&person, methods),
+        method: default_method(&person, methods, last),
         person,
         amount_text: String::new(),
     }
 }
 
-/// Preselected only when the choice is obvious: the person has exactly one
-/// method.
-fn default_method(person: &Person, methods: &[PaymentMethod]) -> Option<PaymentMethodId> {
-    match methods_for(person, methods).as_slice() {
+/// The method the person paid with last (PAY-06), else the only one they
+/// have; otherwise none, because a guess would be wrong too often.
+fn default_method(
+    person: &Person,
+    methods: &[PaymentMethod],
+    last: &BTreeMap<PersonId, PaymentMethodId>,
+) -> Option<PaymentMethodId> {
+    let usable = methods_for(person, methods);
+    if let Some(method) = last.get(&person.id)
+        && usable.iter().any(|m| &m.id == method)
+    {
+        return Some(method.clone());
+    }
+    match usable.as_slice() {
         [only] => Some(only.id.clone()),
         _ => None,
     }
@@ -1656,6 +1953,18 @@ fn payments_error_text(error: &ExpenseError, currency: Currency, format: NumberF
         ExpenseError::NonPositivePayment => t!("expense.payment_positive").to_string(),
         ExpenseError::NoPayer => t!("expense.payer_required").to_string(),
         other => other.to_string(),
+    }
+}
+
+fn location_error_text(error: &LocationError) -> String {
+    match error {
+        LocationError::Denied => t!("expense.location_denied").to_string(),
+        LocationError::Unavailable | LocationError::Timeout => {
+            t!("expense.location_unavailable").to_string()
+        }
+        LocationError::Failed(message) => {
+            format!("{} {message}", t!("expense.location_unavailable"))
+        }
     }
 }
 
@@ -1735,24 +2044,29 @@ mod tests {
         db.set_setting(LAST_EXPENSE_GROUP, flat.id.as_str())
             .unwrap();
         assert_eq!(
-            load(&db, None, None, None).unwrap().group,
+            load(&db, None, None, None, None).unwrap().group,
             Some(flat.id.clone())
         );
 
         db.set_active_group(Some(&trip.id)).unwrap();
         assert_eq!(
-            load(&db, None, None, None).unwrap().group,
+            load(&db, None, None, None, None).unwrap().group,
             Some(trip.id.clone())
         );
         // The timeline's group still comes first (GRP-23).
         assert_eq!(
-            load(&db, None, Some(flat.id.clone()), None).unwrap().group,
+            load(&db, None, Some(flat.id.clone()), None, None)
+                .unwrap()
+                .group,
             Some(flat.id.clone())
         );
 
         // A deleted active group no longer counts.
         db.delete_group(&trip.id).unwrap();
-        assert_eq!(load(&db, None, None, None).unwrap().group, Some(flat.id));
+        assert_eq!(
+            load(&db, None, None, None, None).unwrap().group,
+            Some(flat.id)
+        );
     }
 
     #[test]

@@ -79,6 +79,7 @@ pub fn GroupTimeline(id: String) -> Element {
                             nav.push(Route::ExpenseNew {
                                 group: group_id().as_str().to_string(),
                                 receipt: String::new(),
+                                copy: String::new(),
                             });
                         },
                         Icon { icon: LdPlus, class: "h-5 w-5" }

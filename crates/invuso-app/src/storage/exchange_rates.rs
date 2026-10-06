@@ -58,6 +58,21 @@ pub struct RateQuote {
     pub legs: Vec<ExchangeRate>,
 }
 
+impl RateQuote {
+    /// Typed in by the user (FX-10, EXP-08), not reported by a provider.
+    pub fn is_manual(&self) -> bool {
+        self.manual_rate().is_some()
+    }
+
+    /// The rate as the user typed it, in its direction, if it is manual.
+    pub fn manual_rate(&self) -> Option<Rate> {
+        match self.legs.as_slice() {
+            [leg] if leg.source == MANUAL_SOURCE => Some(leg.rate),
+            _ => None,
+        }
+    }
+}
+
 /// A rate picked for a day by [`Db::rate_near`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NearRate {

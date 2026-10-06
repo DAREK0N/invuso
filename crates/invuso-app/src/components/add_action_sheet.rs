@@ -48,6 +48,7 @@ pub fn AddActionSheet(on_close: EventHandler<()>) -> Element {
                     to: Route::ExpenseNew {
                         group: String::new(),
                         receipt: String::new(),
+                        copy: String::new(),
                     },
                     on_close,
                     Icon { icon: LdPencil, class: "h-5 w-5" }

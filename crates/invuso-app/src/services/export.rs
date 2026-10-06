@@ -420,6 +420,10 @@ mod tests {
                     ..LineItem::default()
                 }],
                 source: ExpenseSource::Manual,
+                note: None,
+                location: None,
+                coordinates: None,
+                own_rate: None,
             },
             &rate,
         )
@@ -493,6 +497,10 @@ mod tests {
                 receipt_id: None,
                 line_items: Vec::new(),
                 source: ExpenseSource::Manual,
+                note: None,
+                location: None,
+                coordinates: None,
+                own_rate: None,
             },
             &rate,
         )

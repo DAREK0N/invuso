@@ -89,9 +89,10 @@ pub enum Route {
 
     #[layout(FocusShell)]
         // `group` preselects a group, e.g. from its timeline (GRP-23);
-        // `receipt` attaches a receipt just photographed (RCP-03).
-        #[route("/expense/new?:group&:receipt")]
-        ExpenseNew { group: String, receipt: String },
+        // `receipt` attaches a receipt just photographed (RCP-03); `copy`
+        // fills the form from another expense (EXP-12).
+        #[route("/expense/new?:group&:receipt&:copy")]
+        ExpenseNew { group: String, receipt: String, copy: String },
         #[route("/expense/:id/edit")]
         ExpenseEdit { id: String },
         // `source` is `camera` or `gallery` (RCP-01, RCP-02).

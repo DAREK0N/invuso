@@ -114,6 +114,15 @@ impl SplitDraft {
         draft
     }
 
+    /// Forgets everyone outside `members`, e.g. after moving the expense
+    /// to another group (EXP-11).
+    pub(super) fn keep_only(&mut self, members: &BTreeSet<PersonId>) {
+        self.participants.retain(|p| members.contains(p));
+        for values in [&mut self.weights, &mut self.percents, &mut self.amounts] {
+            values.retain(|p, _| members.contains(p));
+        }
+    }
+
     /// Selects or deselects a person.
     pub(super) fn toggle(&mut self, person: PersonId) {
         if !self.participants.remove(&person) {
@@ -372,6 +381,17 @@ mod tests {
         group: '.',
         symbol_before: false,
     };
+
+    #[test]
+    fn keep_only_forgets_people_outside_the_group() {
+        let mut draft = SplitDraft::equal(BTreeSet::from([p("me"), p("ben")]));
+        draft.kind = SplitKind::Weights;
+        draft.set_text(p("ben"), "2".into());
+        assert!(!draft.weights.is_empty());
+        draft.keep_only(&BTreeSet::from([p("me"), p("anna")]));
+        assert_eq!(draft.participants, BTreeSet::from([p("me")]));
+        assert!(draft.weights.is_empty() && draft.percents.is_empty() && draft.amounts.is_empty());
+    }
 
     fn p(id: &str) -> PersonId {
         PersonId::new(id)

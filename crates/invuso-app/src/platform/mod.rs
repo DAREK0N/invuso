@@ -6,12 +6,14 @@ use std::path::PathBuf;
 mod android;
 mod documents;
 mod images;
+mod location;
 mod share;
 mod system_bars;
 mod translator;
 
 pub use documents::{DocumentFiles, DocumentOutcome, document_files};
 pub use images::{ImageKind, ImageSource, PickOutcome, image_source};
+pub use location::{LocationError, current_position};
 pub use share::{TextShare, text_share};
 pub use system_bars::{SystemBars, system_bars};
 pub use translator::{MachineText, Translation, Translator, system_translator};

@@ -81,6 +81,10 @@ fn fee_expense(
         receipt_id: None,
         line_items: Vec::new(),
         source: ExpenseSource::Manual,
+        note: None,
+        location: None,
+        coordinates: None,
+        own_rate: None,
     }
 }
 

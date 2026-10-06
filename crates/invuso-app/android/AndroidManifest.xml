@@ -3,9 +3,14 @@
      Mirrors the dx-generated default; `uiMode` in configChanges keeps the
      activity alive when the device's dark mode changes (UI-18, "System"
      theme). Without it Android recreates the activity, which the Dioxus
-     app cannot survive in the same process. -->
+     app cannot survive in the same process.
+     The location permissions back the "use my location" button of an
+     expense (EXP-10, AP-27): asked at runtime by the WebView only when the
+     user taps it; Android 12+ lets the user grant an approximate location. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <application android:hasCode="true" android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true"

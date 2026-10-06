@@ -30,6 +30,8 @@ pub enum ExpenseError {
     UnknownSource(String),
     #[error(transparent)]
     LineItem(#[from] LineItemError),
+    #[error("coordinates out of range")]
+    InvalidCoordinates,
 }
 
 /// Identifier of an `Expense` (idee.md 4.1).
@@ -78,6 +80,37 @@ pub struct Category {
     /// Design-token name, e.g. `"cerulean"`.
     pub color: String,
     pub is_default: bool,
+}
+
+/// Where an expense happened, from the device's location (EXP-10). Kept
+/// next to the free-text `location`, because turning coordinates into a
+/// place name would need an online service (AGENTS.md 7.6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeoPoint {
+    latitude: f64,
+    longitude: f64,
+}
+
+impl GeoPoint {
+    /// Degrees, latitude in −90..=90 and longitude in −180..=180.
+    pub fn new(latitude: f64, longitude: f64) -> Result<Self, ExpenseError> {
+        if (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude) {
+            Ok(Self {
+                latitude,
+                longitude,
+            })
+        } else {
+            Err(ExpenseError::InvalidCoordinates)
+        }
+    }
+
+    pub fn latitude(self) -> f64 {
+        self.latitude
+    }
+
+    pub fn longitude(self) -> f64 {
+        self.longitude
+    }
 }
 
 /// How an expense was entered (idee.md 4.1 `Expense.source`).
@@ -136,6 +169,12 @@ pub struct Expense {
     pub source: ExpenseSource,
     /// Archived receipt the expense was recorded from or with (RCP-03).
     pub receipt_id: Option<String>,
+    /// Free text (EXP-10).
+    pub note: Option<String>,
+    /// Place as the user wrote it, e.g. "Shinjuku" (EXP-10).
+    pub location: Option<String>,
+    /// Device location, only when the user asked for it (EXP-10).
+    pub coordinates: Option<GeoPoint>,
     pub payments: Vec<ExpensePayment>,
     /// Positions in receipt order (idee.md 4.1 `LineItem`); kept with any
     /// split mode, `SplitMode::Items` splits by them.
@@ -297,6 +336,9 @@ mod tests {
             split,
             source: ExpenseSource::Manual,
             receipt_id: None,
+            note: None,
+            location: None,
+            coordinates: None,
             payments: Vec::new(),
             line_items: Vec::new(),
         }
@@ -304,6 +346,25 @@ mod tests {
 
     fn cur(code: &str) -> super::super::Currency {
         super::super::Currency::from_code(code).unwrap()
+    }
+
+    #[test]
+    fn coordinates_must_be_on_earth() {
+        let tokyo = GeoPoint::new(35.6895, 139.6917).unwrap();
+        assert_eq!((tokyo.latitude(), tokyo.longitude()), (35.6895, 139.6917));
+        assert!(GeoPoint::new(-90.0, 180.0).is_ok());
+        assert_eq!(
+            GeoPoint::new(90.5, 0.0),
+            Err(ExpenseError::InvalidCoordinates)
+        );
+        assert_eq!(
+            GeoPoint::new(0.0, -180.1),
+            Err(ExpenseError::InvalidCoordinates)
+        );
+        assert_eq!(
+            GeoPoint::new(f64::NAN, 0.0),
+            Err(ExpenseError::InvalidCoordinates)
+        );
     }
 
     #[test]

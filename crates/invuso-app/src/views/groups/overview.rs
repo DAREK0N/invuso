@@ -240,6 +240,7 @@ fn Totals(overview: Overview) -> Element {
                         nav.push(Route::ExpenseNew {
                             group: group_id.clone(),
                             receipt: String::new(),
+                            copy: String::new(),
                         });
                     },
                     Icon { icon: LdPlus, class: "h-5 w-5" }
