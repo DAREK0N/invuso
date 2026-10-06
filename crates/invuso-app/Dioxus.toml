@@ -1,6 +1,7 @@
 [application]
 name = "Invuso"
 android_main_activity = "android/MainActivity.kt"
+android_manifest = "android/AndroidManifest.xml"
 
 [bundle]
 identifier = "com.darekon.invuso"

@@ -27,6 +27,13 @@ pub const LAST_EXPENSE_CURRENCY: &str = "last_expense_currency";
 /// How sure a downloaded translation model must be (`strict`, `balanced`,
 /// `all`; AP-21b).
 pub const TRANSLATION_CONFIDENCE: &str = "translation_confidence";
+/// Look of the app (UI-18, SET-05), see `crate::appearance`.
+pub const THEME: &str = "theme";
+pub const CORNER_RADIUS: &str = "corner_radius";
+pub const UI_SCALE: &str = "ui_scale";
+pub const SURFACE_SHADOWS: &str = "surface_shadows";
+/// Language of the app's own texts (`system`, `de`, `en`; SET-04).
+pub const APP_LANGUAGE: &str = "app_language";
 /// Id of the group marked as active (GRP-05); empty = none.
 pub(super) const ACTIVE_GROUP: &str = "active_group";
 

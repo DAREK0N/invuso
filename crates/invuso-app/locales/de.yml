@@ -113,6 +113,8 @@ language:
 settings:
   manage_section: "Verwaltung"
   about_section: "Über Invuso"
+  app_section: "App"
+  app_language: "Sprache der App"
 
 people:
   add: "Person hinzufügen"
@@ -674,3 +676,28 @@ cash:
   open_expense: "Ausgabe öffnen"
   home_title: "Bargeld"
   home_empty: "Noch kein Bargeld erfasst. Tippe hier, um eine Abhebung zu buchen."
+
+appearance:
+  theme: "Farbschema"
+  theme_system: "System"
+  theme_system_hint: "Hell oder Dunkel wie das Handy"
+  theme_dark: "Dunkel"
+  theme_night: "Nacht"
+  theme_oled: "OLED-Schwarz"
+  theme_oled_hint: "Echtes Schwarz, spart Akku auf OLED-Displays"
+  theme_light: "Hell"
+  radius: "Eckenradius"
+  scale: "Größe der Oberfläche"
+  size_small: "Klein"
+  size_normal: "Normal"
+  size_large: "Groß"
+  shadows: "Schatten"
+  shadows_hint: "Weicher Schatten rund um Karten und Leisten"
+  save_error: "Die Darstellung konnte nicht gespeichert werden."
+
+app_language:
+  system: "Wie das Handy"
+  system_hint: "Deutsch auf deutschen Geräten, sonst Englisch"
+  de: "Deutsch"
+  en: "English"
+  save_error: "Die Sprache konnte nicht gespeichert werden."

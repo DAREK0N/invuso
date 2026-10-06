@@ -20,6 +20,7 @@ import android.provider.MediaStore
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.translation.TranslationCapability
 import android.view.translation.TranslationContext
@@ -42,8 +43,9 @@ typealias BuildConfig = com.darekon.invuso.BuildConfig
 /// Dioxus nor the WebView can: edge-to-edge window chrome with the real
 /// system-bar insets, routing the Android back key into the Dioxus router,
 /// opening the system camera or photo picker for receipt images, the
-/// device's on-device translator (Java-only API) and the system share sheet
-/// (the WebView has no `navigator.share`).
+/// device's on-device translator (Java-only API), the system share sheet
+/// (the WebView has no `navigator.share`) and the icon color of the system
+/// bars for the app theme (the WebView reports no system dark mode).
 /// No business logic, no state beyond the running pick, no UI.
 class MainActivity : WryActivity() {
     private val receiptImages = ReceiptImages(this)
@@ -65,6 +67,7 @@ class MainActivity : WryActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         InvusoChrome.pushToWebView()
+        InvusoChrome.applyBarAppearance()
     }
 
     /// Hardware key and back gesture alike. Intercepting here, ahead of the
@@ -115,6 +118,12 @@ class MainActivity : WryActivity() {
         runOnUiThread { startActivity(Intent.createChooser(send, null)) }
     }
 
+    /// Called from Rust (`platform/android.rs`) whenever the app theme
+    /// changes: `dark`, `night`, `oled`, `light` or `system`.
+    fun setAppTheme(theme: String) {
+        runOnUiThread { InvusoChrome.setAppTheme(theme) }
+    }
+
     @Suppress("DEPRECATION")
     private fun systemBack() {
         try {
@@ -155,6 +164,7 @@ object InvusoChrome {
     @Volatile private var insetRight = 0
     @Volatile private var insetBottom = 0
     @Volatile private var insetLeft = 0
+    @Volatile private var appTheme = "dark"
 
     fun configure(activity: Activity) {
         activityRef = WeakReference(activity)
@@ -277,6 +287,49 @@ object InvusoChrome {
         pushToWebView()
     }
 
+    fun setAppTheme(theme: String) {
+        appTheme = theme
+        applyBarAppearance()
+    }
+
+    /// Light themes need dark status and navigation bar icons; "system"
+    /// follows the device's dark mode.
+    fun applyBarAppearance() {
+        val activity = activityRef?.get() ?: return
+        val light = appTheme == "light" || (appTheme == "system" && systemScheme() == "light")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                activity.window.insetsController?.setSystemBarsAppearance(if (light) mask else 0, mask)
+            } else {
+                @Suppress("DEPRECATION")
+                run {
+                    val decor = activity.window.decorView
+                    var flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    }
+                    decor.systemUiVisibility = if (light) {
+                        decor.systemUiVisibility or flags
+                    } else {
+                        decor.systemUiVisibility and flags.inv()
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    /// "dark" or "light" from the device's night mode. The activity theme is
+    /// a light one, so the WebView's `prefers-color-scheme` always reports
+    /// light; the "system" app theme reads `data-system-scheme` instead.
+    private fun systemScheme(): String {
+        val activity = activityRef?.get() ?: return "dark"
+        val night = activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return if (night == Configuration.UI_MODE_NIGHT_NO) "light" else "dark"
+    }
+
     fun pushToWebView() {
         val webView = webViewRef?.get() ?: return
         try {
@@ -289,6 +342,7 @@ object InvusoChrome {
                     root.style.setProperty('--safe-area-right', '${insetRight}px');
                     root.style.setProperty('--safe-area-bottom', '${insetBottom}px');
                     root.style.setProperty('--safe-area-left', '${insetLeft}px');
+                    root.setAttribute('data-system-scheme', '${systemScheme()}');
                 })();
                 """.trimIndent(),
                 null,

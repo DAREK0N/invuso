@@ -5,9 +5,10 @@ use dioxus_free_icons::{
 };
 
 use crate::Route;
+use crate::appearance::{AppLanguage, Appearance, UiLanguage};
 use crate::components::{
     AvatarEntry, AvatarStack, BottomSheet, Button, CurrencyPicker, EmptyState, ErrorBanner,
-    LanguagePicker, LinkRow, TextField, TopBar,
+    LanguagePicker, LinkRow, RadioRow, TextField, TopBar,
 };
 use crate::preferences::language_name;
 use crate::state::DataRevision;
@@ -22,7 +23,8 @@ enum Editing {
 }
 
 /// Settings start page: the profile (name of "Ich", home currency, target
-/// language; SET-01..03) and links to the management subpages (SET-06).
+/// language; SET-01..03), app language and appearance (SET-04, SET-05) and
+/// links to the management subpages (SET-06).
 #[component]
 pub fn Settings() -> Element {
     let db = use_context::<Db>();
@@ -93,7 +95,86 @@ pub fn Settings() -> Element {
                 }
             },
         }
+        AppSection {}
         ManageSection {}
+    }
+}
+
+/// App language (SET-04) and the link to the appearance page (SET-05).
+#[component]
+fn AppSection() -> Element {
+    let db = use_context::<Db>();
+    let look = use_context::<Signal<Appearance>>();
+    let nav = use_navigator();
+    let language = use_signal(|| AppLanguage::load(&db));
+    let mut choosing = use_signal(|| false);
+
+    rsx! {
+        section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",
+            h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
+                {t!("settings.app_section").to_string()}
+            }
+            div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                SettingsRow {
+                    label: t!("settings.app_language").to_string(),
+                    value: language().label(),
+                    onclick: move |_| choosing.set(true),
+                }
+                LinkRow {
+                    label: t!("page.settings_appearance").to_string(),
+                    onclick: move |_| {
+                        nav.push(Route::SettingsAppearance {});
+                    },
+                    span { class: "text-base text-floral-white-400", {look().theme.label()} }
+                }
+            }
+        }
+        if choosing() {
+            AppLanguageSheet { language, on_close: move |_| choosing.set(false) }
+        }
+    }
+}
+
+/// Picks the app language; a different locale rebuilds the screens on this
+/// page.
+#[component]
+fn AppLanguageSheet(mut language: Signal<AppLanguage>, on_close: EventHandler<()>) -> Element {
+    let db = use_context::<Db>();
+    let mut ui_language = use_context::<UiLanguage>();
+    let mut error = use_signal(|| None::<String>);
+
+    rsx! {
+        BottomSheet { title: t!("settings.app_language").to_string(), on_close,
+            div { class: "flex flex-col gap-2 px-3 pt-2",
+                ErrorBanner { error: error() }
+                div {
+                    class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                    role: "radiogroup",
+                    aria_label: t!("settings.app_language").to_string(),
+                    for option in AppLanguage::ALL {
+                        RadioRow {
+                            key: "{option.code()}",
+                            label: option.label(),
+                            hint: (option == AppLanguage::System)
+                                .then(|| t!("app_language.system_hint").to_string()),
+                            selected: language() == option,
+                            onclick: {
+                                let db = db.clone();
+                                move |_| match ui_language.switch(&db, option, Route::Settings {}) {
+                                    Ok(()) => {
+                                        language.set(option);
+                                        on_close.call(());
+                                    }
+                                    Err(e) => {
+                                        error.set(Some(format!("{} {e}", t!("app_language.save_error"))));
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

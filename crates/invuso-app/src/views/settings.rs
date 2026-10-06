@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use super::PlaceholderPage;
 
+mod appearance;
 mod languages;
 mod licenses;
 mod payment_methods;
@@ -9,6 +10,7 @@ mod people;
 mod person_detail;
 mod profile;
 
+pub use appearance::SettingsAppearance;
 pub use languages::SettingsLanguages;
 pub use licenses::SettingsLicenses;
 pub use payment_methods::SettingsPaymentMethods;
@@ -20,11 +22,6 @@ pub use profile::Settings;
 #[component]
 pub fn SettingsCategories() -> Element {
     rsx! { PlaceholderPage { title: t!("page.settings_categories").to_string(), show_back: true } }
-}
-
-#[component]
-pub fn SettingsAppearance() -> Element {
-    rsx! { PlaceholderPage { title: t!("page.settings_appearance").to_string(), show_back: true } }
 }
 
 #[component]

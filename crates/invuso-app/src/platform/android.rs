@@ -356,6 +356,26 @@ impl super::TextShare for AndroidTextShare {
     }
 }
 
+pub struct AndroidSystemBars;
+
+impl super::SystemBars for AndroidSystemBars {
+    fn set_theme(&self, theme: &str) -> Result<(), String> {
+        with_activity(|env, activity| {
+            let theme = JString::from_str(env, theme).map_err(|e| e.to_string())?;
+            let signature = RuntimeMethodSignature::from_str("(Ljava/lang/String;)V")
+                .map_err(|e| e.to_string())?;
+            env.call_method(
+                activity,
+                JNIString::new("setAppTheme"),
+                signature.method_signature(),
+                &[jni::objects::JValue::Object(&theme)],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+    }
+}
+
 /// Runs `op` with the Activity, which `ndk-context` knows as the context.
 fn with_activity<T>(
     op: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> Result<T, String>,

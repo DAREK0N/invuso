@@ -4,6 +4,7 @@ use dioxus::history::{History, MemoryHistory};
 use dioxus::prelude::*;
 use dioxus::router::components::HistoryProvider;
 
+mod appearance;
 mod clock;
 mod components;
 mod format;
@@ -105,9 +106,8 @@ pub enum Route {
 }
 
 fn main() {
-    // German is the primary UI language until the language setting (SET-04)
-    // exists; English stays the fallback for missing keys.
-    rust_i18n::set_locale("de");
+    // The stored app language (SET-04) is set in `AppRoot`, once the
+    // database is open; English stays the fallback for missing keys.
     dioxus::launch(App);
 }
 
@@ -140,6 +140,10 @@ fn App() -> Element {
 #[component]
 fn AppRoot(db: Db) -> Element {
     let has_me = use_hook(|| db.me().map(|me| me.is_some()).map_err(|e| e.to_string()));
+    let ui_language =
+        use_context_provider(|| appearance::UiLanguage::new(appearance::startup_locale(&db)));
+    let look = use_context_provider(|| Signal::new(appearance::Appearance::load(&db)));
+    use_effect(move || appearance::apply(look(), ui_language.locale()));
     use_context_provider(|| db);
     use_context_provider(state::DataRevision::new);
     use_context_provider(state::Toaster::new);
@@ -153,12 +157,18 @@ fn AppRoot(db: Db) -> Element {
         // The router has no hook for its very first route, so the history it
         // reads starts there; `replace` after onboarding then leaves Home as
         // the only entry and back closes the app.
+        // `t!` is not reactive: a new app language rebuilds the router under
+        // a new key, on the screen the switch happened (SET-04).
         Ok(has_me) => rsx! {
-            HistoryProvider {
-                history: move |_| {
-                    Rc::new(MemoryHistory::with_initial_path(start_route(has_me))) as Rc<dyn History>
-                },
-                Router::<Route> {}
+            for locale in [ui_language.locale()] {
+                HistoryProvider {
+                    key: "{locale}",
+                    history: move |_| {
+                        let route = ui_language.restart_route().unwrap_or(start_route(has_me));
+                        Rc::new(MemoryHistory::with_initial_path(route)) as Rc<dyn History>
+                    },
+                    Router::<Route> {}
+                }
             }
         },
         Err(message) => rsx! { StartupError { message } },

@@ -113,6 +113,8 @@ language:
 settings:
   manage_section: "Manage"
   about_section: "About Invuso"
+  app_section: "App"
+  app_language: "App language"
 
 people:
   add: "Add person"
@@ -674,3 +676,28 @@ cash:
   open_expense: "Open expense"
   home_title: "Cash"
   home_empty: "No cash recorded yet. Tap here to book a withdrawal."
+
+appearance:
+  theme: "Color scheme"
+  theme_system: "System"
+  theme_system_hint: "Light or dark like the phone"
+  theme_dark: "Dark"
+  theme_night: "Night"
+  theme_oled: "OLED black"
+  theme_oled_hint: "True black, saves battery on OLED screens"
+  theme_light: "Light"
+  radius: "Corner radius"
+  scale: "Interface size"
+  size_small: "Small"
+  size_normal: "Normal"
+  size_large: "Large"
+  shadows: "Shadows"
+  shadows_hint: "Soft shadow around cards and bars"
+  save_error: "The appearance could not be saved."
+
+app_language:
+  system: "Like the phone"
+  system_hint: "German on German devices, English otherwise"
+  de: "Deutsch"
+  en: "English"
+  save_error: "The language could not be saved."

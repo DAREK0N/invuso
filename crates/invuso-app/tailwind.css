@@ -3,8 +3,8 @@
 /* Design tokens (idee.md 3.2). Scales follow Meduso: jet-black = surfaces,
    floral-white = text, cerulean = accent, muted-teal = positive balance,
    watermelon / scarlet-fire = negative balance and errors, pale-oak = warnings.
-   Only the Dark theme exists so far; further themes (UI-18) override these
-   scales on :root[data-theme="…"]. */
+   These values are the Dark theme; the other themes (UI-18) override them on
+   :root[data-theme="…"] further down. */
 @theme {
     --radius: calc(0.25rem * var(--ui-radius-scale));
     --radius-xs: calc(0.125rem * var(--ui-radius-scale));
@@ -171,6 +171,115 @@
     }
 }
 
+/* Appearance settings (SET-05), written to <html> by appearance.rs. Normal
+   needs no rule; absent attributes give the original look on first paint. */
+:root[data-ui-radius="small"] {
+    --ui-radius-scale: 0.5;
+}
+:root[data-ui-radius="large"] {
+    --ui-radius-scale: 1.5;
+}
+:root[data-ui-scale="small"] {
+    --ui-scale: 0.92;
+}
+:root[data-ui-scale="large"] {
+    --ui-scale: 1.08;
+}
+@media (max-width: 767px) {
+    :root[data-ui-scale="small"] {
+        --ui-scale: 0.85;
+    }
+    :root[data-ui-scale="large"] {
+        --ui-scale: 1;
+    }
+}
+
+/* Themes (UI-18). Each overrides only the scales it changes; "dark" is the
+   @theme default above and has no block. "system" shows Light or Dark after
+   the device's dark mode, which MainActivity.kt writes to
+   data-system-scheme (the WebView itself always reports light). */
+
+/* Night: deep blue-black with a muted accent. */
+:root[data-theme="night"] {
+    --color-jet-black-950: #05090c;
+    --color-jet-black-900: #0a0f13;
+    --color-jet-black-800: #10171d;
+    --color-jet-black-700: #18232b;
+    --color-jet-black-600: #23323c;
+    --color-floral-white-50: #e2edf2;
+    --color-floral-white-100: #d1e0e8;
+    --color-floral-white-200: #c0d2dc;
+    --color-floral-white-300: #a4bbc7;
+    --color-floral-white-400: #8aa3b2;
+    --color-floral-white-500: #708c9e;
+    --color-floral-white-600: #587384;
+    --color-floral-white-700: #425968;
+    --color-floral-white-800: #2f404b;
+    --color-floral-white-900: #1e2a33;
+    --color-floral-white-950: #141c22;
+    --color-cerulean-300: #7fbfcd;
+    --color-cerulean-400: #5ea6b8;
+    --color-cerulean-500: #4b8ea1;
+    --color-cerulean-600: #3a7384;
+    --color-cerulean-700: #2a5663;
+    --color-cerulean-800: #1c3b45;
+    --color-cerulean-900: #112328;
+}
+
+/* OLED Black: true-black page, everything else from Dark. */
+:root[data-theme="oled"] {
+    --color-jet-black-950: #000000;
+    --color-jet-black-900: #000000;
+    --color-jet-black-800: #0a1114;
+    --color-jet-black-700: #132026;
+    --color-jet-black-600: #1c2f37;
+}
+
+/* Light: Dark's teal hue on tinted surfaces with deep ink text. Fills that
+   carry floral-white text (accent 500–800, danger 700/800, the 900 banner
+   tones) turn pale; text tones (accent 50–400, the 200/300 status tones)
+   turn dark enough to read on the light page. */
+:root[data-theme="light"],
+:root[data-theme="system"][data-system-scheme="light"] {
+    color-scheme: light;
+    --ui-surface-shadow: 0 0 1px rgb(15 30 36 / 0.12), 0 0 14px rgb(15 30 36 / 0.16);
+    --color-jet-black-950: #f0f6f8;
+    --color-jet-black-900: #e4eef2;
+    --color-jet-black-800: #d3e3e9;
+    --color-jet-black-700: #bfd5de;
+    --color-jet-black-600: #a6c3cf;
+    --color-floral-white-50: #0f1e24;
+    --color-floral-white-100: #172a31;
+    --color-floral-white-200: #21363f;
+    --color-floral-white-300: #2d4550;
+    --color-floral-white-400: #3a5562;
+    --color-floral-white-500: #486573;
+    --color-floral-white-600: #587683;
+    --color-floral-white-700: #6b8894;
+    --color-floral-white-800: #819ba6;
+    --color-floral-white-900: #98aeb8;
+    --color-floral-white-950: #b0c3cb;
+    --color-cerulean-50: #0d2f37;
+    --color-cerulean-100: #123d47;
+    --color-cerulean-200: #184f5c;
+    --color-cerulean-300: #1f5e6c;
+    --color-cerulean-400: #2b7183;
+    --color-cerulean-500: #5aa3b4;
+    --color-cerulean-600: #4c95a7;
+    --color-cerulean-700: #78b6c5;
+    --color-cerulean-800: #b3d7e0;
+    --color-cerulean-900: #d2e7ec;
+    --color-muted-teal-300: #3e5b41;
+    --color-watermelon-200: #88111b;
+    --color-watermelon-300: #b61624;
+    --color-watermelon-700: #f4a4ab;
+    --color-watermelon-800: #ee7781;
+    --color-watermelon-900: #fce8ea;
+    --color-pale-oak-200: #463b20;
+    --color-pale-oak-300: #695930;
+    --color-pale-oak-900: #f7f0dc;
+}
+
 html {
     font-size: calc(16px * var(--ui-scale));
     /* Android WebView stretches the whole root layer on overscroll, which drags
@@ -197,6 +306,23 @@ html:has(#invuso-sheet-backdrop) {
 
 .ease-apple {
     transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* Shadows (SET-05): fully outlined neutral surfaces (cards, panels) and the
+   glass bars get a soft shadow, even on all sides (no offset). One-sided borders are dividers and stay
+   flat, as do form fields and anything with its own shadow utility. */
+:root {
+    --ui-surface-shadow: 0 0 1px rgb(0 0 0 / 0.4), 0 0 16px rgb(0 0 0 / 0.5);
+}
+:root[data-ui-shadows="true"]
+    :is([class~="border"], [class~="border-2"])[class*="border-jet-black-"]:not(
+        [class*="shadow"],
+        input,
+        select,
+        textarea
+    ),
+:root[data-ui-shadows="true"] .glass:not([class*="shadow"]) {
+    box-shadow: var(--ui-surface-shadow);
 }
 
 /* In the components layer so utilities (e.g. border-x-0) can override it. */

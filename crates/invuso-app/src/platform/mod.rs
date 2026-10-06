@@ -6,10 +6,12 @@ use std::path::PathBuf;
 mod android;
 mod images;
 mod share;
+mod system_bars;
 mod translator;
 
 pub use images::{ImageKind, ImageSource, PickOutcome, image_source};
 pub use share::{TextShare, text_share};
+pub use system_bars::{SystemBars, system_bars};
 pub use translator::{MachineText, Translation, Translator, system_translator};
 
 /// Private, persistent directory for the database and receipt images.
