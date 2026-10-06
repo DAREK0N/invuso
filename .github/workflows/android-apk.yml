@@ -3,6 +3,11 @@ name: Android APK
 # Builds a signed release APK for arm64-v8a (all current phones) on every
 # push to main, or by hand. Download it from the run's artifacts.
 #
+# On main, the first build of a version (`[workspace.package] version` in
+# Cargo.toml) becomes a GitHub release `v<version>` with the APK; versions
+# with a suffix such as `-alpha1` are marked as pre-release. Existing
+# releases are never changed: bump the version for a new one.
+#
 # Needs these repository secrets (the keystore never goes into the repo):
 #   ANDROID_KEYSTORE_BASE64   base64 of the .jks file
 #   ANDROID_KEYSTORE_PASSWORD
@@ -25,6 +30,9 @@ jobs:
   apk:
     name: APK (arm64-v8a)
     runs-on: ubuntu-latest
+    permissions:
+      # Creating the release and its tag.
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -50,6 +58,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "invuso-app") | .version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version"
 
       - name: Install dx
         run: |
@@ -79,11 +95,12 @@ jobs:
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
           apk="$(ls dist/*.apk | head -1)"
-          name="invuso-${GITHUB_SHA::7}-arm64-v8a.apk"
+          name="invuso-${VERSION}-arm64-v8a.apk"
           "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" \
             --ks-pass env:STORE_PASSWORD --ks-key-alias "$KEY_ALIAS" \
             --key-pass env:KEY_PASSWORD --out "dist/$name" "$apk"
@@ -95,3 +112,19 @@ jobs:
           name: invuso-arm64-v8a
           path: dist/*.apk
           if-no-files-found: error
+
+      - name: Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag exists; left unchanged. Bump the version for a new release."
+            exit 0
+          fi
+          flags=()
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$tag" dist/*.apk "${flags[@]}" \
+            --target "$GITHUB_SHA" --title "Invuso $VERSION" --generate-notes

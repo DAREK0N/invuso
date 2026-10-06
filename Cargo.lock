@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "invuso-app"
-version = "0.1.0"
+version = "0.0.1-alpha1"
 dependencies = [
  "dioxus",
  "dioxus-free-icons",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "invuso-core"
-version = "0.1.0"
+version = "0.0.1-alpha1"
 dependencies = [
  "iso_currency",
  "rust_decimal",
