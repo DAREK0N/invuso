@@ -20,6 +20,7 @@ mod people;
 mod profile;
 mod receipts;
 mod settings;
+mod settlements;
 mod translations;
 
 pub(crate) use db::now_ms;
@@ -37,4 +38,5 @@ pub use settings::{
     CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY,
     LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST, TRANSLATION_CONFIDENCE,
 };
+pub use settlements::NewSettlement;
 pub use translations::UNKNOWN_LANGUAGE;

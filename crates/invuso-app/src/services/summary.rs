@@ -1,11 +1,11 @@
 //! Totals, balances and debts of groups (GRP-02, GRP-10..14, SPL-03,
-//! SPL-04, PER-03), computed from the stored expenses by
-//! [`invuso_core::split::summarize`].
+//! SPL-04, SPL-06, SPL-07, PER-03), computed from the stored expenses and
+//! settlements by [`invuso_core::split::summarize`].
 
 use std::collections::BTreeMap;
 
-use invuso_core::domain::{Currency, Group, Money, PersonId};
-use invuso_core::split::{GroupSummary, PersonTotals, summarize};
+use invuso_core::domain::{Currency, Group, Money, PersonId, Settlement};
+use invuso_core::split::{GroupSummary, PersonTotals, SettlementEntry, summarize};
 
 use crate::storage::{Db, StorageError};
 
@@ -14,12 +14,19 @@ use crate::storage::{Db, StorageError};
 pub fn group_summary(db: &Db, group: &Group) -> Result<GroupSummary, StorageError> {
     let members = db.group_members(&group.id)?;
     let expenses = db.group_expenses(&group.id)?;
-    // Settlements join the balances once they can be recorded (AP-23).
+    // Like expenses, settlements in an earlier base currency are left out
+    // rather than converted anew (AP-14).
+    let settlements: Vec<SettlementEntry> = db
+        .group_settlements(&group.id)?
+        .iter()
+        .filter(|settlement| settlement.amount.currency() == group.base_currency)
+        .map(Settlement::entry)
+        .collect();
     Ok(summarize(
         group.base_currency,
         members.into_iter().map(|member| member.person.id),
         &expenses,
-        &[],
+        &settlements,
     )?)
 }
 
@@ -180,6 +187,39 @@ mod tests {
                 .filter(|t| t.balance > 0)
                 .map(|t| t.balance)
                 .sum::<i64>()
+        );
+    }
+
+    #[test]
+    fn settlements_count_until_deleted() {
+        let (db, me) = setup();
+        let anna = person(&db, "Anna");
+        let trip = group(&db, "Japan", "EUR");
+        db.add_group_member(&trip.id, &anna).unwrap();
+        add(&db, &trip, &me, 3_000, &[&me, &anna]);
+        let paid = db
+            .create_settlement(crate::storage::NewSettlement {
+                group_id: trip.id.clone(),
+                from: anna.clone(),
+                to: me.clone(),
+                amount: Money::new(1_000, cur("EUR")),
+                payment_method_id: None,
+                occurred_at: "2026-10-05T12:00:00+02:00".into(),
+                note: None,
+            })
+            .unwrap();
+
+        let summary = group_summary(&db, &trip).unwrap();
+        assert_eq!(summary.people[&anna].balance, -500);
+        assert_eq!(summary.people[&anna].settled_out, 1_000);
+        assert_eq!(summary.transfers.len(), 1);
+        assert_eq!(summary.transfers[0].amount_minor, 500);
+        assert_eq!(summary.pairwise, summary.transfers);
+
+        db.delete_settlement(&paid.id).unwrap();
+        assert_eq!(
+            group_summary(&db, &trip).unwrap().people[&anna].balance,
+            -1_500
         );
     }
 

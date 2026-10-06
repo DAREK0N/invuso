@@ -3,12 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdArrowRight, LdCircleAlert, LdPin, LdPlus, LdTrash2, LdTriangleAlert},
+    icons::ld_icons::{LdCircleAlert, LdPin, LdPlus, LdTrash2, LdTriangleAlert},
 };
 use invuso_core::domain::{Group, GroupId, GroupMember, Money, Person, PersonId};
 use invuso_core::split::GroupSummary;
 
 use super::form::GroupNotFound;
+use super::settle::{DebtRow, SettleChoices, SettleDraft, SettleSheet, person_label};
 use super::{DeleteGroupSheet, group_subtitle, mark_active};
 use crate::Route;
 use crate::components::{
@@ -32,11 +33,13 @@ struct Overview {
     me: Option<PersonId>,
     /// Marked as the active group (GRP-05).
     active: bool,
+    choices: SettleChoices,
 }
 
 /// `/groups/:id`: total spent, own balance, who owes whom, who paid and who
 /// owes most, and everyone's paid / share / balance (GRP-10..14, SPL-03,
-/// SPL-04), with links to the expenses (GRP-20), members and editing.
+/// SPL-04), with links to the expenses (GRP-20), members, debts and
+/// settlements, and editing. Tapping a debt marks it as paid (GRP-15).
 #[component]
 pub fn GroupOverview(id: String) -> Element {
     let db = use_context::<Db>();
@@ -100,6 +103,18 @@ pub fn GroupOverview(id: String) -> Element {
                                 AvatarStack { people: avatars(&overview.members), max: 3 }
                             }
                             LinkRow {
+                                label: t!("page.group_settle").to_string(),
+                                onclick: {
+                                    let id = group.id.as_str().to_string();
+                                    move |_| {
+                                        nav.push(Route::GroupSettle {
+                                            id: id.clone(),
+                                            record: false,
+                                        });
+                                    }
+                                },
+                            }
+                            LinkRow {
                                 label: t!("common.edit").to_string(),
                                 onclick: {
                                     let id = group.id.as_str().to_string();
@@ -154,6 +169,7 @@ fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
     let summary = group_summary(db, &group)?;
     let people = db.people_any(summary.people.keys())?;
     let me = db.me()?.map(|person| person.id);
+    let choices = SettleChoices::load(db, id)?;
     let active = db
         .active_group()?
         .is_some_and(|active| active.id == group.id);
@@ -164,6 +180,7 @@ fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
         people,
         me,
         active,
+        choices,
     }))
 }
 
@@ -242,6 +259,7 @@ fn Totals(overview: Overview) -> Element {
 /// Who owes whom, the two rankings and everyone's figures.
 #[component]
 fn Balances(overview: Overview) -> Element {
+    let mut sheet = use_signal(|| None::<SettleDraft>);
     let summary = &overview.summary;
     let base = overview.group.base_currency;
     let members: BTreeSet<PersonId> = overview
@@ -265,23 +283,17 @@ fn Balances(overview: Overview) -> Element {
         .iter()
         .map(|(person, amount)| line(person, *amount))
         .collect();
-    let transfers: Vec<TransferLine> = summary
-        .transfers
-        .iter()
-        .map(|transfer| TransferLine {
-            from: overview.people.get(&transfer.from).cloned(),
-            to: overview.people.get(&transfer.to).cloned(),
-            amount: Money::new(transfer.amount_minor, base),
-        })
-        .collect();
+    let transfers = summary.transfers.clone();
+    // Paid and consumed as idee.md 8.3 counts them, settlements included,
+    // so that paid − consumed is the balance shown next to them.
     let per_person: Vec<(PersonLine, Money, Money)> = summary
         .people
         .iter()
         .map(|(person, totals)| {
             (
                 line(person, totals.balance),
-                Money::new(totals.paid, base),
-                Money::new(totals.consumed, base),
+                Money::new(totals.paid.saturating_add(totals.settled_out), base),
+                Money::new(totals.consumed.saturating_add(totals.settled_in), base),
             )
         })
         .collect();
@@ -291,8 +303,17 @@ fn Balances(overview: Overview) -> Element {
             if transfers.is_empty() {
                 p { class: "px-4 py-4 text-base text-floral-white-300", {t!("summary.all_settled").to_string()} }
             }
-            for (index, transfer) in transfers.into_iter().enumerate() {
-                TransferRow { key: "{index}", line: transfer }
+            for (index, transfer) in transfers.iter().enumerate() {
+                DebtRow {
+                    key: "{index}",
+                    from: overview.people.get(&transfer.from).cloned(),
+                    to: overview.people.get(&transfer.to).cloned(),
+                    amount: Money::new(transfer.amount_minor, base),
+                    onclick: {
+                        let draft = SettleDraft::from_debt(transfer, &overview.group);
+                        move |_| sheet.set(Some(draft.clone()))
+                    },
+                }
             }
         }
         CardSection { title: t!("summary.paid_most").to_string(),
@@ -308,6 +329,14 @@ fn Balances(overview: Overview) -> Element {
         CardSection { title: t!("summary.per_person").to_string(),
             for (line, paid, consumed) in per_person {
                 PersonFiguresRow { key: "{line.id.as_str()}", line, paid, consumed }
+            }
+        }
+        if let Some(draft) = sheet() {
+            SettleSheet {
+                group: overview.group.clone(),
+                choices: overview.choices.clone(),
+                draft,
+                on_close: move |_| sheet.set(None),
             }
         }
     }
@@ -327,34 +356,6 @@ struct PersonLine {
 impl PersonLine {
     fn name_and_color(&self) -> (String, String) {
         person_label(self.person.as_ref())
-    }
-}
-
-/// One payment of the simplified debts: "Anna an Ben 23,40 €" (SPL-04).
-#[derive(Debug, Clone, PartialEq)]
-struct TransferLine {
-    from: Option<Person>,
-    to: Option<Person>,
-    amount: Money,
-}
-
-#[component]
-fn TransferRow(line: TransferLine) -> Element {
-    let (from, from_color) = person_label(line.from.as_ref());
-    let (to, to_color) = person_label(line.to.as_ref());
-    let label = t!("summary.transfer", from = from.clone(), to = to.clone()).to_string();
-
-    rsx! {
-        div {
-            class: "flex min-h-16 items-center gap-2 border-b border-jet-black-800 px-4 py-2 last:border-b-0",
-            aria_label: "{label}",
-            Avatar { name: from.clone(), color: from_color, size: AvatarSize::Sm }
-            span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", "{from}" }
-            Icon { icon: LdArrowRight, class: "h-4 w-4 shrink-0 text-floral-white-500" }
-            Avatar { name: to.clone(), color: to_color, size: AvatarSize::Sm }
-            span { class: "min-w-0 flex-1 truncate text-base text-floral-white-50", "{to}" }
-            MoneyText { amount: line.amount, class: "shrink-0 text-base font-semibold text-floral-white-100" }
-        }
     }
 }
 
@@ -409,17 +410,6 @@ fn PersonName(name: String, former: bool) -> Element {
                 span { class: "truncate text-sm text-floral-white-500", {t!("summary.former_member").to_string()} }
             }
         }
-    }
-}
-
-/// Name and color of a person, or a stand-in if the person is unknown.
-fn person_label(person: Option<&Person>) -> (String, String) {
-    match person {
-        Some(person) => (person.name.clone(), person.color.clone()),
-        None => (
-            t!("expense_detail.unknown_person").to_string(),
-            String::new(),
-        ),
     }
 }
 

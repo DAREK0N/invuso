@@ -3,7 +3,6 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use invuso_core::domain::Group;
 
-use super::PlaceholderPage;
 use crate::components::ConfirmSheet;
 use crate::preferences::period_text;
 use crate::state::{DataRevision, ToastAction, Toaster};
@@ -13,18 +12,15 @@ mod form;
 mod list;
 mod members;
 mod overview;
+mod settle;
 mod timeline;
 
 pub use form::{GroupEdit, GroupNew};
 pub use list::GroupList;
 pub use members::GroupMembers;
 pub use overview::GroupOverview;
+pub use settle::GroupSettle;
 pub use timeline::GroupTimeline;
-
-#[component]
-pub fn GroupSettle(id: String) -> Element {
-    rsx! { PlaceholderPage { title: t!("page.group_settle").to_string(), show_back: true } }
-}
 
 /// "EUR · 01.03.2026 – 14.03.2026": base currency and, if set, the period.
 fn group_subtitle(group: &Group) -> String {

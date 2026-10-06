@@ -331,6 +331,31 @@ pub extern "system" fn Java_dev_dioxus_main_MainActivity_translationResult<'call
     outcome.resolve::<jni::errors::LogErrorAndDefault>()
 }
 
+/// [`TextShare`](super::TextShare) over `MainActivity.shareText`.
+pub struct AndroidTextShare;
+
+impl super::TextShare for AndroidTextShare {
+    fn supported(&self) -> bool {
+        true
+    }
+
+    fn share(&self, text: &str) -> Result<(), String> {
+        with_activity(|env, activity| {
+            let text = JString::from_str(env, text).map_err(|e| e.to_string())?;
+            let signature = RuntimeMethodSignature::from_str("(Ljava/lang/String;)V")
+                .map_err(|e| e.to_string())?;
+            env.call_method(
+                activity,
+                JNIString::new("shareText"),
+                signature.method_signature(),
+                &[jni::objects::JValue::Object(&text)],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+    }
+}
+
 /// Runs `op` with the Activity, which `ndk-context` knows as the context.
 fn with_activity<T>(
     op: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> Result<T, String>,

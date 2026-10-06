@@ -46,8 +46,9 @@ pub enum Route {
         // `setup` marks the step right after creating the group (AP-08).
         #[route("/groups/:id/members?:setup")]
         GroupMembers { id: String, setup: bool },
-        #[route("/groups/:id/settle")]
-        GroupSettle { id: String },
+        // `record` opens the sheet for a new settlement (plus button, AP-23).
+        #[route("/groups/:id/settle?:record")]
+        GroupSettle { id: String, record: bool },
         #[route("/groups/:id/edit")]
         GroupEdit { id: String },
 
@@ -210,6 +211,22 @@ mod tests {
             Some(Route::GroupMembers {
                 id: "g1".into(),
                 setup: false
+            })
+        );
+    }
+
+    #[test]
+    fn settle_route_can_open_the_sheet() {
+        let record = Route::GroupSettle {
+            id: "g1".into(),
+            record: true,
+        };
+        assert_eq!(record.to_string().parse::<Route>().ok(), Some(record));
+        assert_eq!(
+            "/groups/g1/settle".parse::<Route>().ok(),
+            Some(Route::GroupSettle {
+                id: "g1".into(),
+                record: false
             })
         );
     }

@@ -7,6 +7,7 @@ mod line_item;
 mod money;
 mod payment_method;
 mod person;
+mod settlement;
 
 pub use currency::{Currency, CurrencyError};
 pub use expense::{
@@ -20,3 +21,4 @@ pub use payment_method::{
     PaymentMethod, PaymentMethodError, PaymentMethodId, PaymentMethodKind, validate_last4,
 };
 pub use person::{Person, PersonId};
+pub use settlement::{Settlement, SettlementError, SettlementId, validate_settlement};

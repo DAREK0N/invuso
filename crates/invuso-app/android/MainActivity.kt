@@ -2,6 +2,7 @@ package dev.dioxus.main
 
 import android.app.Activity
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
@@ -40,8 +41,9 @@ typealias BuildConfig = com.darekon.invuso.BuildConfig
 /// Thin platform bridge (AGENTS.md 5, stage 4). It only does what neither
 /// Dioxus nor the WebView can: edge-to-edge window chrome with the real
 /// system-bar insets, routing the Android back key into the Dioxus router,
-/// opening the system camera or photo picker for receipt images, and the
-/// device's on-device translator (Java-only API).
+/// opening the system camera or photo picker for receipt images, the
+/// device's on-device translator (Java-only API) and the system share sheet
+/// (the WebView has no `navigator.share`).
 /// No business logic, no state beyond the running pick, no UI.
 class MainActivity : WryActivity() {
     private val receiptImages = ReceiptImages(this)
@@ -102,6 +104,16 @@ class MainActivity : WryActivity() {
     /// Implemented in Rust. status 0 = done (one text per input), 1 = no
     /// engine for the pair, 2 = failed.
     external fun translationResult(requestId: Long, status: Int, texts: Array<String>?)
+
+    /// Called from Rust (`platform/android.rs`): opens the system share sheet
+    /// with plain text, e.g. a group's settlement for a messenger.
+    fun shareText(text: String) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        runOnUiThread { startActivity(Intent.createChooser(send, null)) }
+    }
 
     @Suppress("DEPRECATION")
     private fun systemBack() {

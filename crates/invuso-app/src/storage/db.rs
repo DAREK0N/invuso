@@ -23,6 +23,8 @@ pub enum StorageError {
     Expense(#[from] invuso_core::domain::ExpenseError),
     #[error("invalid group: {0}")]
     Group(#[from] invuso_core::domain::GroupError),
+    #[error("invalid settlement: {0}")]
+    Settlement(#[from] invuso_core::domain::SettlementError),
     #[error("the person is already a member of the group")]
     AlreadyMember,
     #[error("record not found")]

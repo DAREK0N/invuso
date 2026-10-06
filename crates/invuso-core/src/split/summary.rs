@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use super::{PersonTotals, SettlementEntry, SplitError, Transfer, balances, simplify_debts};
+use super::{
+    PersonTotals, SettlementEntry, SplitError, Transfer, balances, pairwise_debts, simplify_debts,
+};
 use crate::domain::{Currency, Expense, ExpenseError, Money, PersonId};
 
 /// Everything the group overview shows (GRP-10..14, SPL-03, SPL-04), in the
@@ -19,6 +21,9 @@ pub struct GroupSummary {
     pub people: BTreeMap<PersonId, PersonTotals>,
     /// Simplified "who pays whom" (SPL-04).
     pub transfers: Vec<Transfer>,
+    /// Debts as laid out between each two people, without simplifying
+    /// (SPL-07).
+    pub pairwise: Vec<Transfer>,
 }
 
 impl GroupSummary {
@@ -80,6 +85,7 @@ pub fn summarize(
         .map(|(person, totals)| (person.clone(), totals.balance))
         .collect();
     let transfers = simplify_debts(&open)?;
+    let pairwise = pairwise_debts(&entries, settlements)?;
 
     Ok(GroupSummary {
         total,
@@ -87,6 +93,7 @@ pub fn summarize(
         skipped_count,
         people,
         transfers,
+        pairwise,
     })
 }
 
@@ -236,6 +243,28 @@ mod tests {
                     from: p("ben"),
                     to: p("anna"),
                     amount_minor: 1_878
+                },
+            ]
+        );
+        // Ben owes Anna 30.00 for the hotel, less her 5.61 of his ramen;
+        // Cleo owes Anna 30.00 less 6.67 of the taxi, and Ben 5.61.
+        assert_eq!(
+            summary.pairwise,
+            [
+                Transfer {
+                    from: p("ben"),
+                    to: p("anna"),
+                    amount_minor: 2_439
+                },
+                Transfer {
+                    from: p("cleo"),
+                    to: p("anna"),
+                    amount_minor: 2_333
+                },
+                Transfer {
+                    from: p("cleo"),
+                    to: p("ben"),
+                    amount_minor: 561
                 },
             ]
         );
