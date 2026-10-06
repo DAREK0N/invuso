@@ -4,11 +4,13 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "android")]
 mod android;
+mod documents;
 mod images;
 mod share;
 mod system_bars;
 mod translator;
 
+pub use documents::{DocumentFiles, DocumentOutcome, document_files};
 pub use images::{ImageKind, ImageSource, PickOutcome, image_source};
 pub use share::{TextShare, text_share};
 pub use system_bars::{SystemBars, system_bars};

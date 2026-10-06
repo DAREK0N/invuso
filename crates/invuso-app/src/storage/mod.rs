@@ -8,6 +8,7 @@
     expect(dead_code, reason = "repositories are wired up by the M1 screens")
 )]
 
+mod backup;
 mod cash;
 mod categories;
 mod db;

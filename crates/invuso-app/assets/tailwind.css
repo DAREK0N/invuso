@@ -349,6 +349,9 @@
   .block {
     display: block;
   }
+  .contents {
+    display: contents;
+  }
   .flex {
     display: flex;
   }
@@ -674,6 +677,10 @@
     border-style: var(--tw-border-style);
     border-width: 1px;
   }
+  .border-2 {
+    border-style: var(--tw-border-style);
+    border-width: 2px;
+  }
   .border-4 {
     border-style: var(--tw-border-style);
     border-width: 4px;
@@ -726,6 +733,9 @@
   }
   .border-watermelon-400 {
     border-color: var(--color-watermelon-400);
+  }
+  .border-t-cerulean-300 {
+    border-top-color: var(--color-cerulean-300);
   }
   .border-t-cerulean-400 {
     border-top-color: var(--color-cerulean-400);
@@ -1264,6 +1274,11 @@
   .disabled\:opacity-50 {
     &:disabled {
       opacity: 50%;
+    }
+  }
+  .disabled\:opacity-60 {
+    &:disabled {
+      opacity: 60%;
     }
   }
 }

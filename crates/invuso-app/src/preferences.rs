@@ -2,7 +2,7 @@
 //! idee.md 7.5), for people (PER-01), payment methods (PAY-01) and groups
 //! (GRP-01).
 
-use invuso_core::domain::{Category, Currency, PaymentMethodKind};
+use invuso_core::domain::{Category, Currency, LineItemKind, PaymentMethodKind};
 
 /// Favorites of the currency picker until the user changes them.
 pub const FAVORITE_CURRENCIES: [&str; 5] = ["EUR", "USD", "JPY", "CHF", "GBP"];
@@ -145,6 +145,20 @@ pub const GROUP_ICONS: [&str; 12] = [
     "party-popper",
     "heart",
 ];
+
+/// Name of a line item kind (AP-19), e.g. "Rabatt/Gutschrift".
+pub fn kind_label(kind: LineItemKind) -> String {
+    match kind {
+        LineItemKind::Article => t!("items.kind_article"),
+        LineItemKind::Discount => t!("items.kind_discount"),
+        LineItemKind::Deposit => t!("items.kind_deposit"),
+        LineItemKind::Tax => t!("items.kind_tax"),
+        LineItemKind::Tip => t!("items.kind_tip"),
+        LineItemKind::ServiceCharge => t!("items.kind_service"),
+        LineItemKind::Ignored => t!("items.kind_ignored"),
+    }
+    .to_string()
+}
 
 /// Icon preselected for a new group.
 pub const DEFAULT_GROUP_ICON: &str = "users";

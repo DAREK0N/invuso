@@ -30,6 +30,7 @@ use crate::format::{
     NumberFormat, amount_text, fit_amount_text, format_money, format_number, format_plain,
     number_text, parse_amount, parse_number,
 };
+use crate::preferences::kind_label;
 
 /// Decimals a quantity can be typed with (weights in kg: `0,452`).
 const QUANTITY_DECIMALS: u32 = 3;
@@ -792,19 +793,6 @@ fn ActionButton(
             "{label}"
         }
     }
-}
-
-pub(super) fn kind_label(kind: LineItemKind) -> String {
-    match kind {
-        LineItemKind::Article => t!("items.kind_article"),
-        LineItemKind::Discount => t!("items.kind_discount"),
-        LineItemKind::Deposit => t!("items.kind_deposit"),
-        LineItemKind::Tax => t!("items.kind_tax"),
-        LineItemKind::Tip => t!("items.kind_tip"),
-        LineItemKind::ServiceCharge => t!("items.kind_service"),
-        LineItemKind::Ignored => t!("items.kind_ignored"),
-    }
-    .to_string()
 }
 
 fn kind_hint(kind: LineItemKind) -> String {

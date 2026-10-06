@@ -186,6 +186,134 @@ pub extern "system" fn Java_dev_dioxus_main_MainActivity_receiptImageResult<'cal
     outcome.resolve::<jni::errors::LogErrorAndDefault>()
 }
 
+/// [`DocumentFiles`](super::DocumentFiles) over the bridge in
+/// `MainActivity.kt`.
+pub struct AndroidDocumentFiles;
+
+/// Status codes of `MainActivity.documentResult`.
+const DOCUMENT_DONE: i32 = 0;
+const DOCUMENT_CANCELLED: i32 = 1;
+
+type DocumentResult = Result<super::DocumentOutcome, String>;
+
+/// The dialog waiting for its answer from Kotlin. A newer one replaces it,
+/// which drops the old sender and so ends the old one as cancelled.
+static PENDING_DOCUMENT: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<DocumentResult>>> =
+    std::sync::Mutex::new(None);
+
+impl super::DocumentFiles for AndroidDocumentFiles {
+    fn supported(&self) -> bool {
+        true
+    }
+
+    fn save(
+        &self,
+        source: &std::path::Path,
+        name: &str,
+        mime: &str,
+    ) -> impl std::future::Future<Output = DocumentResult> + use<> {
+        let path = source.to_string_lossy().into_owned();
+        request_document(
+            DOCUMENT_SAVE,
+            path,
+            name.to_string(),
+            vec![mime.to_string()],
+        )
+    }
+
+    fn open(
+        &self,
+        dest: &std::path::Path,
+        mimes: &[&str],
+    ) -> impl std::future::Future<Output = DocumentResult> + use<> {
+        let path = dest.to_string_lossy().into_owned();
+        let mimes = mimes.iter().map(|mime| (*mime).to_string()).collect();
+        request_document(DOCUMENT_OPEN, path, String::new(), mimes)
+    }
+}
+
+/// Kinds of `MainActivity.requestDocument`.
+const DOCUMENT_SAVE: i32 = 0;
+const DOCUMENT_OPEN: i32 = 1;
+
+/// `MainActivity.requestDocument(kind, path, name, mimes)`; the answer
+/// arrives in [`Java_dev_dioxus_main_MainActivity_documentResult`].
+fn request_document(
+    kind: i32,
+    path: String,
+    name: String,
+    mimes: Vec<String>,
+) -> impl std::future::Future<Output = DocumentResult> + use<> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let started = match PENDING_DOCUMENT.lock() {
+        Ok(mut pending) => {
+            *pending = Some(sender);
+            with_activity(|env, activity| {
+                let path = JString::from_str(env, &path).map_err(|e| e.to_string())?;
+                let name = JString::from_str(env, &name).map_err(|e| e.to_string())?;
+                let empty = JString::from_str(env, "").map_err(|e| e.to_string())?;
+                let array = jni::objects::JObjectArray::<JString>::new(env, mimes.len(), &empty)
+                    .map_err(|e| e.to_string())?;
+                for (index, mime) in mimes.iter().enumerate() {
+                    let mime = JString::from_str(env, mime).map_err(|e| e.to_string())?;
+                    array
+                        .set_element(env, index, &mime)
+                        .map_err(|e| e.to_string())?;
+                }
+                let signature = RuntimeMethodSignature::from_str(
+                    "(ILjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V",
+                )
+                .map_err(|e| e.to_string())?;
+                env.call_method(
+                    activity,
+                    JNIString::new("requestDocument"),
+                    signature.method_signature(),
+                    &[
+                        jni::objects::JValue::Int(kind),
+                        jni::objects::JValue::Object(&path),
+                        jni::objects::JValue::Object(&name),
+                        jni::objects::JValue::Object(&array),
+                    ],
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            })
+        }
+        Err(_) => Err("document dialog state poisoned".to_string()),
+    };
+    async move {
+        started?;
+        receiver
+            .await
+            .unwrap_or(Ok(super::DocumentOutcome::Cancelled))
+    }
+}
+
+/// Native half of `MainActivity.documentResult(status, message)`, called
+/// by Kotlin once the bytes are copied, or the dialog ended otherwise.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_dioxus_main_MainActivity_documentResult<'caller>(
+    mut unowned_env: jni::EnvUnowned<'caller>,
+    _activity: JObject<'caller>,
+    status: jni::sys::jint,
+    message: JString<'caller>,
+) {
+    let outcome = unowned_env.with_env(|env| -> Result<(), jni::errors::Error> {
+        let result = match status {
+            DOCUMENT_DONE => Ok(super::DocumentOutcome::Done),
+            DOCUMENT_CANCELLED => Ok(super::DocumentOutcome::Cancelled),
+            _ if message.is_null() => Err("the file could not be copied".to_string()),
+            _ => Err(message.try_to_string(env)?),
+        };
+        if let Some(sender) = PENDING_DOCUMENT.lock().ok().and_then(|mut p| p.take()) {
+            // The receiver is gone if the screen that asked was left.
+            let _ = sender.send(result);
+        }
+        Ok(())
+    });
+    outcome.resolve::<jni::errors::LogErrorAndDefault>()
+}
+
 /// [`Translator`](super::Translator) over the device's on-device
 /// translation engine, reached through `MainActivity.translateTexts`.
 pub struct AndroidTranslator;

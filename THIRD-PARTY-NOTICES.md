@@ -317,6 +317,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | tracing-subscriber | 0.3.23 | MIT | Copyright (c) 2019 Tokio Contributors |
 | triomphe | 0.1.16 | MIT OR Apache-2.0 | Copyright (c) 2019 Manish Goregaokar |
 | tungstenite | 0.28.0 | MIT OR Apache-2.0 | Copyright (c) 2017 Alexey Galakhov; Copyright (c) 2016 Jason Housley |
+| typed-path | 0.12.3 | MIT OR Apache-2.0 | Copyright (c) Chip Senkbeil |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | Copyright (c) David Tolnay |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | Copyright 2014 Paho Lurie-Gregg; Copyright (c) 2014 Paho Lurie-Gregg |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | COPYRIGHT AND PERMISSION NOTICE; Copyright © 1991-2023 Unicode, Inc. |
@@ -353,6 +354,7 @@ Erzeugt mit `python scripts/third-party/generate.py`; nicht von Hand bearbeiten.
 | zeroize | 1.9.0 | Apache-2.0 OR MIT | Copyright (c) 2018-2026 The RustCrypto Project Developers |
 | zerotrie | 0.2.5 | Unicode-3.0 | COPYRIGHT AND PERMISSION NOTICE; Copyright © 2020-2024 Unicode, Inc. |
 | zerovec | 0.11.8 | Unicode-3.0 | COPYRIGHT AND PERMISSION NOTICE; Copyright © 2020-2024 Unicode, Inc. |
+| zip | 8.6.0 | MIT | Copyright (c) 2014 Mathijs van de Nes |
 | zlib-rs | 0.6.8 | Zlib | Copyright (c) the contributors of https://github.com/trifectatechfoundation/zlib-rs |
 | zmij | 1.0.23 | MIT | Copyright (c) David Tolnay |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | Copyright (c) zune-image developers |

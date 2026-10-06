@@ -15,7 +15,8 @@ rust-i18n = "3.1.5"
 rust_decimal = "1.43.0"
 thiserror = "2.0.21"
 iso_currency = { version = "0.7.1", features = ["iterator"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# `backup` restores a backup into the open database (DATA-02).
+rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
 uuid = { version = "1.27.0", features = ["v7"] }
 jni = "0.22.4"
 ndk-context = "0.1.1"
@@ -47,6 +48,8 @@ icu_normalizer = "2.3.0"
 # SHA-256 of downloaded translation packs; the same version rustls already
 # pulls in for the rate requests.
 ring = "0.17.14"
+# Backup archive (DATA-01): pure Rust, deflate only.
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 # `dx serve` builds in debug; unoptimized inference would take minutes per
 # receipt, so the OCR and image crates are always optimized.

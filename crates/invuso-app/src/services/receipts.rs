@@ -14,7 +14,7 @@ use crate::platform::{self, ImageKind, ImageSource, PickOutcome};
 use crate::storage::{Db, ReceiptFiles, StorageError};
 
 /// Folder of the receipt images inside the data directory.
-const RECEIPTS_DIR: &str = "receipts";
+pub(crate) const RECEIPTS_DIR: &str = "receipts";
 
 /// URL prefix under which the WebView loads receipt files.
 const URL_PREFIX: &str = "receipt-files";

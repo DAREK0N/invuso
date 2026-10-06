@@ -35,6 +35,8 @@ pub enum StorageError {
     CannotDeleteMe,
     #[error("\"Ich\" cannot leave a group")]
     CannotRemoveMe,
+    #[error("the file is not an Invuso backup")]
+    NotABackup,
     #[error("database lock poisoned")]
     Poisoned,
 }
@@ -45,8 +47,8 @@ pub enum StorageError {
 /// writer; background work (rates, OCR) can still use it from other threads.
 #[derive(Clone)]
 pub struct Db {
-    conn: Arc<Mutex<Connection>>,
-    device_id: Arc<str>,
+    pub(super) conn: Arc<Mutex<Connection>>,
+    pub(super) device_id: Arc<str>,
 }
 
 impl PartialEq for Db {

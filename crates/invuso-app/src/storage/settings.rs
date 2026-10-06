@@ -5,7 +5,7 @@ use super::db::{new_id, now_ms};
 use super::{Db, StorageError};
 
 /// Key of this installation's id (see [`Db::device_id`]).
-const DEVICE_ID: &str = "device_id";
+pub(super) const DEVICE_ID: &str = "device_id";
 /// ISO 4217 code of the home currency, the default base of new groups (SET-01).
 pub const HOME_CURRENCY: &str = "home_currency";
 /// ISO 639-1 code of the language receipts are translated into (SET-02).

@@ -12,11 +12,16 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0004_cash_movement_card.sql"),
 ];
 
+/// Schema version of a fully migrated database.
+pub(super) fn supported() -> u32 {
+    MIGRATIONS.len() as u32
+}
+
 /// Applies every migration the database has not seen yet, each in its own
 /// transaction.
 pub(super) fn run(conn: &mut Connection) -> Result<(), StorageError> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    let supported = MIGRATIONS.len() as u32;
+    let supported = supported();
     if current > supported {
         return Err(StorageError::SchemaTooNew {
             found: current,

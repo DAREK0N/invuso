@@ -44,11 +44,14 @@ typealias BuildConfig = com.darekon.invuso.BuildConfig
 /// system-bar insets, routing the Android back key into the Dioxus router,
 /// opening the system camera or photo picker for receipt images, the
 /// device's on-device translator (Java-only API), the system share sheet
-/// (the WebView has no `navigator.share`) and the icon color of the system
-/// bars for the app theme (the WebView reports no system dark mode).
+/// (the WebView has no `navigator.share`), the icon color of the system
+/// bars for the app theme (the WebView reports no system dark mode) and the
+/// system "save as" / "open" dialogs for backups and exports (the WebView
+/// can neither download nor pick files for Dioxus).
 /// No business logic, no state beyond the running pick, no UI.
 class MainActivity : WryActivity() {
     private val receiptImages = ReceiptImages(this)
+    private val documents = Documents(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,6 +110,17 @@ class MainActivity : WryActivity() {
     /// Implemented in Rust. status 0 = done (one text per input), 1 = no
     /// engine for the pair, 2 = failed.
     external fun translationResult(requestId: Long, status: Int, texts: Array<String>?)
+
+    /// Called from Rust (`platform/android.rs`): kind 0 = save a copy of the
+    /// file at `path` as `name` (type `mimes[0]`), 1 = copy a picked document
+    /// of one of the `mimes` types to `path`. The outcome arrives through
+    /// `documentResult`.
+    fun requestDocument(kind: Int, path: String, name: String, mimes: Array<String>) {
+        runOnUiThread { documents.request(kind, path, name, mimes) }
+    }
+
+    /// Implemented in Rust. status 0 = done, 1 = cancelled, 2 = failed.
+    external fun documentResult(status: Int, message: String?)
 
     /// Called from Rust (`platform/android.rs`): opens the system share sheet
     /// with plain text, e.g. a group's settlement for a messenger.
@@ -457,6 +471,88 @@ class ReceiptImages(private val activity: MainActivity) {
     private companion object {
         const val CAMERA = 0
         const val SAVED = 0
+        const val CANCELLED = 1
+        const val FAILED = 2
+    }
+}
+
+/// Storage Access Framework dialogs: the user picks where a file goes or
+/// which file to read; the bytes are copied between that document and the
+/// app-private path Rust gave. Needs no permission.
+class Documents(private val activity: MainActivity) {
+    private var path: String? = null
+    private var kind = SAVE
+
+    private val launcher =
+        activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data
+            if (result.resultCode != Activity.RESULT_OK || uri == null) {
+                finish(CANCELLED, null)
+            } else {
+                copy(uri)
+            }
+        }
+
+    fun request(kind: Int, path: String, name: String, mimes: Array<String>) {
+        // A dialog still open is answered as cancelled by Rust already.
+        this.kind = kind
+        this.path = path
+        try {
+            val intent = if (kind == SAVE) {
+                Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = mimes.firstOrNull() ?: "application/octet-stream"
+                    putExtra(Intent.EXTRA_TITLE, name)
+                }
+            } else {
+                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    // Providers label the same file differently (a zip is
+                    // also `application/x-zip-compressed` or an octet stream).
+                    type = "*/*"
+                    putExtra(Intent.EXTRA_MIME_TYPES, mimes)
+                }
+            }
+            launcher.launch(intent)
+        } catch (error: Throwable) {
+            finish(FAILED, error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun copy(uri: Uri) {
+        val file = path ?: return finish(FAILED, "no file")
+        val saving = kind == SAVE
+        // Off the main thread: a backup with photos is many megabytes.
+        Thread {
+            try {
+                val resolver = activity.contentResolver
+                if (saving) {
+                    val output = resolver.openOutputStream(uri, "wt")
+                        ?: throw IllegalStateException("document not writable")
+                    output.use { sink -> File(file).inputStream().use { it.copyTo(sink) } }
+                } else {
+                    val input = resolver.openInputStream(uri)
+                        ?: throw IllegalStateException("document unreadable")
+                    input.use { source -> File(file).outputStream().use { source.copyTo(it) } }
+                }
+                finish(DONE, null)
+            } catch (error: Throwable) {
+                finish(FAILED, error.message ?: error.javaClass.simpleName)
+            }
+        }.start()
+    }
+
+    private fun finish(status: Int, message: String?) {
+        path = null
+        try {
+            activity.documentResult(status, message)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private companion object {
+        const val SAVE = 0
+        const val DONE = 0
         const val CANCELLED = 1
         const val FAILED = 2
     }

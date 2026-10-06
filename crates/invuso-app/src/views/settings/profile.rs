@@ -240,6 +240,19 @@ fn ManageSection() -> Element {
         }
         section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",
             h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
+                {t!("settings.data_section").to_string()}
+            }
+            div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                LinkRow {
+                    label: t!("page.settings_data").to_string(),
+                    onclick: move |_| {
+                        nav.push(Route::SettingsData {});
+                    },
+                }
+            }
+        }
+        section { class: "mx-4 flex flex-col gap-2 pt-6 safe-area-x",
+            h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
                 {t!("settings.about_section").to_string()}
             }
             div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
