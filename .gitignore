@@ -7,3 +7,9 @@
 /spikes/ocr/results/
 /spikes/ocr/samples_upright/
 /spikes/ocr/samples_tilted/
+
+# Project notes and agent instructions stay local; only READMEs and
+# license notices are published.
+*.md
+!README.md
+!THIRD-PARTY-NOTICES.md
