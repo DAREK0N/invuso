@@ -26,6 +26,7 @@ mod settlements;
 mod translations;
 
 pub use cash::{CashEntry, NewExchange, NewWithdrawal, WithdrawalFee};
+pub use categories::NewCategory;
 pub(crate) use db::now_ms;
 pub use db::{Db, StorageError};
 pub use exchange_rates::{

@@ -106,3 +106,52 @@ fn mark_active(db: &Db, group: Option<&Group>, mut revision: DataRevision, mut t
         Err(e) => toaster.show(format!("{} {e}", t!("group.active_error")), None),
     }
 }
+
+/// Archives the group or brings it back (GRP-04) and offers to undo it
+/// from a toast; undoing an archive also restores the "active" mark the
+/// archive removed.
+fn set_archived_with_undo(
+    db: &Db,
+    group: &Group,
+    archived: bool,
+    mut revision: DataRevision,
+    mut toaster: Toaster,
+) {
+    let was_active = match db.set_group_archived(&group.id, archived) {
+        Ok(was_active) => was_active,
+        Err(e) => {
+            toaster.show(format!("{} {e}", t!("group.archive_error")), None);
+            return;
+        }
+    };
+    revision.bump();
+
+    let db = db.clone();
+    let id = group.id.clone();
+    let undo = move || {
+        let (mut revision, mut toaster) = (revision, toaster);
+        let result = db.set_group_archived(&id, !archived).and_then(|_| {
+            if was_active {
+                db.set_active_group(Some(&id))
+            } else {
+                Ok(())
+            }
+        });
+        match result {
+            Ok(()) => revision.bump(),
+            Err(e) => toaster.show(format!("{} {e}", t!("group.archive_error")), None),
+        }
+    };
+    let message = if archived {
+        t!("group.archived_toast", name = group.name)
+    } else {
+        t!("group.unarchived_toast", name = group.name)
+    };
+    toaster.show(
+        message.to_string(),
+        Some(ToastAction {
+            label: t!("common.undo").to_string(),
+            run: Rc::new(undo),
+        }),
+    );
+}

@@ -1,20 +1,22 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdChevronRight, LdCircleAlert, LdSearchX},
+    icons::ld_icons::{LdArchive, LdArchiveRestore, LdChevronRight, LdCircleAlert, LdSearchX},
 };
 use invuso_core::domain::{Currency, Group, GroupError, GroupId, validate_period};
 
 use crate::Route;
 use crate::components::LanguagePicker;
 use crate::components::{
-    BottomSheet, Button, ColorPicker, CurrencyPicker, DateField, EmptyState, ErrorBanner,
-    IconPicker, IconSet, TextField, TopBar,
+    BottomSheet, Button, ButtonVariant, ColorPicker, CurrencyPicker, DateField, EmptyState,
+    ErrorBanner, IconPicker, IconSet, TextField, TopBar,
 };
 use crate::preferences::{
     DEFAULT_GROUP_ICON, default_home_currency, language_name, suggested_person_color,
 };
-use crate::state::DataRevision;
+use crate::state::{DataRevision, Toaster};
+
+use super::set_archived_with_undo;
 use crate::storage::{Db, NewGroup, StorageError};
 
 /// `/groups/new`: creates a group, then continues to its members (GRP-01).
@@ -27,7 +29,7 @@ pub fn GroupNew() -> Element {
 }
 
 /// `/groups/:id/edit`: name, icon, color, base currency, period and target
-/// language of a group (GRP-01, TRL-05).
+/// language of a group (GRP-01, TRL-05); archiving it (GRP-04).
 #[component]
 pub fn GroupEdit(id: String) -> Element {
     let db = use_context::<Db>();
@@ -45,7 +47,57 @@ pub fn GroupEdit(id: String) -> Element {
                 }
             },
             Ok(None) => rsx! { GroupNotFound {} },
-            Ok(Some(group)) => rsx! { GroupForm { group: Some(group) } },
+            Ok(Some(group)) => rsx! {
+                GroupForm { group: Some(group.clone()) }
+                ArchiveButton { group }
+            },
+        }
+    }
+}
+
+/// Archives the group or brings it back right away, independent of the
+/// form above (GRP-04); the label follows the stored state, also after
+/// "Undo" in the toast.
+#[component]
+fn ArchiveButton(group: Group) -> Element {
+    let db = use_context::<Db>();
+    let revision = use_context::<DataRevision>();
+    let toaster = use_context::<Toaster>();
+    let state_db = db.clone();
+    let id = group.id.clone();
+    let initial = group.archived;
+    let archived = use_memo(move || {
+        revision.track();
+        state_db
+            .group(&id)
+            .ok()
+            .flatten()
+            .map_or(initial, |g| g.archived)
+    });
+
+    rsx! {
+        div { class: "mx-4 flex flex-col gap-2 pt-3 safe-area-x",
+            Button {
+                variant: ButtonVariant::Secondary,
+                class: "w-full",
+                onclick: move |_| {
+                    set_archived_with_undo(&db, &group, !archived(), revision, toaster);
+                },
+                if archived() {
+                    Icon { icon: LdArchiveRestore, class: "h-5 w-5" }
+                    {t!("group.unarchive").to_string()}
+                } else {
+                    Icon { icon: LdArchive, class: "h-5 w-5" }
+                    {t!("group.archive").to_string()}
+                }
+            }
+            p { class: "px-1 text-sm text-floral-white-500",
+                if archived() {
+                    {t!("group.archived_hint").to_string()}
+                } else {
+                    {t!("group.archive_hint").to_string()}
+                }
+            }
         }
     }
 }

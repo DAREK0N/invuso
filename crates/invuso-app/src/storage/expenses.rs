@@ -161,17 +161,18 @@ impl Db {
         let title = validate_new(&new)?;
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
-            let (source, receipt_id): (String, Option<String>) = tx
+            let (source, receipt_id, category): (String, Option<String>, Option<String>) = tx
                 .query_row(
-                    "SELECT source, receipt_id FROM expense
+                    "SELECT source, receipt_id, category_id FROM expense
                      WHERE id = ?1 AND deleted_at IS NULL",
                     [id.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?
                 .ok_or(StorageError::NotFound)?;
             let source = ExpenseSource::from_code(&source)?;
-            let (base, fx_rate_id) = prepare(&tx, self.device_id(), &new, rate)?;
+            let (base, fx_rate_id) =
+                prepare(&tx, self.device_id(), &new, rate, category.as_deref())?;
             let now = now_ms();
             tx.execute(
                 "UPDATE expense
@@ -795,7 +796,7 @@ pub(super) fn insert_expense(
     let new = tidy(new);
     let title = validate_new(&new)?;
     let id = ExpenseId::new(new_id());
-    let (base, fx_rate_id) = prepare(conn, device_id, &new, rate)?;
+    let (base, fx_rate_id) = prepare(conn, device_id, &new, rate, None)?;
     if let Some(receipt) = &new.receipt_id {
         receipts::check_unattached(conn, receipt)?;
     }
@@ -843,11 +844,14 @@ pub(super) fn insert_expense(
 
 /// Checks the references of `new` and converts its total: returns the
 /// total in the base currency and the id of the rate it was converted with.
+/// `kept_category` is the category an edited expense had so far, which it
+/// may keep even if deleted since (EXP-09).
 fn prepare(
     conn: &Connection,
     device_id: &str,
     new: &NewExpense,
     rate: &RateQuote,
+    kept_category: Option<&str>,
 ) -> Result<(Money, Option<String>), StorageError> {
     let base = base_currency(conn, new.group_id.as_ref())?;
     let currency = new.total.currency();
@@ -867,7 +871,7 @@ fn prepare(
         }
     }
     if let Some(category) = &new.category_id {
-        categories::check_category(conn, category)?;
+        categories::check_category(conn, category, kept_category)?;
     }
     let total_in_base = fx::convert(new.total, &used)
         .map_err(|_| StorageError::InvalidInput("amount cannot be converted"))?;
@@ -1160,13 +1164,15 @@ mod tests {
     use invuso_core::Decimal;
     use std::collections::BTreeMap;
 
-    use invuso_core::domain::{ExpenseError, PaymentMethod, PaymentMethodKind, Person};
+    use invuso_core::domain::{Category, ExpenseError, PaymentMethod, PaymentMethodKind, Person};
     use invuso_core::fx::Rate;
     use invuso_core::split::{ExpenseEntry, SplitError, balances};
 
     use super::*;
     use crate::storage::exchange_rates::CROSS_SOURCE;
-    use crate::storage::{NewExchangeRate, NewGroup, NewPaymentMethod, NewPerson, Profile};
+    use crate::storage::{
+        NewCategory, NewExchangeRate, NewGroup, NewPaymentMethod, NewPerson, Profile,
+    };
 
     fn cur(code: &str) -> Currency {
         Currency::from_code(code).unwrap()
@@ -1812,6 +1818,59 @@ mod tests {
             (cleared.note, cleared.location, cleared.coordinates),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn own_category_stays_on_its_expenses_after_rename_and_delete() {
+        let s = setup("EUR");
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let souvenirs =
+            s.db.create_category(NewCategory {
+                name: "Souvenirs".into(),
+                icon: "gift".into(),
+                color: "thistle".into(),
+            })
+            .unwrap();
+        let equal = SplitMode::Equal(BTreeSet::from([s.me.id.clone(), s.anna.id.clone()]));
+        let new = NewExpense {
+            category_id: Some(souvenirs.id.clone()),
+            ..hotel(&s, equal)
+        };
+        let saved = s.db.create_expense(new.clone(), &rate).unwrap();
+        assert_eq!(saved.category_id.as_ref(), Some(&souvenirs.id));
+
+        s.db.update_category(&Category {
+            name: "Mitbringsel".into(),
+            ..souvenirs.clone()
+        })
+        .unwrap();
+        s.db.delete_category(&souvenirs.id).unwrap();
+
+        // The expense still points at it, and it can still be shown.
+        let stored = s.db.expense(&saved.id).unwrap().unwrap();
+        assert_eq!(stored.category_id.as_ref(), Some(&souvenirs.id));
+        let shown =
+            s.db.all_categories()
+                .unwrap()
+                .into_iter()
+                .find(|c| c.id == souvenirs.id)
+                .unwrap();
+        assert_eq!(shown.name, "Mitbringsel");
+
+        // Editing keeps it; a new expense cannot choose it any more.
+        let edited = NewExpense {
+            title: "Fächer".into(),
+            ..new.clone()
+        };
+        s.db.update_expense(&saved.id, edited, &rate).unwrap();
+        assert_eq!(
+            s.db.expense(&saved.id).unwrap().unwrap().category_id,
+            Some(souvenirs.id.clone())
+        );
+        assert!(matches!(
+            s.db.create_expense(new, &rate),
+            Err(StorageError::InvalidInput(_))
+        ));
     }
 
     #[test]

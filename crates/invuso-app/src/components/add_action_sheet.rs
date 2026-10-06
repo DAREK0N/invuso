@@ -98,12 +98,13 @@ fn ActionRow(label: String, to: Route, on_close: EventHandler<()>, children: Ele
 
 /// Group a settlement from the plus button goes to (SPL-06): the active
 /// group, else the group of the last expense, else the newest group – the
-/// same order the expense form preselects in.
+/// same order the expense form preselects in, also skipping archived ones.
 fn settle_target(db: &Db) -> Result<Option<GroupId>, StorageError> {
     if let Some(active) = db.active_group()? {
         return Ok(Some(active.id));
     }
-    let groups = db.groups()?;
+    // Archived groups are not suggested (GRP-04).
+    let groups: Vec<_> = db.groups()?.into_iter().filter(|g| !g.archived).collect();
     let last = db.setting(LAST_EXPENSE_GROUP)?;
     Ok(last
         .and_then(|id| groups.iter().find(|g| g.id.as_str() == id))
@@ -151,6 +152,18 @@ mod tests {
         db.set_setting(LAST_EXPENSE_GROUP, "").unwrap();
         assert_eq!(settle_target(&db).unwrap(), Some(flat.clone()));
         db.set_active_group(Some(&trip)).unwrap();
-        assert_eq!(settle_target(&db).unwrap(), Some(trip));
+        assert_eq!(settle_target(&db).unwrap(), Some(trip.clone()));
+    }
+
+    #[test]
+    fn settle_target_skips_archived_groups() {
+        let db = Db::open_in_memory().unwrap();
+        let trip = group(&db, "Japan");
+        let flat = group(&db, "WG");
+        db.set_setting(LAST_EXPENSE_GROUP, trip.as_str()).unwrap();
+        db.set_group_archived(&trip, true).unwrap();
+        assert_eq!(settle_target(&db).unwrap(), Some(flat.clone()));
+        db.set_group_archived(&flat, true).unwrap();
+        assert_eq!(settle_target(&db).unwrap(), None);
     }
 }

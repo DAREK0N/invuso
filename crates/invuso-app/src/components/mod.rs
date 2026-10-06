@@ -46,7 +46,7 @@ pub use bottom_nav::BottomNav;
 pub use bottom_sheet::BottomSheet;
 pub use button::{Button, ButtonVariant};
 pub use card_section::CardSection;
-pub use category_icon::CategoryIconGlyph;
+pub use category_icon::{CategoryIcon, CategoryIconGlyph};
 pub use chip::Chip;
 pub use color_picker::ColorPicker;
 pub use compact_amount_input::{CompactAmountInput, CompactNumberInput};

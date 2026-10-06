@@ -50,7 +50,7 @@ pub fn GroupTimeline(id: String) -> Element {
             return Ok(None);
         }
         let categories: BTreeMap<CategoryId, Category> = db
-            .categories()
+            .all_categories()
             .map_err(|e| e.to_string())?
             .into_iter()
             .map(|c| (c.id.clone(), c))

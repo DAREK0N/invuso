@@ -129,6 +129,74 @@ pub fn category_name(category: &Category) -> String {
     }
 }
 
+/// Icons a category can have, as keys stored in the database; drawn by
+/// `components::CategoryIconGlyph`. Includes the icons of the default
+/// categories (migration 0002).
+pub const CATEGORY_ICONS: [&str; 26] = [
+    "utensils",
+    "coffee",
+    "beer",
+    "shopping-cart",
+    "shopping-bag",
+    "shirt",
+    "gift",
+    "bus",
+    "train-front",
+    "plane",
+    "car",
+    "fuel",
+    "bed",
+    "home",
+    "ticket",
+    "film",
+    "music",
+    "camera",
+    "heart-pulse",
+    "pill",
+    "dumbbell",
+    "paw-print",
+    "smartphone",
+    "receipt",
+    "graduation-cap",
+    "tag",
+];
+
+/// Icon preselected for a new category.
+pub const DEFAULT_CATEGORY_ICON: &str = "tag";
+
+/// Accessible name of a category icon in the current app language.
+pub fn category_icon_name(icon: &str) -> String {
+    match icon {
+        "utensils" => t!("category_icon.utensils").to_string(),
+        "coffee" => t!("category_icon.coffee").to_string(),
+        "beer" => t!("category_icon.beer").to_string(),
+        "shopping-cart" => t!("category_icon.shopping_cart").to_string(),
+        "shopping-bag" => t!("category_icon.shopping_bag").to_string(),
+        "shirt" => t!("category_icon.shirt").to_string(),
+        "gift" => t!("category_icon.gift").to_string(),
+        "bus" => t!("category_icon.bus").to_string(),
+        "train-front" => t!("category_icon.train").to_string(),
+        "plane" => t!("category_icon.plane").to_string(),
+        "car" => t!("category_icon.car").to_string(),
+        "fuel" => t!("category_icon.fuel").to_string(),
+        "bed" => t!("category_icon.bed").to_string(),
+        "home" => t!("category_icon.home").to_string(),
+        "ticket" => t!("category_icon.ticket").to_string(),
+        "film" => t!("category_icon.film").to_string(),
+        "music" => t!("category_icon.music").to_string(),
+        "camera" => t!("category_icon.camera").to_string(),
+        "heart-pulse" => t!("category_icon.health").to_string(),
+        "pill" => t!("category_icon.pill").to_string(),
+        "dumbbell" => t!("category_icon.sport").to_string(),
+        "paw-print" => t!("category_icon.pet").to_string(),
+        "smartphone" => t!("category_icon.smartphone").to_string(),
+        "receipt" => t!("category_icon.receipt").to_string(),
+        "graduation-cap" => t!("category_icon.education").to_string(),
+        "tag" => t!("category_icon.tag").to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Icons a group can have, as keys stored in the database; drawn by
 /// `components::GroupIconGlyph`.
 pub const GROUP_ICONS: [&str; 12] = [
@@ -358,6 +426,24 @@ mod tests {
     #[test]
     fn default_group_icon_is_offered() {
         assert!(GROUP_ICONS.contains(&DEFAULT_GROUP_ICON));
+    }
+
+    #[test]
+    fn default_categories_use_offered_icons() {
+        assert!(CATEGORY_ICONS.contains(&DEFAULT_CATEGORY_ICON));
+        let db = crate::storage::Db::open_in_memory().unwrap();
+        for category in db.categories().unwrap() {
+            assert!(
+                CATEGORY_ICONS.contains(&category.icon.as_str()),
+                "{}",
+                category.icon
+            );
+            assert!(
+                PERSON_COLORS.contains(&category.color.as_str()),
+                "{}",
+                category.color
+            );
+        }
     }
 
     #[test]

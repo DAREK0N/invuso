@@ -178,7 +178,8 @@ fn AppLanguageSheet(mut language: Signal<AppLanguage>, on_close: EventHandler<()
     }
 }
 
-/// Links to the management subpages (SET-06): people, payment methods.
+/// Links to the management subpages (SET-06): people, payment methods,
+/// categories.
 #[component]
 fn ManageSection() -> Element {
     let db = use_context::<Db>();
@@ -201,10 +202,18 @@ fn ManageSection() -> Element {
             })
             .unwrap_or_default()
     });
+    let methods_db = db.clone();
     let active_methods = use_memo(move || {
         revision.track();
-        db.payment_methods()
+        methods_db
+            .payment_methods()
             .map(|methods| methods.iter().filter(|m| !m.archived).count())
+            .unwrap_or_default()
+    });
+    let categories = use_memo(move || {
+        revision.track();
+        db.categories()
+            .map(|categories| categories.len())
             .unwrap_or_default()
     });
 
@@ -228,6 +237,15 @@ fn ManageSection() -> Element {
                     },
                     if active_methods() > 0 {
                         span { class: "text-base tabular-nums text-floral-white-400", "{active_methods}" }
+                    }
+                }
+                LinkRow {
+                    label: t!("page.settings_categories").to_string(),
+                    onclick: move |_| {
+                        nav.push(Route::SettingsCategories {});
+                    },
+                    if categories() > 0 {
+                        span { class: "text-base tabular-nums text-floral-white-400", "{categories}" }
                     }
                 }
                 LinkRow {

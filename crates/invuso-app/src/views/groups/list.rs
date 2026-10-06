@@ -2,12 +2,13 @@ use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdChevronRight, LdCircleAlert, LdPencil, LdPin, LdPinOff, LdPlus, LdTrash2, LdUsers,
+        LdArchive, LdArchiveRestore, LdChevronDown, LdChevronRight, LdCircleAlert, LdPencil, LdPin,
+        LdPinOff, LdPlus, LdTrash2, LdUsers,
     },
 };
 use invuso_core::domain::{Group, Money};
 
-use super::{DeleteGroupSheet, mark_active};
+use super::{DeleteGroupSheet, mark_active, set_archived_with_undo};
 use crate::Route;
 use crate::components::{
     AvatarEntry, AvatarStack, BottomSheet, Button, EmptyState, GroupIcon, MenuRow, MoneyText,
@@ -34,7 +35,8 @@ struct GroupEntry {
 
 /// `/groups`: every group with icon, color, total, own balance and member
 /// avatars (GRP-01, GRP-02). Tap opens the group, long-press a menu
-/// (UI-09); the active group is marked (GRP-05).
+/// (UI-09); the active group is marked (GRP-05). Archived groups are folded
+/// away in their own section at the bottom (GRP-04).
 #[component]
 pub fn GroupList() -> Element {
     let db = use_context::<Db>();
@@ -43,6 +45,7 @@ pub fn GroupList() -> Element {
     let mut menu = use_signal(|| None::<GroupEntry>);
     let mut confirm_delete = use_signal(|| None::<Group>);
     let mut delete_error = use_signal(|| None::<String>);
+    let mut show_archived = use_signal(|| false);
 
     let entries = use_memo(move || {
         revision.track();
@@ -59,7 +62,10 @@ pub fn GroupList() -> Element {
                     Icon { icon: LdCircleAlert, class: "h-8 w-8" }
                 }
             },
-            Ok(entries) => rsx! {
+            Ok(entries) => {
+                let (archived, current): (Vec<_>, Vec<_>) =
+                    entries.iter().cloned().partition(|entry| entry.group.archived);
+                rsx! {
                 div { class: "mx-4 flex flex-col gap-4 pt-4 safe-area-x",
                     Button {
                         class: "w-full",
@@ -76,19 +82,30 @@ pub fn GroupList() -> Element {
                             Icon { icon: LdUsers, class: "h-8 w-8" }
                         }
                     } else {
-                        div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
-                            for entry in entries.iter().cloned() {
-                                GroupRow {
-                                    key: "{entry.group.id.as_str()}",
-                                    entry: entry.clone(),
-                                    on_long_press: move |_| menu.set(Some(entry.clone())),
+                        if !current.is_empty() {
+                            div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                                for entry in current {
+                                    GroupRow {
+                                        key: "{entry.group.id.as_str()}",
+                                        entry: entry.clone(),
+                                        on_long_press: move |_| menu.set(Some(entry.clone())),
+                                    }
                                 }
                             }
                         }
                         p { class: "px-1 text-sm text-floral-white-500", {t!("group.long_press_hint").to_string()} }
+                        if !archived.is_empty() {
+                            ArchivedSection {
+                                entries: archived,
+                                open: show_archived(),
+                                on_toggle: move |_| show_archived.toggle(),
+                                on_long_press: move |entry| menu.set(Some(entry)),
+                            }
+                        }
                     }
                 }
-            },
+                }
+            }
         }
         if let Some(entry) = menu() {
             GroupMenu {
@@ -142,6 +159,46 @@ fn load(db: &Db) -> Result<Vec<GroupEntry>, StorageError> {
             })
         })
         .collect()
+}
+
+/// Folded list of archived groups: hidden from the main list, still
+/// viewable and restorable (GRP-04).
+#[component]
+fn ArchivedSection(
+    entries: Vec<GroupEntry>,
+    open: bool,
+    on_toggle: EventHandler<()>,
+    on_long_press: EventHandler<GroupEntry>,
+) -> Element {
+    let count = entries.len();
+
+    rsx! {
+        section { class: "flex flex-col gap-2",
+            button {
+                class: "flex min-h-11 items-center gap-2 px-1 text-left text-sm font-semibold text-floral-white-400 active:text-floral-white-200",
+                r#type: "button",
+                aria_expanded: if open { "true" } else { "false" },
+                onclick: move |_| on_toggle.call(()),
+                Icon { icon: LdArchive, class: "h-4 w-4" }
+                span { class: "flex-1", {t!("group.archived", count = count).to_string()} }
+                Icon {
+                    icon: LdChevronDown,
+                    class: if open { "h-5 w-5 rotate-180 transition-transform" } else { "h-5 w-5 transition-transform" },
+                }
+            }
+            if open {
+                div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900 opacity-70",
+                    for entry in entries {
+                        GroupRow {
+                            key: "{entry.group.id.as_str()}",
+                            entry: entry.clone(),
+                            on_long_press: move |_| on_long_press.call(entry.clone()),
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// List row: group icon, name, total and period, own balance and member
@@ -203,7 +260,8 @@ fn GroupRow(entry: GroupEntry, on_long_press: EventHandler<Group>) -> Element {
 }
 
 /// Long-press menu of a group: mark as active or not (GRP-05), edit,
-/// members, delete.
+/// members, archive or bring back (GRP-04), delete. An archived group
+/// cannot be marked active.
 #[component]
 fn GroupMenu(
     group: Group,
@@ -218,22 +276,26 @@ fn GroupMenu(
     let active_target = group.clone();
     let edit_id = group.id.as_str().to_string();
     let members_id = edit_id.clone();
+    let archive_target = group.clone();
     let delete_target = group.clone();
+    let archive_db = db.clone();
 
     rsx! {
         BottomSheet { title: group.name.clone(), on_close,
             div { class: "flex flex-col gap-1 px-3 pt-2",
-                MenuRow {
-                    label: if active { t!("group.unmark_active").to_string() } else { t!("group.mark_active").to_string() },
-                    onclick: move |_| {
-                        on_close.call(());
-                        let target = (!active).then_some(&active_target);
-                        mark_active(&db, target, revision, toaster);
-                    },
-                    if active {
-                        Icon { icon: LdPinOff, class: "h-5 w-5" }
-                    } else {
-                        Icon { icon: LdPin, class: "h-5 w-5" }
+                if !group.archived {
+                    MenuRow {
+                        label: if active { t!("group.unmark_active").to_string() } else { t!("group.mark_active").to_string() },
+                        onclick: move |_| {
+                            on_close.call(());
+                            let target = (!active).then_some(&active_target);
+                            mark_active(&db, target, revision, toaster);
+                        },
+                        if active {
+                            Icon { icon: LdPinOff, class: "h-5 w-5" }
+                        } else {
+                            Icon { icon: LdPin, class: "h-5 w-5" }
+                        }
                     }
                 }
                 MenuRow {
@@ -254,6 +316,24 @@ fn GroupMenu(
                         });
                     },
                     Icon { icon: LdUsers, class: "h-5 w-5" }
+                }
+                MenuRow {
+                    label: if group.archived { t!("group.unarchive").to_string() } else { t!("group.archive").to_string() },
+                    onclick: move |_| {
+                        on_close.call(());
+                        set_archived_with_undo(
+                            &archive_db,
+                            &archive_target,
+                            !archive_target.archived,
+                            revision,
+                            toaster,
+                        );
+                    },
+                    if group.archived {
+                        Icon { icon: LdArchiveRestore, class: "h-5 w-5" }
+                    } else {
+                        Icon { icon: LdArchive, class: "h-5 w-5" }
+                    }
                 }
                 MenuRow {
                     label: t!("common.delete").to_string(),

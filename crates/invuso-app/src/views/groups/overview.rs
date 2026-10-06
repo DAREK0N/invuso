@@ -3,14 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
-    icons::ld_icons::{LdCircleAlert, LdPin, LdPlus, LdTrash2, LdTriangleAlert},
+    icons::ld_icons::{
+        LdArchive, LdArchiveRestore, LdCircleAlert, LdPin, LdPlus, LdTrash2, LdTriangleAlert,
+    },
 };
 use invuso_core::domain::{Group, GroupId, GroupMember, Money, Person, PersonId};
 use invuso_core::split::GroupSummary;
 
 use super::form::GroupNotFound;
 use super::settle::{DebtRow, SettleChoices, SettleDraft, SettleSheet, person_label};
-use super::{DeleteGroupSheet, group_subtitle, mark_active};
+use super::{DeleteGroupSheet, group_subtitle, mark_active, set_archived_with_undo};
 use crate::Route;
 use crate::components::{
     Avatar, AvatarEntry, AvatarSize, AvatarStack, Button, ButtonVariant, CardSection, EmptyState,
@@ -185,13 +187,28 @@ fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
 }
 
 /// "Aktive Gruppe" if the group is the active one, otherwise the button
-/// to make it so (GRP-05).
+/// to make it so (GRP-05); for an archived group the note "Archiviert"
+/// and the button to bring it back instead (GRP-04).
 #[component]
 fn ActiveMark(group: Group, active: bool) -> Element {
     let db = use_context::<Db>();
     let revision = use_context::<DataRevision>();
     let toaster = use_context::<Toaster>();
 
+    if group.archived {
+        return rsx! {
+            span { class: "flex min-h-8 items-center gap-1.5 rounded-full bg-jet-black-800 px-3 text-sm font-medium text-floral-white-300",
+                Icon { icon: LdArchive, class: "h-4 w-4" }
+                {t!("group.archived_note").to_string()}
+            }
+            Button {
+                variant: ButtonVariant::Secondary,
+                onclick: move |_| set_archived_with_undo(&db, &group, false, revision, toaster),
+                Icon { icon: LdArchiveRestore, class: "h-5 w-5" }
+                {t!("group.unarchive").to_string()}
+            }
+        };
+    }
     if active {
         return rsx! {
             span { class: "flex min-h-8 items-center gap-1.5 rounded-full bg-cerulean-800 px-3 text-sm font-medium text-cerulean-100",

@@ -52,6 +52,8 @@ pub struct Group {
     /// ISO 639-1 code receipts of this group are translated into; `None`
     /// follows the global setting (TRL-05).
     pub target_language: Option<String>,
+    /// Hidden from the main group list but still viewable (GRP-04).
+    pub archived: bool,
 }
 
 /// A person in a group (idee.md 4.1 `GroupMember`).

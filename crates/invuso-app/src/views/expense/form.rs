@@ -1669,13 +1669,13 @@ fn load(
         || suggested_target_language(None).to_string(),
         |p| p.target_language,
     );
-    let groups = db.groups()?;
+    let mut groups = db.groups()?;
     let existing = match id {
         Some(id) => Some(db.expense(id)?.ok_or(StorageError::NotFound)?),
         None => None,
     };
     // A copy that is gone opens an empty form.
-    let template = match (copy, &existing) {
+    let mut template = match (copy, &existing) {
         (Some(copy), None) => db.expense(copy)?,
         _ => None,
     };
@@ -1695,12 +1695,33 @@ fn load(
                 Some(id) => Some(id.clone()),
                 None => match db.active_group()? {
                     Some(active) => Some(active.id),
-                    None => preselected_group(db.setting(LAST_EXPENSE_GROUP)?.as_deref(), &groups),
+                    None => preselected_group(
+                        db.setting(LAST_EXPENSE_GROUP)?.as_deref(),
+                        &unarchived(&groups),
+                    ),
                 },
             };
             (group, db.currency_setting(LAST_EXPENSE_CURRENCY)?)
         }
     };
+    // Archived groups are not offered for new expenses (GRP-04); the one the
+    // expense is in, or was opened from, stays choosable.
+    groups.retain(|g| !g.archived || group.as_ref() == Some(&g.id));
+    // Deleted categories are not offered either (EXP-09); an edited expense
+    // keeps its own, a copy loses it.
+    let mut categories = db.categories()?;
+    if let Some(template) = &mut template {
+        template.category_id = template
+            .category_id
+            .take()
+            .filter(|id| categories.iter().any(|c| &c.id == id));
+    }
+    if let Some(kept) = existing.as_ref().and_then(|e| e.category_id.as_ref())
+        && !categories.iter().any(|c| &c.id == kept)
+        && let Some(deleted) = db.all_categories()?.into_iter().find(|c| &c.id == kept)
+    {
+        categories.push(deleted);
+    }
     let methods = db
         .payment_methods()?
         .into_iter()
@@ -1732,7 +1753,7 @@ fn load(
         me,
         home_currency,
         groups,
-        categories: db.categories()?,
+        categories,
         methods,
         group,
         currency,
@@ -1796,6 +1817,11 @@ fn translation_note(
         }
         TranslationState::Finished { .. } => None,
     }
+}
+
+/// The groups that are not archived (GRP-04).
+fn unarchived(groups: &[Group]) -> Vec<Group> {
+    groups.iter().filter(|g| !g.archived).cloned().collect()
 }
 
 /// Without an active group: the group of the last expense if it still
@@ -1991,6 +2017,7 @@ mod tests {
             start_date: None,
             end_date: None,
             target_language: None,
+            archived: false,
         }
     }
 

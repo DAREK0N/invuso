@@ -488,7 +488,7 @@ fn load(db: &Db, id: &ExpenseId) -> Result<Loaded, Box<dyn std::error::Error>> {
         None => None,
     };
     let category = match &expense.category_id {
-        Some(category) => db.categories()?.into_iter().find(|c| &c.id == category),
+        Some(category) => db.all_categories()?.into_iter().find(|c| &c.id == category),
         None => None,
     };
     let rate = match &expense.fx_rate_id {

@@ -1,7 +1,10 @@
 use dioxus::prelude::*;
 
-use crate::components::{GroupIconGlyph, PaymentIconGlyph, color_classes};
-use crate::preferences::{GROUP_ICONS, PAYMENT_ICONS, group_icon_name, payment_icon_name};
+use crate::components::{CategoryIconGlyph, GroupIconGlyph, PaymentIconGlyph, color_classes};
+use crate::preferences::{
+    CATEGORY_ICONS, GROUP_ICONS, PAYMENT_ICONS, category_icon_name, group_icon_name,
+    payment_icon_name,
+};
 
 /// Which icons an [`IconPicker`] offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -9,6 +12,7 @@ pub enum IconSet {
     #[default]
     Payment,
     Group,
+    Category,
 }
 
 impl IconSet {
@@ -16,6 +20,7 @@ impl IconSet {
         match self {
             Self::Payment => &PAYMENT_ICONS,
             Self::Group => &GROUP_ICONS,
+            Self::Category => &CATEGORY_ICONS,
         }
     }
 
@@ -23,11 +28,12 @@ impl IconSet {
         match self {
             Self::Payment => payment_icon_name(icon),
             Self::Group => group_icon_name(icon),
+            Self::Category => category_icon_name(icon),
         }
     }
 }
 
-/// Row of round icon buttons for payment methods or groups, drawn in the
+/// Row of round icon buttons for payment methods, groups or categories, drawn in the
 /// item's `color` so the preview matches the list.
 #[component]
 pub fn IconPicker(
@@ -84,6 +90,7 @@ fn IconOption(
             match set {
                 IconSet::Payment => rsx! { PaymentIconGlyph { icon: icon.to_string() } },
                 IconSet::Group => rsx! { GroupIconGlyph { icon: icon.to_string() } },
+                IconSet::Category => rsx! { CategoryIconGlyph { icon: icon.to_string(), class: "h-5 w-5".to_string() } },
             }
         }
     }

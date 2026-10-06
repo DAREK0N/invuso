@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::db::{new_id, now_ms};
 use super::settings::ACTIVE_GROUP;
-use super::{Db, StorageError, group_members, people};
+use super::{Db, StorageError, group_members, people, settings};
 
 /// Input for creating a group (GRP-01).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +17,8 @@ pub struct NewGroup {
     pub target_language: Option<String>,
 }
 
-const COLUMNS: &str = "id, name, icon, color, base_currency, start_date, end_date, target_language";
+const COLUMNS: &str =
+    "id, name, icon, color, base_currency, start_date, end_date, target_language, archived";
 
 impl Db {
     /// Creates the group with "Ich" as its first member (AP-08), in one
@@ -34,6 +35,7 @@ impl Db {
             start_date,
             end_date,
             target_language: language(new.target_language.as_deref()),
+            archived: false,
         };
         self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
@@ -78,7 +80,9 @@ impl Db {
         })
     }
 
-    /// All groups, newest first (ids are UUIDv7 and sort by creation time).
+    /// All groups including archived ones, newest first (ids are UUIDv7 and
+    /// sort by creation time); lists and pickers hide archived ones
+    /// themselves (GRP-04).
     pub fn groups(&self) -> Result<Vec<Group>, StorageError> {
         self.with(|conn| {
             let mut statement = conn.prepare(&format!(
@@ -91,13 +95,40 @@ impl Db {
         })
     }
 
-    /// The group marked as active (GRP-05), if it still exists; a deleted
-    /// one becomes active again when it is restored.
+    /// The group marked as active (GRP-05), if it still exists and is not
+    /// archived (GRP-04); a deleted one becomes active again when it is
+    /// restored.
     pub fn active_group(&self) -> Result<Option<Group>, StorageError> {
         match self.setting(ACTIVE_GROUP)? {
-            Some(id) if !id.is_empty() => self.group(&GroupId::new(id)),
+            Some(id) if !id.is_empty() => {
+                Ok(self.group(&GroupId::new(id))?.filter(|g| !g.archived))
+            }
             _ => Ok(None),
         }
+    }
+
+    /// Archives the group or brings it back (GRP-04). Archiving the active
+    /// group also removes that mark, so restoring does not silently make it
+    /// the target of new expenses again; returns whether it was active.
+    pub fn set_group_archived(&self, id: &GroupId, archived: bool) -> Result<bool, StorageError> {
+        self.with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let changed = tx.execute(
+                "UPDATE expense_group SET archived = ?2, updated_at = ?3
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id.as_str(), archived, now_ms()],
+            )?;
+            if changed == 0 {
+                return Err(StorageError::NotFound);
+            }
+            let was_active =
+                archived && settings::get(&tx, ACTIVE_GROUP)?.as_deref() == Some(id.as_str());
+            if was_active {
+                settings::set(&tx, ACTIVE_GROUP, "")?;
+            }
+            tx.commit()?;
+            Ok(was_active)
+        })
     }
 
     /// Marks the group as active, the default target of new expenses
@@ -193,6 +224,7 @@ fn group_from_row(row: &Row<'_>) -> rusqlite::Result<Group> {
         start_date: row.get(5)?,
         end_date: row.get(6)?,
         target_language: row.get(7)?,
+        archived: row.get(8)?,
     })
 }
 
@@ -251,6 +283,66 @@ mod tests {
 
         db.set_active_group(None).unwrap();
         assert_eq!(db.active_group().unwrap(), None);
+    }
+
+    #[test]
+    fn archive_and_bring_back() {
+        let db = Db::open_in_memory().unwrap();
+        let trip = db.create_group(new("Japan")).unwrap();
+        assert!(!trip.archived);
+
+        assert!(!db.set_group_archived(&trip.id, true).unwrap());
+        let stored = db.group(&trip.id).unwrap().unwrap();
+        assert!(stored.archived);
+        // Still listed: the list itself puts it into its own section.
+        assert_eq!(db.groups().unwrap(), [stored]);
+
+        assert!(!db.set_group_archived(&trip.id, false).unwrap());
+        assert_eq!(db.group(&trip.id).unwrap(), Some(trip.clone()));
+
+        db.delete_group(&trip.id).unwrap();
+        assert!(matches!(
+            db.set_group_archived(&trip.id, true),
+            Err(StorageError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn archiving_the_active_group_removes_the_mark() {
+        let db = Db::open_in_memory().unwrap();
+        let trip = db.create_group(new("Japan")).unwrap();
+        let flat = db.create_group(new("WG")).unwrap();
+        db.set_active_group(Some(&trip.id)).unwrap();
+
+        assert!(!db.set_group_archived(&flat.id, true).unwrap());
+        assert_eq!(db.active_group().unwrap(), Some(trip.clone()));
+
+        assert!(db.set_group_archived(&trip.id, true).unwrap());
+        assert_eq!(db.active_group().unwrap(), None);
+        db.set_group_archived(&trip.id, false).unwrap();
+        assert_eq!(db.active_group().unwrap(), None);
+    }
+
+    #[test]
+    fn an_archived_group_is_never_active() {
+        let db = Db::open_in_memory().unwrap();
+        let trip = db.create_group(new("Japan")).unwrap();
+        db.set_group_archived(&trip.id, true).unwrap();
+        db.set_active_group(Some(&trip.id)).unwrap();
+        assert_eq!(db.active_group().unwrap(), None);
+    }
+
+    #[test]
+    fn editing_keeps_the_archived_state() {
+        let db = Db::open_in_memory().unwrap();
+        let trip = db.create_group(new("Japan")).unwrap();
+        db.set_group_archived(&trip.id, true).unwrap();
+        db.update_group(&Group {
+            name: "Japan 2026".into(),
+            ..trip.clone()
+        })
+        .unwrap();
+        assert!(db.group(&trip.id).unwrap().unwrap().archived);
     }
 
     #[test]

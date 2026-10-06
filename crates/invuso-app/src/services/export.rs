@@ -69,7 +69,7 @@ pub fn csv_file_name(group: &Group, today: &str) -> String {
 pub fn group_csv(db: &Db, group: &Group, style: CsvStyle) -> Result<String, StorageError> {
     let expenses = db.group_expenses(&group.id)?;
     let categories: BTreeMap<_, _> = db
-        .categories()?
+        .all_categories()?
         .into_iter()
         .map(|category| (category.id.clone(), category_name(&category)))
         .collect();
@@ -368,6 +368,7 @@ mod tests {
             start_date: None,
             end_date: None,
             target_language: None,
+            archived: false,
         };
         assert_eq!(
             csv_file_name(&group, "2026-10-06"),

@@ -116,7 +116,7 @@ fn load(db: &Db) -> Result<HomeData, StorageError> {
         None => None,
     };
     let categories = db
-        .categories()?
+        .all_categories()?
         .into_iter()
         .map(|c| (c.id.clone(), c))
         .collect();
