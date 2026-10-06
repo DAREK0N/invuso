@@ -5,6 +5,7 @@
 
 use invuso_core::Decimal;
 use invuso_core::domain::{Currency, Money};
+use invuso_core::fx::expression::{Expression, Operator, Part};
 
 /// Up to this many integer digits can be typed: 10^12 even in a currency
 /// with 4 decimals stays far below `i64::MAX` minor units.
@@ -204,6 +205,27 @@ pub fn display_amount_text(text: &str, format: NumberFormat) -> String {
         ),
         None => group_digits(text, format.group),
     }
+}
+
+/// A keypad expression as the converter shows it (FX-06), grouped and with
+/// the app language's decimal separator: `1.200 + 850`, `12,5 × 3`.
+pub fn expression_text(expression: &Expression, format: NumberFormat) -> String {
+    let mut text = String::new();
+    for part in expression.parts() {
+        match part {
+            Part::Number(number) => {
+                let local = number.replacen('.', &format.decimal.to_string(), 1);
+                text.push_str(&display_amount_text(&local, format));
+            }
+            Part::Operator(operator) => text.push_str(match operator {
+                Operator::Add => " + ",
+                Operator::Subtract => " \u{2212} ",
+                Operator::Multiply => " \u{d7} ",
+                Operator::Divide => " \u{f7} ",
+            }),
+        }
+    }
+    text
 }
 
 /// Turns an edit of the grouped field back into plain typed text for
@@ -407,6 +429,30 @@ mod tests {
         group: ',',
         symbol_before: true,
     };
+
+    #[test]
+    fn expression_is_grouped_with_readable_operators() {
+        use invuso_core::fx::expression::Key;
+        let expression = "1200+85.5*3/".chars().fold(Expression::new(), |e, c| {
+            let key = match c {
+                '0'..='9' => Key::Digit(c as u8 - b'0'),
+                '.' => Key::Decimal,
+                '+' => Key::Operator(Operator::Add),
+                '*' => Key::Operator(Operator::Multiply),
+                _ => Key::Operator(Operator::Divide),
+            };
+            e.press(key, cur("EUR"))
+        });
+        assert_eq!(
+            expression_text(&expression, DE),
+            "1.200 + 85,5 \u{d7} 3 \u{f7} "
+        );
+        assert_eq!(
+            expression_text(&expression, EN),
+            "1,200 + 85.5 \u{d7} 3 \u{f7} "
+        );
+        assert_eq!(expression_text(&Expression::new(), DE), "");
+    }
 
     fn cur(code: &str) -> Currency {
         Currency::from_code(code).unwrap()

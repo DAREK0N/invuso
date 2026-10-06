@@ -17,6 +17,9 @@ pub const RECENT_CURRENCY_LIST: &str = "recent_currencies";
 /// Last selection of the currency converter (FX-05).
 pub const CONVERTER_FROM: &str = "converter_from";
 pub const CONVERTER_TO: &str = "converter_to";
+/// Id of the manual rate the converter uses instead of the archived one
+/// while its pair is shown (FX-10); empty = none.
+pub const CONVERTER_MANUAL_RATE: &str = "converter_manual_rate";
 /// Group (empty = none) and currency of the last saved expense, preselected
 /// in the next expense form (AP-11).
 pub const LAST_EXPENSE_GROUP: &str = "last_expense_group";

@@ -1,10 +1,11 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::{Icon, icons::ld_icons::LdArrowLeft};
 
-/// Sticky page header with title and optional back button (UI-02).
-/// Draws behind the status bar and keeps its content below it.
+/// Sticky page header with title, optional back button and optional
+/// actions on the right (`children`, UI-02). Draws behind the status bar
+/// and keeps its content below it.
 #[component]
-pub fn TopBar(title: String, #[props(default)] show_back: bool) -> Element {
+pub fn TopBar(title: String, #[props(default)] show_back: bool, children: Element) -> Element {
     let nav = use_navigator();
 
     rsx! {
@@ -21,7 +22,8 @@ pub fn TopBar(title: String, #[props(default)] show_back: bool) -> Element {
                 } else {
                     div { class: "w-2" }
                 }
-                h1 { class: "truncate text-xl font-semibold text-floral-white-50", "{title}" }
+                h1 { class: "min-w-0 flex-1 truncate text-xl font-semibold text-floral-white-50", "{title}" }
+                {children}
             }
         }
     }

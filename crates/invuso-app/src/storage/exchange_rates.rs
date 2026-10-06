@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use invuso_core::Decimal;
@@ -65,6 +66,24 @@ pub struct NearRate {
     /// archive had nothing on or before it.
     pub later: bool,
 }
+
+/// One line of the rate archive of a currency pair (FX-08).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// Reads `from → to` as asked, whatever direction it was stored in.
+    pub rate: Rate,
+    pub rate_date: String,
+    /// Unix milliseconds; the older fetch of both legs of a cross rate.
+    pub fetched_at: i64,
+    /// Provider, [`MANUAL_SOURCE`] or [`CROSS_SOURCE`]; for a cross rate
+    /// computed here, the providers of its legs.
+    pub source: String,
+    /// Computed through EUR from two archived rates; not stored as such.
+    pub crossed: bool,
+}
+
+/// At most this many history lines; about a year of daily rates.
+const HISTORY_LIMIT: usize = 400;
 
 /// Which archived rate a lookup wants.
 #[derive(Debug, Clone, Copy)]
@@ -226,6 +245,153 @@ impl Db {
             })
         }))
     }
+}
+
+impl Db {
+    /// Archives a rate the user typed in, e.g. from an exchange office
+    /// (FX-10), as [`MANUAL_SOURCE`] for `date` (`YYYY-MM-DD`). Like the
+    /// rates of cash movements it is never picked by lookups.
+    pub fn add_manual_rate(&self, rate: &Rate, date: &str) -> Result<String, StorageError> {
+        if !is_iso_date(date) {
+            return Err(StorageError::InvalidInput("rate date must be YYYY-MM-DD"));
+        }
+        if rate.base() == rate.quote() {
+            return Err(StorageError::InvalidInput("rate needs two currencies"));
+        }
+        self.with(|conn| insert_manual_rate(conn, self.device_id(), rate, date))
+    }
+
+    /// The archive of a pair, newest first (FX-08): one line per day and
+    /// provider (the newest fetch, because the daily refresh archives the
+    /// same day several times), every manual and expense rate on its own.
+    /// Pairs that are never stored directly are crossed through EUR for
+    /// every day either leg has a rate.
+    pub fn rate_history(
+        &self,
+        from: Currency,
+        to: Currency,
+    ) -> Result<Vec<HistoryEntry>, StorageError> {
+        if from == to {
+            return Ok(Vec::new());
+        }
+        let pivot = Currency::from_code(PIVOT).map_err(|_| StorageError::InvalidInput("pivot"))?;
+        self.with(|conn| {
+            let (kept, provided): (Vec<_>, Vec<_>) = rows_between(conn, from, to)?
+                .into_iter()
+                .partition(|r| r.source == MANUAL_SOURCE || r.source == CROSS_SOURCE);
+            let crossed = provided.is_empty() && from != pivot && to != pivot;
+            let mut entries: Vec<HistoryEntry> = kept
+                .into_iter()
+                .chain(newest_per_day(provided))
+                .map(|stored| HistoryEntry {
+                    rate: read_as(&stored, from),
+                    rate_date: stored.rate_date,
+                    fetched_at: stored.fetched_at,
+                    source: stored.source,
+                    crossed: false,
+                })
+                .collect();
+            if crossed {
+                entries.extend(crossed_history(conn, from, pivot, to)?);
+            }
+            entries.sort_by(|a, b| (&b.rate_date, b.fetched_at).cmp(&(&a.rate_date, a.fetched_at)));
+            entries.truncate(HISTORY_LIMIT);
+            Ok(entries)
+        })
+    }
+}
+
+/// Every archived rate between two currencies, in either direction.
+fn rows_between(
+    conn: &Connection,
+    a: Currency,
+    b: Currency,
+) -> Result<Vec<ExchangeRate>, StorageError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM exchange_rate
+         WHERE deleted_at IS NULL
+           AND ((base = ?1 AND quote = ?2) OR (base = ?2 AND quote = ?1))"
+    ))?;
+    Ok(statement
+        .query_map([a.code(), b.code()], rate_from_row)?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// The newest fetch of each day and source.
+fn newest_per_day(rows: Vec<ExchangeRate>) -> Vec<ExchangeRate> {
+    let mut newest: BTreeMap<(String, String), ExchangeRate> = BTreeMap::new();
+    for row in rows {
+        let key = (row.rate_date.clone(), row.source.clone());
+        if newest
+            .get(&key)
+            .is_none_or(|kept| kept.fetched_at < row.fetched_at)
+        {
+            newest.insert(key, row);
+        }
+    }
+    newest.into_values().collect()
+}
+
+/// `stored` turned to read `from → …`.
+fn read_as(stored: &ExchangeRate, from: Currency) -> Rate {
+    if stored.rate.base() == from {
+        stored.rate
+    } else {
+        stored.rate.inverse()
+    }
+}
+
+/// `from → to` through `pivot` for every day a provider rate of either leg
+/// exists, each leg picked like a lookup on that day (idee.md 8.4).
+fn crossed_history(
+    conn: &Connection,
+    from: Currency,
+    pivot: Currency,
+    to: Currency,
+) -> Result<Vec<HistoryEntry>, StorageError> {
+    let provided = |a, b| -> Result<Vec<_>, StorageError> {
+        Ok(rows_between(conn, a, b)?
+            .into_iter()
+            .filter(|r| r.source != MANUAL_SOURCE && r.source != CROSS_SOURCE)
+            .map(|r| ((r.rate_date.clone(), r.fetched_at), r))
+            .collect())
+    };
+    let (first, second) = (provided(from, pivot)?, provided(pivot, to)?);
+    let days: BTreeSet<&String> = first
+        .iter()
+        .chain(&second)
+        .map(|((day, _), _)| day)
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut entries = Vec::new();
+    for day in days {
+        let on = (day.clone(), i64::MAX);
+        let (Some(a), Some(b)) = (
+            fx::rate_for_date(&first, &on),
+            fx::rate_for_date(&second, &on),
+        ) else {
+            continue;
+        };
+        // A day only one leg changed on still gives a new line; the same
+        // two rates again do not.
+        if !seen.insert((a.id.clone(), b.id.clone())) {
+            continue;
+        }
+        let rate = fx::chain(&read_as(a, from), &read_as(b, pivot)).map_err(fx_error)?;
+        let source = if a.source == b.source {
+            a.source.clone()
+        } else {
+            format!("{} + {}", a.source, b.source)
+        };
+        entries.push(HistoryEntry {
+            rate,
+            rate_date: a.rate_date.clone().max(b.rate_date.clone()),
+            fetched_at: a.fetched_at.min(b.fetched_at),
+            source,
+            crossed: true,
+        });
+    }
+    Ok(entries)
 }
 
 /// The id of the archived rate an expense converted with: none for the
@@ -556,6 +722,66 @@ mod tests {
             db.archived_quotes("frankfurter").unwrap(),
             vec![cur("JPY"), cur("USD")]
         );
+    }
+
+    #[test]
+    fn history_keeps_the_newest_fetch_per_day_and_every_manual_rate() {
+        let db = Db::open_in_memory().unwrap();
+        archive(&db, 1, &[eur_to("JPY", "170", "2026-10-01")]);
+        archive(&db, 2, &[eur_to("JPY", "171", "2026-10-01")]);
+        archive(&db, 3, &[eur_to("JPY", "172", "2026-10-02")]);
+        let office =
+            Rate::new(cur("JPY"), cur("EUR"), Decimal::from_str("0.006").unwrap()).unwrap();
+        db.add_manual_rate(&office, "2026-10-02").unwrap();
+        db.add_manual_rate(&office, "2026-10-02").unwrap();
+
+        let history = db.rate_history(cur("EUR"), cur("JPY")).unwrap();
+        let lines: Vec<_> = history
+            .iter()
+            .map(|e| (e.rate_date.as_str(), e.source.as_str(), e.rate.value()))
+            .collect();
+        let manual = office.inverse().value();
+        assert_eq!(
+            lines,
+            vec![
+                ("2026-10-02", MANUAL_SOURCE, manual),
+                ("2026-10-02", MANUAL_SOURCE, manual),
+                ("2026-10-02", "frankfurter", Decimal::from(172)),
+                ("2026-10-01", "frankfurter", Decimal::from(171)),
+            ]
+        );
+        assert!(history.iter().all(|e| e.rate.base() == cur("EUR")));
+        // Manual rates never convert anything.
+        let latest = db.latest_rate(cur("JPY"), cur("EUR")).unwrap().unwrap();
+        assert_eq!(latest.legs[0].source, "frankfurter");
+        assert!(matches!(
+            db.add_manual_rate(&office, "02.10.2026"),
+            Err(StorageError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn history_crosses_pairs_without_a_direct_rate() {
+        let db = Db::open_in_memory().unwrap();
+        archive(
+            &db,
+            1,
+            &[
+                eur_to("JPY", "160", "2026-10-01"),
+                eur_to("USD", "1.10", "2026-10-01"),
+            ],
+        );
+        archive(&db, 2, &[eur_to("USD", "1.20", "2026-10-02")]);
+        let history = db.rate_history(cur("JPY"), cur("USD")).unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().all(|e| e.crossed));
+        assert_eq!(history[0].rate_date, "2026-10-02");
+        // 1 JPY = 1.20 / 160 USD.
+        let usd = fx::convert(Money::new(16_000, cur("JPY")), &history[0].rate).unwrap();
+        assert_eq!(usd, Money::new(12_000, cur("USD")));
+        assert_eq!(history[1].fetched_at, 1);
+        assert!(db.rate_history(cur("JPY"), cur("JPY")).unwrap().is_empty());
+        assert!(db.rate_history(cur("JPY"), cur("CHF")).unwrap().is_empty());
     }
 
     #[test]

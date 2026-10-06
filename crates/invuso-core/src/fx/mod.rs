@@ -1,6 +1,8 @@
 //! Currency conversion with archived rates (idee.md 8.4). Fetching rates is
 //! I/O and lives in the app; this module only does the arithmetic.
 
+pub mod expression;
+
 use rust_decimal::Decimal;
 use thiserror::Error;
 

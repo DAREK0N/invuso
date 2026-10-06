@@ -5,6 +5,7 @@
 //! lines (idee.md 2.3 `services/`).
 
 pub mod cash;
+pub mod converter;
 pub mod expenses;
 pub mod ocr;
 pub mod rates;

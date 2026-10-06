@@ -27,7 +27,9 @@ mod translations;
 pub use cash::{CashEntry, NewExchange, NewWithdrawal, WithdrawalFee};
 pub(crate) use db::now_ms;
 pub use db::{Db, StorageError};
-pub use exchange_rates::{NearRate, NewExchangeRate, RateQuote};
+pub use exchange_rates::{
+    CROSS_SOURCE, HistoryEntry, MANUAL_SOURCE, NearRate, NewExchangeRate, RateQuote,
+};
 pub use expenses::{
     ExpenseParties, NewExpense, NewExpensePayment, RecentExpense, TimelineEntry, TimelinePayer,
 };
@@ -37,8 +39,8 @@ pub use people::NewPerson;
 pub use profile::Profile;
 pub use receipts::{OcrFragment, ReceiptFiles, ReceiptText};
 pub use settings::{
-    CONVERTER_FROM, CONVERTER_TO, FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY,
-    LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST, TRANSLATION_CONFIDENCE,
+    CONVERTER_FROM, CONVERTER_MANUAL_RATE, CONVERTER_TO, FAVORITE_CURRENCY_LIST,
+    LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, RECENT_CURRENCY_LIST, TRANSLATION_CONFIDENCE,
 };
 pub use settlements::NewSettlement;
 pub use translations::UNKNOWN_LANGUAGE;

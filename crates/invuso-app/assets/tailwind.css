@@ -241,6 +241,9 @@
   .visible {
     visibility: visible;
   }
+  .absolute {
+    position: absolute;
+  }
   .fixed {
     position: fixed;
   }
@@ -294,6 +297,12 @@
   }
   .z-\[1201\] {
     z-index: 1201;
+  }
+  .col-span-2 {
+    grid-column: span 2 / span 2;
+  }
+  .row-span-2 {
+    grid-row: span 2 / span 2;
   }
   .-mx-2 {
     margin-inline: calc(var(--spacing) * -2);
@@ -540,6 +549,9 @@
   }
   .grid-cols-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .grid-cols-5 {
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1047,6 +1059,9 @@
   .line-through {
     text-decoration-line: line-through;
   }
+  .opacity-0 {
+    opacity: 0%;
+  }
   .opacity-70 {
     opacity: 70%;
   }
@@ -1222,6 +1237,11 @@
   .active\:opacity-80 {
     &:active {
       opacity: 80%;
+    }
+  }
+  .disabled\:opacity-30 {
+    &:disabled {
+      opacity: 30%;
     }
   }
   .disabled\:opacity-40 {
