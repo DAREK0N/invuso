@@ -32,7 +32,8 @@ impl ReceiptFiles {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OcrFragment {
     pub text: String,
-    /// In pixels of the upright original image.
+    /// In pixels of the image the engine read, turned back by
+    /// [`ReceiptText::skew_degrees`] (rows level).
     pub bbox: BoundingBox,
     /// Mean probability of its characters, 0–1.
     pub confidence: f32,
@@ -50,6 +51,10 @@ pub struct ReceiptText {
     /// The fragments' boxes are in the photo turned back by this angle
     /// around its centre (rows level); needed to mark them in the photo.
     pub skew_degrees: f32,
+    /// Width and height of the image the engine read, which may be smaller
+    /// than the photo; `None` for results stored before AP-36, which
+    /// cannot be marked in the photo then (OCR-37).
+    pub image_size: Option<(u32, u32)>,
 }
 
 impl ReceiptText {
@@ -63,6 +68,15 @@ impl ReceiptText {
             raw_text,
             confidence,
             skew_degrees,
+            image_size: None,
+        }
+    }
+
+    /// The same result, read from an image of this size.
+    pub fn with_image_size(self, width: u32, height: u32) -> Self {
+        Self {
+            image_size: Some((width, height)),
+            ..self
         }
     }
 
@@ -87,6 +101,10 @@ fn recognized(fragments: &[OcrFragment]) -> Vec<RecognizedText> {
 struct StoredBoxes {
     skew_degrees: f32,
     fragments: Vec<StoredFragment>,
+    /// `[width, height]`; added in AP-36 without a migration, older rows
+    /// lack it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_size: Option<[u32; 2]>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -218,6 +236,7 @@ impl Db {
                     confidence: f.confidence,
                 })
                 .collect(),
+            image_size: text.image_size.map(|(w, h)| [w, h]),
         };
         let boxes = serde_json::to_string(&boxes)
             .map_err(|_| StorageError::InvalidInput("unserializable OCR result"))?;
@@ -287,6 +306,7 @@ impl Db {
             raw_text: raw_text.unwrap_or_default(),
             confidence: confidence.map(|c| c as f32),
             skew_degrees: stored.skew_degrees,
+            image_size: stored.image_size.map(|[w, h]| (w, h)),
         }))
     }
 }
@@ -378,7 +398,8 @@ mod tests {
                 fragment("SUMME", 10, 150),
             ],
             -2.5,
-        );
+        )
+        .with_image_size(400, 900);
         assert_eq!(text.raw_text, "Milch 1,99\nSUMME");
         assert_eq!(text.confidence, Some(0.75));
         db.save_receipt_text(&receipt.id, &text).unwrap();
@@ -400,6 +421,17 @@ mod tests {
         let empty = ReceiptText::new("test", Vec::new(), 0.0);
         assert_eq!(empty.confidence, None);
         db.save_receipt_text(&blank.id, &empty).unwrap();
+        assert_eq!(db.receipt_text(&blank.id).unwrap(), Some(empty.clone()));
+
+        // Results stored before AP-36 know no image size.
+        db.with(|conn| {
+            Ok(conn.execute(
+                "UPDATE receipt SET ocr_boxes = '{\"skew_degrees\":0.0,\"fragments\":[]}'
+                 WHERE id = ?1",
+                [&blank.id],
+            )?)
+        })
+        .unwrap();
         assert_eq!(db.receipt_text(&blank.id).unwrap(), Some(empty.clone()));
         assert!(matches!(
             db.save_receipt_text("missing", &empty),

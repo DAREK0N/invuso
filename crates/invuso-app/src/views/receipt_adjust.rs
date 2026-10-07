@@ -106,14 +106,16 @@ pub fn ReceiptAdjuster(
     // `requested`: the button was tapped. Found on its own after opening,
     // the corners only replace untouched ones, never the user's.
     let detect = use_callback({
-        let receipt = receipt.clone();
+        let (db, receipt) = (db.clone(), receipt.clone());
         move |requested: bool| {
             detection.set(Detection::Running);
             let receipt = receipt.clone();
+            // A setting that cannot be read counts as its default.
+            let method = receipt_edit::corner_method(&db).unwrap_or_default();
             spawn(async move {
                 let found = match platform::data_dir() {
                     Ok(data_dir) => tokio::task::spawn_blocking(move || {
-                        receipt_edit::detect_page_corners(&data_dir, &receipt)
+                        receipt_edit::detect_page_corners(&data_dir, &receipt, method)
                             .map_err(|e| e.to_string())
                     })
                     .await

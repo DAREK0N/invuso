@@ -2,12 +2,16 @@
 //! e.g. the article name on the left and its price on the right. Boxes
 //! whose vertical centres lie close together form one printed row.
 
+use std::collections::HashMap;
+
 use super::{BoundingBox, RecognizedText};
 
 /// One printed row: its fragments left to right.
 pub(super) struct Row {
     pub bbox: BoundingBox,
     pub text: String,
+    /// Indices of its fragments in the input, left to right.
+    pub fragments: Vec<usize>,
 }
 
 /// Groups fragments into rows, top to bottom.
@@ -20,36 +24,26 @@ pub(super) struct Row {
 /// prices side by side would ruin both rows. Of the last [`OPEN_ROWS`]
 /// rows the closest fitting one wins. Integer arithmetic only, so every
 /// platform groups identically.
-pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
-    let fragments: Vec<&RecognizedText> = fragments
+pub(super) fn group_rows(input: &[RecognizedText]) -> Vec<Row> {
+    // Rows are built from references; the input index of each is kept so
+    // a row can name its fragments (OCR-18, OCR-37).
+    let index_of: HashMap<*const RecognizedText, usize> = input
         .iter()
-        .filter(|f| !f.text.trim().is_empty())
+        .enumerate()
+        .map(|(i, f)| (std::ptr::from_ref(f), i))
         .collect();
+    let fragments: Vec<&RecognizedText> =
+        input.iter().filter(|f| !f.text.trim().is_empty()).collect();
     let in_price_column = price_column(&fragments);
-    // Curved or tilted paper lifts or lowers the right-aligned price column
-    // against the names: names and prices then pair up off-centre, or with
-    // the neighbouring row. Only then are other offsets tried; the one that
-    // pairs the most names with prices, most closely, wins.
     let height = typical_height(&fragments);
-    let unit = height / OFFSET_STEPS;
-    let mut rows = group_shifted(&fragments, &in_price_column, 0);
-    let (_, misfit) = pairing(&rows, &fragments, &in_price_column, 0);
-    if unit > 0 && misfit.is_some_and(|misfit| misfit * 4 > height) {
-        // (rank, rows) of the best offset so far.
-        let mut best: Option<(Rank, Vec<Vec<&RecognizedText>>)> = None;
-        for step in -OFFSET_STEPS..=OFFSET_STEPS {
-            let offset = step * unit;
-            let shifted = group_shifted(&fragments, &in_price_column, offset);
-            let (score, misfit) = pairing(&shifted, &fragments, &in_price_column, offset);
-            let rank = (score, -misfit.unwrap_or(height), -step.abs());
-            if best.as_ref().is_none_or(|(top, _)| rank > *top) {
-                best = Some((rank, shifted));
-            }
-        }
-        if let Some((_, shifted)) = best {
-            rows = shifted;
-        }
-    }
+    let rows: Vec<Vec<&RecognizedText>> = blocks(&fragments, height)
+        .into_iter()
+        .flat_map(|block| {
+            let flags: Vec<bool> = block.iter().map(|&i| in_price_column[i]).collect();
+            let block: Vec<&RecognizedText> = block.iter().map(|&i| fragments[i]).collect();
+            group_block(&block, &flags, height)
+        })
+        .collect();
 
     rows.into_iter()
         .map(|mut row| {
@@ -64,9 +58,69 @@ pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
                 .map(|f| f.text.trim())
                 .collect::<Vec<_>>()
                 .join(" ");
-            Row { bbox, text }
+            let fragments = row
+                .iter()
+                .filter_map(|f| index_of.get(&std::ptr::from_ref(*f)).copied())
+                .collect();
+            Row {
+                bbox,
+                text,
+                fragments,
+            }
         })
         .collect()
+}
+
+/// Groups one block of fragments (see [`blocks`]) into rows.
+///
+/// Curved or tilted paper lifts or lowers the right-aligned price column
+/// against the names: names and prices then pair up off-centre, or with
+/// the neighbouring row. Only then are other offsets tried; the one that
+/// pairs the most names with prices, most closely, wins.
+fn group_block<'a>(
+    fragments: &[&'a RecognizedText],
+    in_price_column: &[bool],
+    height: i64,
+) -> Vec<Vec<&'a RecognizedText>> {
+    let unit = height / OFFSET_STEPS;
+    let rows = group_shifted(fragments, in_price_column, 0);
+    let (_, misfit) = pairing(&rows, fragments, in_price_column, 0);
+    if unit == 0 || misfit.is_none_or(|misfit| misfit * 4 <= height) {
+        return rows;
+    }
+    // (rank, rows) of the best offset so far.
+    let mut best: Option<(Rank, Vec<Vec<&RecognizedText>>)> = None;
+    for step in -OFFSET_STEPS..=OFFSET_STEPS {
+        let offset = step * unit;
+        let shifted = group_shifted(fragments, in_price_column, offset);
+        let (score, misfit) = pairing(&shifted, fragments, in_price_column, offset);
+        let rank = (score, -misfit.unwrap_or(height), -step.abs());
+        if best.as_ref().is_none_or(|(top, _)| rank > *top) {
+            best = Some((rank, shifted));
+        }
+    }
+    best.map_or(rows, |(_, shifted)| shifted)
+}
+
+/// Indices of the fragments in blocks of print separated by an empty
+/// band at least half a typical box high. Crumpled paper bends each block
+/// its own way (seen on a fuel receipt: the items rise to the right, the
+/// sums below fall), so the price column's offset is sought per block.
+fn blocks(fragments: &[&RecognizedText], height: i64) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..fragments.len()).collect();
+    order.sort_by_key(|&i| (fragments[i].bbox.top, fragments[i].bbox.left));
+    let mut blocks: Vec<Vec<usize>> = Vec::new();
+    let mut bottom = i64::MIN;
+    for index in order {
+        let bbox = fragments[index].bbox;
+        let gap = i64::from(bbox.top).saturating_sub(bottom);
+        match blocks.last_mut() {
+            Some(block) if gap * 2 < height => block.push(index),
+            _ => blocks.push(vec![index]),
+        }
+        bottom = bottom.max(i64::from(bbox.bottom));
+    }
+    blocks
 }
 
 /// Pairs, closeness of the pairs and nearness to no offset, compared in
@@ -290,9 +344,55 @@ mod tests {
     }
 
     #[test]
+    fn each_block_finds_its_own_price_offset() {
+        // Boxes of a crumpled fuel receipt: above, the prices sit higher
+        // than their names; below a gap, lower.
+        let rows = group_rows(&[
+            frag(982, 1344, 1304, 1416, "2,319 EUR/Liter"),
+            frag(1655, 1362, 1837, 1437, "2,95 EUR"),
+            frag(980, 1380, 1519, 1467, "Red Bull A"),
+            frag(1653, 1413, 1839, 1496, "0,25 EUR"),
+            frag(981, 1448, 1259, 1518, "Pfand 25 Cent"),
+            frag(1108, 2914, 1487, 2993, "Girocard"),
+            frag(1659, 2942, 1882, 3005, "23,21 EUR"),
+            frag(995, 3029, 1227, 3132, "TOTAL"),
+            frag(1468, 3036, 1928, 3186, "23,21 EUR"),
+            frag(969, 3183, 1277, 3246, "MWST 19,00% A"),
+            frag(1693, 3217, 1898, 3288, "3,71 EUR"),
+            frag(970, 3243, 1096, 3302, "NETTO"),
+            frag(1673, 3276, 1899, 3350, "23,21 EUR"),
+        ]);
+        assert_eq!(
+            texts(&rows),
+            [
+                "2,319 EUR/Liter",
+                "Red Bull A 2,95 EUR",
+                "Pfand 25 Cent 0,25 EUR",
+                "Girocard 23,21 EUR",
+                "TOTAL 23,21 EUR",
+                "MWST 19,00% A 3,71 EUR",
+                "NETTO 23,21 EUR",
+            ]
+        );
+    }
+
+    #[test]
+    fn rows_name_their_fragments_in_the_input() {
+        let rows = group_rows(&[
+            frag(600, 100, 700, 140, "2,49"),
+            frag(0, 150, 300, 190, "Milch"),
+            frag(0, 100, 300, 140, "Brot"),
+        ]);
+        assert_eq!(texts(&rows), ["Brot 2,49", "Milch"]);
+        assert_eq!(rows[0].fragments, [2, 0]);
+        assert_eq!(rows[1].fragments, [1]);
+    }
+
+    #[test]
     fn empty_fragments_are_ignored() {
         let rows = group_rows(&[frag(0, 0, 10, 10, "  "), frag(0, 20, 10, 30, "A")]);
         assert_eq!(texts(&rows), ["A"]);
+        assert_eq!(rows[0].fragments, [1]);
         assert!(group_rows(&[]).is_empty());
     }
 

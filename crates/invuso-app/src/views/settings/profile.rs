@@ -410,13 +410,19 @@ fn TargetLanguageSheet(
     }
 }
 
-/// Receipt settings: suggest the corners of a new photo (RCP-05).
+/// Receipt settings: suggest the corners of a new photo and how they are
+/// found (RCP-05).
 #[component]
 fn ReceiptSection() -> Element {
     let db = use_context::<Db>();
-    let mut auto = use_signal({
+    let mut stored = use_signal({
         let db = db.clone();
-        move || receipt_edit::auto_corners(&db).map_err(|e| e.to_string())
+        move || {
+            Ok::<_, String>((
+                receipt_edit::auto_corners(&db).map_err(|e| e.to_string())?,
+                receipt_edit::corner_method(&db).map_err(|e| e.to_string())?,
+            ))
+        }
     });
     let mut error = use_signal(|| None::<String>);
 
@@ -425,20 +431,51 @@ fn ReceiptSection() -> Element {
             h2 { class: "px-1 text-xs font-semibold uppercase tracking-wide text-floral-white-400",
                 {t!("settings.receipt_section").to_string()}
             }
-            match auto() {
-                Ok(on) => rsx! {
+            match stored() {
+                Ok((auto, method)) => rsx! {
                     div { class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
                         SwitchRow {
                             label: t!("settings.auto_corners").to_string(),
                             hint: t!("settings.auto_corners_hint").to_string(),
-                            checked: on,
-                            onchange: move |on: bool| match receipt_edit::set_auto_corners(&db, on) {
-                                Ok(()) => {
-                                    error.set(None);
-                                    auto.set(Ok(on));
+                            checked: auto,
+                            onchange: {
+                                let db = db.clone();
+                                move |on: bool| match receipt_edit::set_auto_corners(&db, on) {
+                                    Ok(()) => {
+                                        error.set(None);
+                                        stored.set(Ok((on, method)));
+                                    }
+                                    Err(e) => error.set(Some(e.to_string())),
                                 }
-                                Err(e) => error.set(Some(e.to_string())),
                             },
+                        }
+                    }
+                    if auto {
+                        div {
+                            class: "flex flex-col overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-900",
+                            role: "radiogroup",
+                            aria_label: t!("settings.corner_method").to_string(),
+                            for option in receipt_edit::CornerMethod::ALL {
+                                RadioRow {
+                                    key: "{option.code()}",
+                                    label: corner_method_label(option),
+                                    hint: corner_method_hint(option),
+                                    selected: method == option,
+                                    onclick: {
+                                        let db = db.clone();
+                                        move |_| match receipt_edit::set_corner_method(&db, option) {
+                                            Ok(()) => {
+                                                error.set(None);
+                                                stored.set(Ok((auto, option)));
+                                            }
+                                            Err(e) => error.set(Some(e.to_string())),
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        p { class: "px-1 text-sm text-floral-white-400",
+                            {t!("settings.corner_margin_info").to_string()}
                         }
                     }
                 },
@@ -447,4 +484,20 @@ fn ReceiptSection() -> Element {
             ErrorBanner { error: error() }
         }
     }
+}
+
+fn corner_method_label(method: receipt_edit::CornerMethod) -> String {
+    match method {
+        receipt_edit::CornerMethod::Corners => t!("settings.corner_method_corners"),
+        receipt_edit::CornerMethod::PaperEdges => t!("settings.corner_method_edges"),
+    }
+    .to_string()
+}
+
+fn corner_method_hint(method: receipt_edit::CornerMethod) -> String {
+    match method {
+        receipt_edit::CornerMethod::Corners => t!("settings.corner_method_corners_hint"),
+        receipt_edit::CornerMethod::PaperEdges => t!("settings.corner_method_edges_hint"),
+    }
+    .to_string()
 }

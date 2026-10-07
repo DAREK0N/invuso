@@ -113,6 +113,7 @@ mod tests {
                 text: text.to_string(),
                 bbox: BoundingBox::default(),
                 kind: RowKind::Tax,
+                fragments: Vec::new(),
             })
             .collect()
     }

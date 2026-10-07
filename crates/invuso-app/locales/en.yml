@@ -119,6 +119,12 @@ settings:
   receipt_section: "Receipts"
   auto_corners: "Detect corners automatically"
   auto_corners_hint: "Places the corners on the receipt's edge after taking a photo; you can still move them."
+  corner_method: "How corners are found"
+  corner_method_corners: "Corner detection"
+  corner_method_corners_hint: "Looks for the receipt's bright area and its outermost points. Needs a background darker than the paper."
+  corner_method_edges: "Paper edge"
+  corner_method_edges_hint: "Looks for the paper's straight edges. Also works on a bright desk as long as the edge is visible."
+  corner_margin_info: "A small safety margin is kept around the detected corners. That way nothing of the receipt is cut off and text recognition copes better."
   data_section: "Data"
   app_language: "App language"
 
@@ -621,6 +627,7 @@ receipt:
   take_photo: "Photo"
   choose: "Gallery"
   image_error: "The image cannot be shown. It stays archived."
+  mark: "Item: %{text}"
 
 items:
   title: "Items"
@@ -674,6 +681,11 @@ items:
   delete: "Delete"
   cannot_split: "This item cannot be split any further."
   participants_hint: "These people share everything not assigned to anyone."
+  unsure: "Possibly misread"
+  unsure_one: "1 item may be misread. Tap it to compare it with the photo."
+  unsure_other: "%{count} items may be misread. Tap them to compare them with the photo."
+  unsure_hint: "Possibly misread: please compare text and prices with the photo. The mark goes away once you change something."
+  photo: "Enlarge this spot of the receipt"
 
 packs:
   intro: "Without a translator on the device, Invuso translates receipts with downloaded language packs, offline afterwards. Only what you tap here is downloaded."

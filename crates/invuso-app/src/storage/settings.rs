@@ -35,6 +35,9 @@ pub const SURFACE_SHADOWS: &str = "surface_shadows";
 /// Whether the receipt corners are suggested automatically (`on` or
 /// `off`, unset = on; RCP-05, AP-34).
 pub const RECEIPT_AUTO_CORNERS: &str = "receipt_auto_corners";
+/// How the receipt corners are found (`corners` or `paper_edges`, unset =
+/// `corners`; RCP-05).
+pub const RECEIPT_CORNER_METHOD: &str = "receipt_corner_method";
 /// Language of the app's own texts (`system`, `de`, `en`; SET-04).
 pub const APP_LANGUAGE: &str = "app_language";
 /// Id of the group marked as active (GRP-05); empty = none.

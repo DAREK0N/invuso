@@ -107,6 +107,7 @@ pub fn parse_receipt(
             text: row.text,
             bbox: row.bbox,
             kind: *kind,
+            fragments: row.fragments,
         })
         .collect();
     let money = |minor: Option<i64>| minor.map(|m| Money::new(m, currency));
@@ -862,6 +863,8 @@ enum Line {
         prices: Vec<i64>,
     },
     Tax,
+    /// A payment word alone (`KARTENZAHLUNG`): a card slip begins.
+    SlipStart,
     Item(Draft),
     /// Quantity and unit price without text, e.g. `2 X 0,49`.
     Quantity(Draft),
@@ -886,6 +889,11 @@ fn analyze(tokens: &[&str], cx: &Context) -> Line {
     }
     if is_tax_sum(&label) {
         return Line::Tax;
+    }
+    if let &[word] = tokens
+        && leading_keyword(&[word]) == Some(Keyword::Payment)
+    {
+        return Line::SlipStart;
     }
     if let Some(keyword) = keyword(tokens, cx) {
         return Line::Keyword { keyword, prices };
@@ -1025,6 +1033,13 @@ fn item_or_quantity(tokens: &[&str], cx: &Context) -> Line {
         head.remove(0);
     }
     cx.trim_tax_class(&mut head);
+    // Fuel stations star the product (`*Super`); the star is no part of it.
+    if let Some(first) = head.first_mut() {
+        *first = first.trim_start_matches('*');
+        if first.is_empty() {
+            head.remove(0);
+        }
+    }
     // `(セット) 400 (1) ¥400`: unit price and count in brackets.
     if let &[total] = prices.as_slice()
         && let [.., unit, count] = head[..]
@@ -1397,13 +1412,16 @@ impl Reader {
                     self.change.get_or_insert(amount);
                 }
             }
+            // Fuel stations print the card slip and its payment row
+            // before the total: a total is still taken after a payment
+            // as long as none was found.
             (
-                Zone::Items | Zone::Sums,
+                zone,
                 Line::Keyword {
                     keyword: keyword @ (Keyword::Total | Keyword::Subtotal),
                     prices,
                 },
-            ) if prices.len() == 1 => {
+            ) if prices.len() == 1 && (zone != Zone::After || self.total.is_none()) => {
                 self.close_items();
                 self.zone = Zone::Sums;
                 self.sums.push(SumEntry::Sum {
@@ -1411,6 +1429,12 @@ impl Reader {
                     keyword,
                     amount: prices[0],
                 });
+            }
+            // `KARTENZAHLUNG` alone after the items opens a card slip;
+            // its amounts and numbers are no items.
+            (Zone::Items, Line::SlipStart) if !self.items.is_empty() => {
+                self.close_items();
+                self.zone = Zone::After;
             }
             (_, Line::Tax) => self.kinds[row] = RowKind::Tax,
             (Zone::Items, Line::Header) => self.drop_items(),
@@ -1543,6 +1567,11 @@ impl Reader {
                     sums.push((row, keyword, amount));
                 }
             }
+        }
+        // Tax rows after the last sum state the VAT contained in it
+        // (`MWST 19,00% A 3,71 EUR` below a late `TOTAL`).
+        for (row, _) in between.iter().filter(|(_, draft)| draft.tax) {
+            self.kinds[*row] = RowKind::Tax;
         }
 
         let total_at = sums
@@ -1766,6 +1795,36 @@ mod tests {
         );
         assert_eq!(r.items[1].rows, [1, 2]);
         assert_eq!(r.check, TotalCheck::Matches);
+    }
+
+    #[test]
+    fn card_slip_before_the_total() {
+        let r = receipt(&[
+            "*Super A 20,01 EUR*",
+            "Cola A 2,95 EUR",
+            "KARTENZAHLUNG",
+            "EUR 22.96",
+            "Girocard 22,96 EUR",
+            "TOTAL 22,96 EUR",
+            "MWST 19,00% A 3,67 EUR",
+        ]);
+        assert_eq!(
+            items(&r),
+            [
+                ("Super", Decimal::ONE, Some(2001), 2001),
+                ("Cola", Decimal::ONE, Some(295), 295),
+            ]
+        );
+        assert_eq!(r.total.map(|m| m.amount_minor()), Some(2296));
+        assert_eq!(r.tendered.map(|m| m.amount_minor()), Some(2296));
+        assert_eq!(r.check, TotalCheck::Matches);
+        assert_eq!(r.rows[6].kind, RowKind::Tax);
+    }
+
+    #[test]
+    fn a_total_after_the_payment_does_not_replace_the_total() {
+        let r = receipt(&["Brot 3,20", "Summe 3,20", "Bar 5,00", "Betrag 5,00"]);
+        assert_eq!(r.total.map(|m| m.amount_minor()), Some(320));
     }
 
     #[test]

@@ -7,9 +7,20 @@ use invuso_core::domain::Currency;
 use invuso_core::receipt::{ParsedReceipt, TotalCheck, detect_currency, parse_receipt, text_rows};
 
 use crate::format::{NumberFormat, format_money};
-use crate::services::ocr::{OcrJob, OcrJobs, OcrProgress};
+use crate::services::ocr::{ItemMark, OcrJob, OcrJobs, OcrProgress, item_marks};
 use crate::state::DataRevision;
 use crate::storage::Db;
+
+/// What the recognition read from a receipt, for the form.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ReceiptReading {
+    pub parsed: ParsedReceipt,
+    /// Confidence and place in the photo of each parsed item (OCR-18,
+    /// OCR-37).
+    pub marks: Vec<ItemMark>,
+    /// Size of the image the places refer to; `None` for older results.
+    pub image_size: Option<(u32, u32)>,
+}
 
 /// Text recognition of the attached receipt (OCR-01, idee.md 7.2 steps
 /// 2–3): starts it unless it ran before, shows its progress while the form
@@ -24,7 +35,7 @@ use crate::storage::Db;
 pub(super) fn ReceiptRecognition(
     receipt_id: String,
     currency: ReadSignal<Option<Currency>>,
-    on_read: EventHandler<ParsedReceipt>,
+    on_read: EventHandler<ReceiptReading>,
     on_currency: EventHandler<Currency>,
 ) -> Element {
     let db = use_context::<Db>();
@@ -85,7 +96,15 @@ pub(super) fn ReceiptRecognition(
             && (receipt.total.is_some() || !receipt.items.is_empty())
         {
             offered.set(true);
-            on_read.call(receipt);
+            let (marks, image_size) = match &*stored.peek() {
+                Ok(Some(text)) => (item_marks(text, &receipt), text.image_size),
+                _ => (Vec::new(), None),
+            };
+            on_read.call(ReceiptReading {
+                parsed: receipt,
+                marks,
+                image_size,
+            });
         }
     });
 

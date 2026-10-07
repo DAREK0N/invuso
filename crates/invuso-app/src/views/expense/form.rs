@@ -17,23 +17,23 @@ use invuso_core::domain::{
     Person, PersonId, is_iso_date, validate_participants, validate_payments, validate_split,
 };
 use invuso_core::fx::{self, Rate};
-use invuso_core::receipt::{ParsedReceipt, PaymentKind, VatLine, detect_language};
+use invuso_core::receipt::{PaymentKind, VatLine, detect_language};
 use invuso_core::split::allocate;
 
 use super::detail::ReceiptCard;
 use super::items::{
-    self, ItemAction, ItemDraft, ItemSheet, ReceiptItems, TranslationNote, drafts_from_parsed,
-    drafts_from_saved,
+    self, ItemAction, ItemDraft, ItemSheet, ReceiptItems, ReceiptPhoto, TranslationNote,
+    drafts_from_parsed, drafts_from_saved,
 };
-use super::recognition::ReceiptRecognition;
+use super::recognition::{ReceiptReading, ReceiptRecognition};
 use super::split::{ShareRow, SplitDraft, SplitKind, split_error_text, sum_hint};
 use crate::Route;
 use crate::clock;
 use crate::components::{
     AmountInput, Avatar, AvatarSize, BottomSheet, Button, ButtonVariant, CategoryIconGlyph, Chip,
     CompactAmountInput, CurrencyPicker, DateTimeField, EmptyState, ErrorBanner, GroupIcon,
-    MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption, PersonPicker, RateSheet,
-    TextField, TopBar,
+    ImageMark, ImageViewer, MoneyText, PaymentIconGlyph, PaymentMethodIcon, PersonOption,
+    PersonPicker, RateSheet, TextField, TopBar,
 };
 use crate::format::{
     NumberFormat, amount_text, coordinates_text, fit_amount_text, format_money, format_rate,
@@ -44,6 +44,7 @@ use crate::preferences::{
     category_name, default_home_currency, display_date, language_name, suggested_target_language,
 };
 use crate::services::expenses::{SaveExpenseError, save_expense, update_expense};
+use crate::services::ocr::{PhotoQuad, bounds_of};
 use crate::services::rates::{CurrencyApi, Frankfurter};
 use crate::services::receipts::{self, capture_receipt};
 use crate::services::translation::{
@@ -368,6 +369,10 @@ fn ExpenseForm(data: FormData) -> Element {
     let mut translation_run = use_signal(|| 0_u64);
     // VAT the receipt states as contained in its prices (AP-38).
     let mut vat_lines = use_signal(Vec::<VatLine>::new);
+    // Size of the image the lines' places in the photo refer to (OCR-37).
+    let mut photo_size = use_signal(|| None::<(u32, u32)>);
+    // The receipt in full screen, zoomed to the line with this key if any.
+    let mut viewer = use_signal(|| None::<Option<u64>>);
 
     let groups = data.groups.clone();
     let home_currency = data.home_currency;
@@ -824,6 +829,14 @@ fn ExpenseForm(data: FormData) -> Element {
     let draft = split_draft();
     let item_list = items();
     let line_items = items::line_items(&item_list);
+    // The photo the lines were read from, while it is attached (OCR-37).
+    let photo = match (receipt(), photo_size()) {
+        (Some(attached), Some(size)) if !editing => attached.page(0).map(|path| ReceiptPhoto {
+            src: receipts::file_url(path),
+            size,
+        }),
+        _ => None,
+    };
     let split = draft.mode(&default_weights.read(), cur, format, &line_items);
     let shares = if total_minor > 0 {
         validate_split(total_minor, &split).unwrap_or_default()
@@ -854,7 +867,9 @@ fn ExpenseForm(data: FormData) -> Element {
     // (OCR-16).
     let read_methods = data.methods.clone();
     let read_last = data.last_methods.clone();
-    let on_read = move |parsed: ParsedReceipt| {
+    let on_read = move |reading: ReceiptReading| {
+        let parsed = &reading.parsed;
+        photo_size.set(reading.image_size);
         vat_lines.set(parsed.vat.clone());
         let details = &parsed.details;
         if let Some(merchant) = &details.merchant
@@ -903,7 +918,7 @@ fn ExpenseForm(data: FormData) -> Element {
             amount_error.set(None);
         }
         if items.peek().is_empty() {
-            items.set(drafts_from_parsed(&parsed));
+            items.set(drafts_from_parsed(parsed, &reading.marks));
         }
         let language = detect_language(parsed.rows.iter().map(|row| row.text.as_str()));
         source_language.set(Some(language.map(str::to_string)));
@@ -1080,7 +1095,15 @@ fn ExpenseForm(data: FormData) -> Element {
             match receipt() {
                 Some(attached) => rsx! {
                     div { class: "flex flex-col gap-2",
-                        ReceiptCard { key: "{attached.id}", receipt: attached.clone() }
+                        if editing {
+                            ReceiptCard { key: "{attached.id}", receipt: attached.clone() }
+                        } else {
+                            ReceiptCard {
+                                key: "{attached.id}",
+                                receipt: attached.clone(),
+                                on_open: move |_| viewer.set(Some(None)),
+                            }
+                        }
                         // Replacing the receipt of a saved expense is RCP-08.
                         if !editing {
                             ReceiptRecognition {
@@ -1093,7 +1116,14 @@ fn ExpenseForm(data: FormData) -> Element {
                             button {
                                 class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-floral-white-300 active:bg-jet-black-800 transition-colors",
                                 r#type: "button",
-                                onclick: move |_| receipt.set(None),
+                                onclick: move |_| {
+                                    receipt.set(None);
+                                    // The lines no longer point into a photo.
+                                    photo_size.set(None);
+                                    for draft in items.write().iter_mut() {
+                                        draft.marks.clear();
+                                    }
+                                },
                                 Icon { icon: LdX, class: "h-4 w-4" }
                                 {t!("receipt.remove").to_string()}
                             }
@@ -1473,6 +1503,8 @@ fn ExpenseForm(data: FormData) -> Element {
                             on_change: move |line| change_item((key, line)),
                             on_action: move |action| item_action((key, action)),
                             on_close: move |_| sheet.set(None),
+                            photo: photo.clone(),
+                            on_show_photo: move |_| viewer.set(Some(Some(key))),
                         }
                     },
                     None => rsx! {},
@@ -1480,7 +1512,46 @@ fn ExpenseForm(data: FormData) -> Element {
             }
             None => rsx! {},
         }
+        if let (Some(focus), Some(photo)) = (viewer(), photo) {
+            ImageViewer {
+                src: photo.src,
+                alt: t!("receipt.title").to_string(),
+                on_close: move |_| viewer.set(None),
+                marks: viewer_marks(&item_list),
+                mark_size: Some(photo.size),
+                focus,
+                // Opens the tapped line; a sheet opened before stays below.
+                on_mark: move |key| {
+                    viewer.set(None);
+                    item_error.set(None);
+                    sheet.set(Some(Sheet::Item(key)));
+                },
+            }
+        }
     }
+}
+
+/// The places of the lines in the receipt photo, for the full-screen view
+/// (OCR-37).
+fn viewer_marks(drafts: &[ItemDraft]) -> Vec<ImageMark> {
+    drafts
+        .iter()
+        .filter_map(|draft| {
+            let (left, top, right, bottom) = bounds_of(&draft.marks)?;
+            Some(ImageMark {
+                key: draft.key,
+                outlines: draft.marks.iter().map(PhotoQuad::svg_points).collect(),
+                bounds: (
+                    f64::from(left),
+                    f64::from(top),
+                    f64::from(right),
+                    f64::from(bottom),
+                ),
+                warning: draft.unsure(),
+                label: t!("receipt.mark", text = draft.item.text()).to_string(),
+            })
+        })
+        .collect()
 }
 
 fn item_error_text(error: &LineItemError) -> String {

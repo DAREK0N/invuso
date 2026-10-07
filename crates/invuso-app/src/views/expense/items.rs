@@ -31,6 +31,7 @@ use crate::format::{
     number_text, parse_amount, parse_number,
 };
 use crate::preferences::kind_label;
+use crate::services::ocr::{ItemMark, PhotoQuad, bounds_of, is_unsure};
 
 /// Decimals a quantity can be typed with (weights in kg: `0,452`).
 const QUANTITY_DECIMALS: u32 = 3;
@@ -43,6 +44,9 @@ static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 pub(super) struct ItemDraft {
     pub key: u64,
     pub item: LineItem,
+    /// Where the line was printed in the receipt photo (OCR-37); empty
+    /// for lines typed by hand or saved before.
+    pub marks: Vec<PhotoQuad>,
 }
 
 impl ItemDraft {
@@ -50,31 +54,49 @@ impl ItemDraft {
         Self {
             key: NEXT_KEY.fetch_add(1, Ordering::Relaxed),
             item,
+            marks: Vec::new(),
         }
+    }
+
+    /// Marked as possibly misread until the user changes it (OCR-18).
+    pub(super) fn unsure(&self) -> bool {
+        unsure(&self.item)
     }
 }
 
-/// The lines the parser read (OCR-10..13), ready to correct.
-pub(super) fn drafts_from_parsed(receipt: &ParsedReceipt) -> Vec<ItemDraft> {
+fn unsure(item: &LineItem) -> bool {
+    is_unsure(item.ocr_confidence) && !item.edited_by_user
+}
+
+/// The lines the parser read (OCR-10..13), ready to correct, with how sure
+/// the engine was of each and where it was printed (`marks`, one per item
+/// of `receipt`; OCR-18, OCR-37).
+pub(super) fn drafts_from_parsed(receipt: &ParsedReceipt, marks: &[ItemMark]) -> Vec<ItemDraft> {
     receipt
         .items
         .iter()
-        .map(|parsed| {
+        .enumerate()
+        .map(|(index, parsed)| {
+            let mark = marks.get(index).cloned().unwrap_or_default();
             let kind = match parsed.kind {
                 ItemKind::Article => LineItemKind::Article,
                 ItemKind::Discount => LineItemKind::Discount,
                 ItemKind::Deposit => LineItemKind::Deposit,
                 ItemKind::Tax => LineItemKind::Tax,
             };
-            ItemDraft::new(LineItem {
-                original_text: parsed.text.clone(),
-                quantity: parsed.quantity,
-                unit_price_minor: parsed.unit_price.map(|m| m.amount_minor()),
-                total_minor: kind.signed(parsed.total_price.amount_minor()),
-                kind,
-                attached: parsed.attached,
-                ..LineItem::default()
-            })
+            ItemDraft {
+                marks: mark.quads,
+                ..ItemDraft::new(LineItem {
+                    original_text: parsed.text.clone(),
+                    quantity: parsed.quantity,
+                    unit_price_minor: parsed.unit_price.map(|m| m.amount_minor()),
+                    total_minor: kind.signed(parsed.total_price.amount_minor()),
+                    kind,
+                    attached: parsed.attached,
+                    ocr_confidence: mark.confidence,
+                    ..LineItem::default()
+                })
+            }
         })
         .collect()
 }
@@ -112,13 +134,20 @@ pub(super) fn apply(
         ItemAction::Split => {
             let (rest, part) = drafts[index].item.split()?;
             drafts[index].item = rest;
-            drafts.insert(index + 1, ItemDraft::new(part));
+            // Both halves were printed in the same place.
+            let part = ItemDraft {
+                marks: drafts[index].marks.clone(),
+                ..ItemDraft::new(part)
+            };
+            drafts.insert(index + 1, part);
             Ok(false)
         }
         ItemAction::MergeNext => {
             if let Some(next) = drafts.get(index + 1) {
                 let merged = drafts[index].item.merge(&next.item)?;
+                let marks = next.marks.clone();
                 drafts[index].item = merged;
+                drafts[index].marks.extend(marks);
                 drafts.remove(index + 1);
             }
             Ok(false)
@@ -205,6 +234,7 @@ pub(super) fn ReceiptItems(
         .iter()
         .any(|line| !line.original_text.is_empty() && line.text() != line.original_text);
     let original_first = show_original() && has_other_text;
+    let unsure_count = items.iter().filter(|d| d.unsure()).count();
     let sum = line_items_sum(&lines).ok();
     let difference = match (total, sum) {
         (Some(total), Some(sum)) => Some(total.amount_minor() - sum),
@@ -247,6 +277,18 @@ pub(super) fn ReceiptItems(
                     }
                 }
             }
+            if unsure_count > 0 {
+                div { class: "flex items-start gap-3 px-1 text-sm text-pale-oak-200", role: "status",
+                    Icon { icon: LdTriangleAlert, class: "mt-0.5 h-4 w-4 shrink-0 text-pale-oak-300" }
+                    span {
+                        if unsure_count == 1 {
+                            {t!("items.unsure_one").to_string()}
+                        } else {
+                            {t!("items.unsure_other", count = unsure_count).to_string()}
+                        }
+                    }
+                }
+            }
             div { class: "flex flex-col drop-shadow-lg",
                 div { class: "receipt-edge-top h-2", aria_hidden: "true" }
                 div { class: "flex flex-col bg-floral-white-50 px-3 pb-3 font-mono text-jet-black-950",
@@ -257,6 +299,7 @@ pub(super) fn ReceiptItems(
                         ItemRow {
                             key: "{draft.key}",
                             attached: draft.item.attached && index > 0,
+                            unsure: draft.unsure(),
                             carried_by: carried.get(index).cloned().unwrap_or_default(),
                             item: draft.item.clone(),
                             currency,
@@ -336,6 +379,8 @@ fn ItemRow(
     item: LineItem,
     /// Belongs to the line above (a deposit, a discount).
     attached: bool,
+    /// Possibly misread (OCR-18).
+    unsure: bool,
     /// Who carries the line; for an attached line, who carries its article.
     carried_by: BTreeMap<PersonId, Decimal>,
     currency: Currency,
@@ -389,6 +434,7 @@ fn ItemRow(
     rsx! {
         button {
             class: "flex min-h-14 w-full items-start gap-3 border-b border-dashed border-jet-black-200 px-1 py-2 text-left transition-colors ease-apple",
+            class: if unsure { "bg-pale-oak-100" },
             class: if onclick.is_some() { "active:bg-floral-white-200" },
             r#type: "button",
             disabled: onclick.is_none(),
@@ -421,10 +467,16 @@ fn ItemRow(
                 }
             }
             span { class: "flex shrink-0 flex-col items-end gap-1",
-                span {
-                    class: "text-base tabular-nums",
-                    class: if ignored { "text-jet-black-500 line-through" },
-                    {format_plain(Money::new(item.total_minor, currency), format)}
+                span { class: "flex items-center gap-1",
+                    if unsure {
+                        Icon { icon: LdTriangleAlert, class: "h-4 w-4 shrink-0 text-pale-oak-700" }
+                        span { class: "sr-only", {t!("items.unsure").to_string()} }
+                    }
+                    span {
+                        class: "text-base tabular-nums",
+                        class: if ignored { "text-jet-black-500 line-through" },
+                        {format_plain(Money::new(item.total_minor, currency), format)}
+                    }
                 }
                 if show_holders {
                     if holders.is_empty() {
@@ -454,9 +506,20 @@ pub(super) fn ItemSheet(
     on_change: EventHandler<LineItem>,
     on_action: EventHandler<ItemAction>,
     on_close: EventHandler<()>,
+    /// The receipt photo, to show where the line was printed (OCR-37).
+    #[props(default)]
+    photo: Option<ReceiptPhoto>,
+    /// Opens the photo in full screen on this line.
+    #[props(default)]
+    on_show_photo: Option<EventHandler<()>>,
 ) -> Element {
     let format = NumberFormat::current();
     let item = draft.item.clone();
+    let unsure = draft.unsure();
+    let snippet = photo.and_then(|photo| {
+        let region = snippet_region(&draft.marks, photo.size)?;
+        Some((photo, region))
+    });
     let magnitude = move |minor: i64| amount_text(Money::new(minor.abs(), currency), format);
     let mut text = use_signal(|| item.text().to_string());
     let mut quantity = use_signal(|| number_text(item.quantity, format));
@@ -473,12 +536,23 @@ pub(super) fn ItemSheet(
     let printed = item.translated_text.as_ref().unwrap_or(&item.original_text);
     let show_original = !item.original_text.is_empty() && *printed != text();
 
+    // Correcting what was read; this also clears the unsure mark (OCR-18).
     let edit = {
         let item = item.clone();
         move |change: &dyn Fn(&mut LineItem)| {
             let mut changed = item.clone();
             change(&mut changed);
             changed.edited_by_user = true;
+            on_change.call(changed);
+        }
+    };
+    // Saying who had the line or what it belongs to corrects nothing that
+    // was read, so an unsure line stays marked.
+    let assign = {
+        let item = item.clone();
+        move |change: &dyn Fn(&mut LineItem)| {
+            let mut changed = item.clone();
+            change(&mut changed);
             on_change.call(changed);
         }
     };
@@ -576,9 +650,9 @@ pub(super) fn ItemSheet(
     };
 
     let set_weight = {
-        let edit = edit.clone();
+        let assign = assign.clone();
         move |(person, weight): (PersonId, Decimal)| {
-            edit(&|line| {
+            assign(&|line| {
                 if weight.is_zero() {
                     line.assigned_to.remove(&person);
                 } else {
@@ -588,18 +662,31 @@ pub(super) fn ItemSheet(
         }
     };
     let everyone = {
-        let edit = edit.clone();
-        move |_| edit(&|line| line.assigned_to.clear())
+        let assign = assign.clone();
+        move |_| assign(&|line| line.assigned_to.clear())
     };
-    let set_attached = {
-        let edit = edit.clone();
-        move |attached: bool| edit(&|line| line.attached = attached)
-    };
+    let set_attached = move |attached: bool| assign(&|line| line.attached = attached);
     let attached = item.attached && has_previous;
 
     rsx! {
         BottomSheet { title: t!("items.edit_title").to_string(), on_close,
             div { class: "flex max-h-[75vh] flex-col gap-4 overflow-y-auto overscroll-contain px-4 pt-2",
+                if let Some((photo, region)) = snippet {
+                    PhotoSnippet {
+                        photo,
+                        region,
+                        marks: draft.marks.clone(),
+                        unsure,
+                        onclick: on_show_photo,
+                    }
+                }
+                if unsure {
+                    div { class: "flex items-start gap-3 rounded-2xl bg-pale-oak-900 px-4 py-3 text-sm text-pale-oak-200",
+                        role: "status",
+                        Icon { icon: LdTriangleAlert, class: "mt-0.5 h-5 w-5 shrink-0" }
+                        span { {t!("items.unsure_hint").to_string()} }
+                    }
+                }
                 div { class: "flex flex-col gap-1",
                     TextField {
                         id: id("text"),
@@ -749,6 +836,107 @@ fn times(quantity: Decimal, unit_minor: i64, currency: Currency) -> Option<i64> 
     Money::from_decimal(quantity.checked_mul(unit)?, currency)
         .ok()
         .map(|m| m.amount_minor())
+}
+
+/// The photo the lines were read from (OCR-37).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ReceiptPhoto {
+    pub src: String,
+    /// Size of the image the boxes refer to.
+    pub size: (u32, u32),
+}
+
+/// Part of the photo shown around a line: `x, y, width, height` in pixels
+/// of an image of `size`. A little of the rows above and below stays
+/// visible, and the part is at least [`SNIPPET_ASPECT`] times as wide as
+/// high where the photo allows, so a short word is not blown up.
+fn snippet_region(marks: &[PhotoQuad], size: (u32, u32)) -> Option<(f32, f32, f32, f32)> {
+    let (left, top, right, bottom) = bounds_of(marks)?;
+    let (width, height) = (size.0 as f32, size.1 as f32);
+    let row = marks
+        .iter()
+        .map(|q| {
+            let (_, t, _, b) = q.bounds();
+            b - t
+        })
+        .fold(f32::MAX, f32::min);
+    let (pad_x, pad_y) = (width * 0.03, row * 1.2);
+    let (mut left, mut right) = ((left - pad_x).max(0.0), (right + pad_x).min(width));
+    let (top, bottom) = ((top - pad_y).max(0.0), (bottom + pad_y).min(height));
+    let wanted = (bottom - top) * SNIPPET_ASPECT;
+    if right - left < wanted {
+        let middle = (left + right) / 2.0;
+        let half = (wanted / 2.0).min(width / 2.0);
+        let start = (middle - half).clamp(0.0, width - 2.0 * half);
+        (left, right) = (start, start + 2.0 * half);
+    }
+    (right > left && bottom > top).then_some((left, top, right - left, bottom - top))
+}
+
+/// Narrowest the photo part of a line gets, as width per height.
+const SNIPPET_ASPECT: f32 = 3.0;
+
+/// The part of the photo around one line with the line outlined; tapping
+/// it enlarges the photo there.
+#[component]
+fn PhotoSnippet(
+    photo: ReceiptPhoto,
+    region: (f32, f32, f32, f32),
+    marks: Vec<PhotoQuad>,
+    unsure: bool,
+    onclick: Option<EventHandler<()>>,
+) -> Element {
+    let (x, y, w, h) = region;
+    let (width, height) = (photo.size.0 as f32, photo.size.1 as f32);
+    // The whole photo, scaled and moved so the region fills the frame.
+    let placement = format!(
+        "left: {}%; top: {}%; width: {}%; height: {}%;",
+        -x / w * 100.0,
+        -y / h * 100.0,
+        width / w * 100.0,
+        height / h * 100.0
+    );
+    let outline = if unsure {
+        "fill-pale-oak-400/20 stroke-pale-oak-600"
+    } else {
+        "fill-cerulean-400/15 stroke-cerulean-400"
+    };
+    rsx! {
+        button {
+            class: "relative block w-full shrink-0 overflow-hidden rounded-xl border border-jet-black-800 bg-jet-black-950 active:opacity-80 transition-opacity ease-apple",
+            style: "aspect-ratio: {w} / {h};",
+            r#type: "button",
+            aria_label: t!("items.photo").to_string(),
+            disabled: onclick.is_none(),
+            onclick: move |_| {
+                if let Some(onclick) = onclick {
+                    onclick.call(());
+                }
+            },
+            div { class: "absolute", style: "{placement}",
+                img {
+                    class: "absolute inset-0 h-full w-full max-w-none",
+                    src: "{photo.src}",
+                    alt: "",
+                    draggable: "false",
+                }
+                svg {
+                    class: "absolute inset-0 h-full w-full",
+                    view_box: "0 0 {photo.size.0} {photo.size.1}",
+                    preserve_aspect_ratio: "none",
+                    for (index, quad) in marks.iter().enumerate() {
+                        polygon {
+                            key: "{index}",
+                            class: outline,
+                            stroke_width: "2",
+                            vector_effect: "non-scaling-stroke",
+                            points: quad.svg_points(),
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[component]
@@ -921,6 +1109,68 @@ mod tests {
         apply(&mut list, last, ItemAction::MergeNext).unwrap();
         assert_eq!(texts(&list), ["Bier", "Bier + Pfand"]);
         assert_eq!(line_items_sum(&line_items(&list)), Ok(1_375));
+    }
+
+    #[test]
+    fn read_lines_carry_confidence_and_place() {
+        use invuso_core::receipt::{BoundingBox, parse_receipt};
+
+        use crate::services::ocr::item_marks;
+        use crate::storage::{OcrFragment, ReceiptText};
+
+        let fragment = |text: &str, left, top, confidence| OcrFragment {
+            text: text.to_string(),
+            bbox: BoundingBox {
+                left,
+                top,
+                right: left + 80,
+                bottom: top + 20,
+            },
+            confidence,
+        };
+        let text = ReceiptText::new(
+            "test",
+            vec![
+                fragment("Milch", 10, 100, 0.99),
+                fragment("1,99", 300, 100, 0.62),
+                fragment("Brot", 10, 140, 0.97),
+                fragment("2,49", 300, 140, 0.96),
+                fragment("SUMME 4,48", 10, 190, 0.99),
+            ],
+            0.0,
+        )
+        .with_image_size(400, 300);
+        let parsed = parse_receipt(&text.recognized(), cur("EUR")).unwrap();
+        let mut list = drafts_from_parsed(&parsed, &item_marks(&text, &parsed));
+        assert_eq!(texts(&list), ["Milch", "Brot"]);
+        // Stored with the line (`line_item.ocr_confidence`).
+        let lines = line_items(&list);
+        assert_eq!(lines[0].ocr_confidence, Some(0.62));
+        assert_eq!(lines[1].ocr_confidence, Some(0.96));
+        assert!(list[0].unsure());
+        assert!(!list[1].unsure());
+        assert_eq!(list[0].marks.len(), 2);
+        assert_eq!(
+            snippet_region(&list[0].marks, (400, 300)).map(|(_, _, w, h)| w >= h * 3.0),
+            Some(true)
+        );
+
+        // Halves keep the place; a merged line has both.
+        let milk = list[0].key;
+        let mut halves = list.clone();
+        apply(&mut halves, milk, ItemAction::Split).unwrap();
+        assert_eq!(halves[0].marks, halves[1].marks);
+        apply(&mut list, milk, ItemAction::MergeNext).unwrap();
+        assert_eq!(list[0].marks.len(), 4);
+        assert_eq!(list[0].item.ocr_confidence, Some(0.62));
+
+        // A corrected line is no longer marked; one typed by hand never is.
+        let mut corrected = list[0].clone();
+        assert!(!corrected.unsure(), "merging is a correction");
+        corrected.item.edited_by_user = false;
+        assert!(corrected.unsure());
+        assert!(!draft("Wasser", "1", 99).unsure());
+        assert_eq!(snippet_region(&[], (400, 300)), None);
     }
 
     #[test]

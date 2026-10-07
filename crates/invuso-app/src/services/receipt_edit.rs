@@ -17,7 +17,7 @@ use image::{Rgb, RgbImage};
 
 use super::ocr::preprocess::{luma, stretch_contrast};
 use super::receipts::{RECEIPTS_DIR, ReceiptError, decode_upright, thumbnail_of};
-use crate::storage::{Db, RECEIPT_AUTO_CORNERS, ReceiptFiles, StorageError};
+use crate::storage::{Db, RECEIPT_AUTO_CORNERS, RECEIPT_CORNER_METHOD, ReceiptFiles, StorageError};
 
 /// Longest side of a corrected image, as for recognition: phone photos are
 /// larger, but a receipt line needs no more detail.
@@ -260,16 +260,7 @@ const DETECT_SIDE: u32 = 600;
 /// each corner. `None` if no such area stands out, e.g. on a white table
 /// or when the receipt fills the photo.
 pub fn detect_corners(photo: &RgbImage) -> Option<[Point; 4]> {
-    let longest = photo.width().max(photo.height());
-    let small = if longest > DETECT_SIDE {
-        image::imageops::thumbnail(
-            photo,
-            (photo.width() * DETECT_SIDE / longest).max(1),
-            (photo.height() * DETECT_SIDE / longest).max(1),
-        )
-    } else {
-        photo.clone()
-    };
+    let small = downscaled(photo);
     let (width, height) = small.dimensions();
     let (w, h) = (width as usize, height as usize);
     // Paper is bright in every channel; light wood or skin is bright too,
@@ -321,6 +312,57 @@ pub fn detect_corners(photo: &RgbImage) -> Option<[Point; 4]> {
         extreme(sum, true, (1.0, 1.0))?,
         extreme(difference, false, (-1.0, 1.0))?,
     ];
+    with_margin(squared_ends(corners, width, height))
+}
+
+/// Sets an end of the receipt (top or bottom) that slants by more than
+/// [`TORN_SLANT_DEGREES`] at right angles to the sides, moved out to the
+/// farther of its two corners. Receipts are often torn off at a slant;
+/// straightened onto the tear, every printed line would slant as well
+/// (fuel receipt: 11°, lines ran into each other). Less slant is left
+/// alone: on crumpled paper the sides are no better guide than the ends
+/// (Netto receipt: 7°, squaring lost four items).
+fn squared_ends(corners: [Point; 4], width: u32, height: u32) -> [Point; 4] {
+    let (w, h) = (f64::from(width), f64::from(height));
+    let [tl, tr, br, bl] = corners.map(|p| (p.x * w, p.y * h));
+    let sub = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0, a.1 - b.1);
+    let dot = |a: (f64, f64), b: (f64, f64)| a.0 * b.0 + a.1 * b.1;
+    let (left, right) = (sub(bl, tl), sub(br, tr));
+    let down = (left.0 + right.0, left.1 + right.1);
+    let length = down.0.hypot(down.1);
+    if length < 1.0 || dot(left, down) <= 0.0 || dot(right, down) <= 0.0 {
+        return corners;
+    }
+    let down = (down.0 / length, down.1 / length);
+    // A point of a side where it reaches `level` along `down`.
+    let at_level = |from: (f64, f64), side: (f64, f64), level: f64| {
+        let s = (level - dot(from, down)) / dot(side, down);
+        (from.0 + side.0 * s, from.1 + side.1 * s)
+    };
+    // Sine of the angle between an end and the perpendicular of the sides.
+    let slant = |a: (f64, f64), b: (f64, f64)| {
+        let end = sub(b, a);
+        (dot(end, down) / end.0.hypot(end.1)).abs()
+    };
+    let torn = TORN_SLANT_DEGREES.to_radians().sin();
+    let [mut tl, mut tr, mut br, mut bl] = [tl, tr, br, bl];
+    if slant(tl, tr) > torn {
+        let top = dot(tl, down).min(dot(tr, down));
+        (tl, tr) = (at_level(tl, left, top), at_level(tr, right, top));
+    }
+    if slant(bl, br) > torn {
+        let bottom = dot(bl, down).max(dot(br, down));
+        (bl, br) = (at_level(bl, left, bottom), at_level(br, right, bottom));
+    }
+    [tl, tr, br, bl].map(|(x, y)| Point::new((x / w).clamp(0.0, 1.0), (y / h).clamp(0.0, 1.0)))
+}
+
+/// Slant from which an end counts as torn, not cut (see [`squared_ends`]).
+const TORN_SLANT_DEGREES: f64 = 10.0;
+
+/// Moves detected corners outward by [`CORNER_MARGIN`]; `None` if they do
+/// not enclose a [valid](ImageEdit::is_valid) area.
+fn with_margin(corners: [Point; 4]) -> Option<[Point; 4]> {
     // A little desk in the picture costs nothing, a price cut off at the
     // edge costs an item: measured on the synthetic and jawildtext photos
     // (AP-38), tight corners lost more than they gained.
@@ -337,6 +379,20 @@ pub fn detect_corners(photo: &RgbImage) -> Option<[Point; 4]> {
         ..ImageEdit::default()
     };
     edit.is_valid().then_some(corners)
+}
+
+/// The photo with its longest side at most [`DETECT_SIDE`].
+fn downscaled(photo: &RgbImage) -> RgbImage {
+    let longest = photo.width().max(photo.height());
+    if longest > DETECT_SIDE {
+        image::imageops::thumbnail(
+            photo,
+            (photo.width() * DETECT_SIDE / longest).max(1),
+            (photo.height() * DETECT_SIDE / longest).max(1),
+        )
+    } else {
+        photo.clone()
+    }
 }
 
 /// How much a pixel's tint (brightest minus darkest channel) lowers its
@@ -455,6 +511,438 @@ fn largest_region(mask: &[bool], width: usize, height: usize) -> Vec<(usize, usi
         }
     }
     best
+}
+
+/// Suggests the receipt's corners from its straight edges. Candidate lines
+/// come from a Hough transform of the brightness gradient; of all shapes
+/// of two lines across and two along whose sides are paper edges (brighter
+/// inside, see [`step_share`]), the one covering the paper best wins (see
+/// [`PaperMap`]). Unlike [`detect_corners`] it needs no clearly darker
+/// background, only a visible edge, e.g. paper on a bright desk lit from
+/// the side (seen on the phone, AP-38). Where the receipt runs off the
+/// photo, the photo's edge stands in. `None` if no four edges enclose a
+/// plausible receipt.
+pub fn detect_corners_by_edges(photo: &RgbImage) -> Option<[Point; 4]> {
+    let small = downscaled(photo);
+    let (width, height) = small.dimensions();
+    let (w, h) = (width as usize, height as usize);
+    if w < 8 || h < 8 {
+        return None;
+    }
+    let brightness: Vec<u8> = small.pixels().map(|p| luma(p.0)).collect();
+    // Blurred, so print turns into grey bands and paper grain vanishes;
+    // the paper's edge stays a step.
+    let blurred = local_mean(&brightness, w, h, EDGE_BLUR_RADIUS);
+    let gradient = Gradient::of(&blurred, w, h);
+    let smooth = Smooth {
+        values: &blurred,
+        width: w,
+        height: h,
+    };
+    let (fw, fh) = (f64::from(width), f64::from(height));
+
+    let mut across = vec![Line::border(0.5, 0.0), Line::border(0.5, fh)];
+    let mut along = vec![Line::border(0.0, 0.0), Line::border(0.0, fw)];
+    for line in hough_lines(&gradient) {
+        let list = if line.is_across() {
+            &mut across
+        } else {
+            &mut along
+        };
+        if list.len() < LINES_PER_DIRECTION + 2 {
+            list.push(line);
+        }
+    }
+    // Top to bottom, left to right, through the middle of the photo.
+    across.sort_by(|a, b| a.y_at(fw / 2.0).total_cmp(&b.y_at(fw / 2.0)));
+    along.sort_by(|a, b| a.x_at(fh / 2.0).total_cmp(&b.x_at(fh / 2.0)));
+
+    let tolerance = OUTSIDE_TOLERANCE * fw.max(fh);
+    let inside = |&(x, y): &(f64, f64)| {
+        (-tolerance..=fw + tolerance).contains(&x) && (-tolerance..=fh + tolerance).contains(&y)
+    };
+    let paper = PaperMap::of(&blurred, w, h);
+    let mut best: Option<(i64, [Point; 4])> = None;
+    for (i, top) in across.iter().enumerate() {
+        for bottom in &across[i + 1..] {
+            for (j, left) in along.iter().enumerate() {
+                for right in &along[j + 1..] {
+                    let sides = [top, right, bottom, left];
+                    // The whole photo or a strip of it is no suggestion.
+                    if sides.iter().filter(|l| l.border).count() > 2 {
+                        continue;
+                    }
+                    let (Some(a), Some(b), Some(c), Some(d)) = (
+                        top.meet(left),
+                        top.meet(right),
+                        bottom.meet(right),
+                        bottom.meet(left),
+                    ) else {
+                        continue;
+                    };
+                    let corners = [a, b, c, d];
+                    if !corners.iter().all(inside) {
+                        continue;
+                    }
+                    let corners = corners.map(|(x, y)| (x.clamp(0.0, fw), y.clamp(0.0, fh)));
+                    let points = corners.map(|(x, y)| Point::new(x / fw, y / fh));
+                    let edit = ImageEdit {
+                        corners: points,
+                        ..ImageEdit::default()
+                    };
+                    if !edit.is_valid() || area(&points) < MIN_RECEIPT_SHARE {
+                        continue;
+                    }
+                    // A desk or a laptop around the receipt has straight
+                    // edges too, a block of print inside it as well: the
+                    // receipt is the shape that covers the paper best.
+                    let score = paper.score(&corners);
+                    if best.is_some_and(|(b, _)| score <= b) {
+                        continue;
+                    }
+                    let centre = (
+                        corners.iter().map(|c| c.0).sum::<f64>() / 4.0,
+                        corners.iter().map(|c| c.1).sum::<f64>() / 4.0,
+                    );
+                    let on_edges = sides.iter().enumerate().all(|(k, side)| {
+                        side.border
+                            || step_share(&smooth, corners[k], corners[(k + 1) % 4], centre)
+                                >= MIN_SUPPORT
+                    });
+                    if on_edges {
+                        best = Some((score, points));
+                    }
+                }
+            }
+        }
+    }
+    with_margin(squared_ends(best?.1, width, height))
+}
+
+/// Blur before the gradient, in pixels of the [`DETECT_SIDE`] image.
+const EDGE_BLUR_RADIUS: usize = 2;
+
+/// Smallest brightness step per pixel that counts as an edge: a paper edge
+/// on a desk of nearly the same brightness still steps faster than shadows
+/// or uneven light.
+const MIN_EDGE: f32 = 1.5;
+
+/// Angle steps of the Hough transform: one per degree.
+const ANGLE_STEPS: usize = 180;
+
+/// How many steps a line may differ from a pixel's gradient direction and
+/// still get its vote.
+const VOTE_SPREAD: usize = 5;
+
+/// Lines tried per direction (across, along) besides the photo's edges.
+const LINES_PER_DIRECTION: usize = 10;
+
+/// Most a receipt's edge may be tilted from the photo's edges, in degrees;
+/// beyond, across and along can no longer be told apart.
+const MAX_TILT: usize = 40;
+
+/// How far a corner may lie outside the photo, as a share of its longest
+/// side, before the lines are taken for something else.
+const OUTSIDE_TOLERANCE: f64 = 0.03;
+
+/// Smallest share of the photo a receipt found by its edges may cover.
+const MIN_RECEIPT_SHARE: f64 = 0.05;
+
+/// Share of a side along which the paper must be brighter than outside
+/// (see [`step_share`]).
+const MIN_SUPPORT: f64 = 0.6;
+
+/// Brightness gradient of a row-major grid (central differences).
+struct Gradient {
+    width: usize,
+    height: usize,
+    dx: Vec<f32>,
+    dy: Vec<f32>,
+}
+
+impl Gradient {
+    fn of(values: &[u8], width: usize, height: usize) -> Self {
+        let mut dx = vec![0f32; values.len()];
+        let mut dy = vec![0f32; values.len()];
+        let at = |x: usize, y: usize| f32::from(values[y * width + x]);
+        for y in 1..height.saturating_sub(1) {
+            for x in 1..width.saturating_sub(1) {
+                dx[y * width + x] = (at(x + 1, y) - at(x - 1, y)) / 2.0;
+                dy[y * width + x] = (at(x, y + 1) - at(x, y - 1)) / 2.0;
+            }
+        }
+        Self {
+            width,
+            height,
+            dx,
+            dy,
+        }
+    }
+}
+
+/// A straight line `x·cos θ + y·sin θ = distance` in pixels of the
+/// [`DETECT_SIDE`] image; `angle` θ in half turns (`0.0..1.0`).
+#[derive(Debug, Clone, Copy)]
+struct Line {
+    angle: f64,
+    distance: f64,
+    /// One of the photo's own edges.
+    border: bool,
+}
+
+impl Line {
+    fn border(angle: f64, distance: f64) -> Self {
+        Self {
+            angle,
+            distance,
+            border: true,
+        }
+    }
+
+    fn normal(&self) -> (f64, f64) {
+        let radians = self.angle * std::f64::consts::PI;
+        (radians.cos(), radians.sin())
+    }
+
+    /// Runs across the photo: its normal points rather up or down.
+    fn is_across(&self) -> bool {
+        let (c, s) = self.normal();
+        s.abs() > c.abs()
+    }
+
+    fn y_at(&self, x: f64) -> f64 {
+        let (c, s) = self.normal();
+        (self.distance - x * c) / s
+    }
+
+    fn x_at(&self, y: f64) -> f64 {
+        let (c, s) = self.normal();
+        (self.distance - y * s) / c
+    }
+
+    /// Where the two lines cross; `None` if they run side by side.
+    fn meet(&self, other: &Self) -> Option<(f64, f64)> {
+        let ((c1, s1), (c2, s2)) = (self.normal(), other.normal());
+        let determinant = c1 * s2 - s1 * c2;
+        if determinant.abs() < 1e-6 {
+            return None;
+        }
+        Some((
+            (self.distance * s2 - other.distance * s1) / determinant,
+            (c1 * other.distance - c2 * self.distance) / determinant,
+        ))
+    }
+}
+
+/// Straight lines along which many pixels step in brightness, strongest
+/// first; each pixel votes only for lines at right angles to its gradient.
+/// Lines tilted more than [`MAX_TILT`] from the photo's edges are left out.
+fn hough_lines(gradient: &Gradient) -> Vec<Line> {
+    use std::f64::consts::PI;
+
+    let (w, h) = (gradient.width, gradient.height);
+    let diagonal = (w as f64).hypot(h as f64).ceil() as usize;
+    let distances = 2 * diagonal + 1;
+    let trig: Vec<(f64, f64)> = (0..ANGLE_STEPS)
+        .map(|a| {
+            let radians = a as f64 / ANGLE_STEPS as f64 * PI;
+            (radians.cos(), radians.sin())
+        })
+        .collect();
+    let mut votes = vec![0u32; ANGLE_STEPS * distances];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let (gx, gy) = (gradient.dx[i], gradient.dy[i]);
+            if gx.hypot(gy) < MIN_EDGE {
+                continue;
+            }
+            // The line's normal is the gradient, pointing either way.
+            let direction = f64::from(gy).atan2(f64::from(gx)).rem_euclid(PI);
+            let step = (direction / PI * ANGLE_STEPS as f64).round() as usize;
+            for offset in 0..=2 * VOTE_SPREAD {
+                let a = (step + ANGLE_STEPS + offset - VOTE_SPREAD) % ANGLE_STEPS;
+                let (c, s) = trig[a];
+                let distance = (x as f64 + 0.5) * c + (y as f64 + 0.5) * s;
+                let d = (distance.round() as i64 + diagonal as i64) as usize;
+                votes[a * distances + d] += 1;
+            }
+        }
+    }
+    // A real edge runs along a good part of the shorter side.
+    let min_votes = (w.min(h) / 8).max(10) as u32;
+    let near_an_edge = |a: usize| {
+        let degrees = a * 180 / ANGLE_STEPS;
+        degrees <= MAX_TILT || degrees >= 180 - MAX_TILT || degrees.abs_diff(90) <= MAX_TILT
+    };
+    let mut peaks = Vec::new();
+    for a in (0..ANGLE_STEPS).filter(|&a| near_an_edge(a)) {
+        for d in 0..distances {
+            let v = votes[a * distances + d];
+            if v < min_votes {
+                continue;
+            }
+            // Strongest within a few degrees and pixels; of equal ones the
+            // first, so a flat top gives one peak.
+            let strongest = (-3i64..=3).all(|da| {
+                let na = (a as i64 + da).rem_euclid(ANGLE_STEPS as i64) as usize;
+                (-4i64..=4).all(|dd| {
+                    let nd = d as i64 + dd;
+                    if !(0..distances as i64).contains(&nd) || (da, dd) == (0, 0) {
+                        return true;
+                    }
+                    let other = votes[na * distances + nd as usize];
+                    other < v || (other == v && (na, nd as usize) > (a, d))
+                })
+            });
+            if strongest {
+                peaks.push((v, a, d));
+            }
+        }
+    }
+    peaks.sort_by_key(|&(votes, _, _)| std::cmp::Reverse(votes));
+    peaks
+        .into_iter()
+        .map(|(_, a, d)| Line {
+            angle: a as f64 / ANGLE_STEPS as f64,
+            distance: d as f64 - diagonal as f64,
+            border: false,
+        })
+        .collect()
+}
+
+/// Share of the side from `a` to `b` where the paper (towards `centre`)
+/// is clearly brighter than what lies outside, compared in bands a few
+/// pixels to either side. A line of print or a fold has paper on both
+/// sides and reaches little; a paper edge reaches most of its length.
+fn step_share(smooth: &Smooth, a: (f64, f64), b: (f64, f64), centre: (f64, f64)) -> f64 {
+    let length = (b.0 - a.0).hypot(b.1 - a.1);
+    if length < 1.0 {
+        return 0.0;
+    }
+    let mut normal = (-(b.1 - a.1) / length, (b.0 - a.0) / length);
+    let middle = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+    if (centre.0 - middle.0) * normal.0 + (centre.1 - middle.1) * normal.1 < 0.0 {
+        normal = (-normal.0, -normal.1);
+    }
+    let band = |x: f64, y: f64, sign: f64| {
+        let total = BAND
+            .iter()
+            .map(|d| smooth.at(x + sign * normal.0 * d, y + sign * normal.1 * d))
+            .sum::<Option<f64>>()?;
+        Some(total / BAND.len() as f64)
+    };
+    let samples = length.ceil() as usize;
+    let (mut compared, mut stepping) = (0usize, 0usize);
+    for k in 0..samples {
+        let t = (k as f64 + 0.5) / samples as f64;
+        let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+        // Close to the photo's edge there is nothing outside to compare.
+        let (Some(inside), Some(outside)) = (band(x, y, 1.0), band(x, y, -1.0)) else {
+            continue;
+        };
+        compared += 1;
+        stepping += usize::from(inside - outside >= MIN_STEP);
+    }
+    if compared * 2 < samples {
+        return 0.0;
+    }
+    stepping as f64 / compared as f64
+}
+
+/// Distances in pixels of the [`DETECT_SIDE`] image at which
+/// [`step_share`] compares inside and outside: past the blur and the
+/// uncertainty of the line, still close to the edge.
+const BAND: [f64; 5] = [4.0, 6.0, 8.0, 10.0, 12.0];
+
+/// How much brighter the paper must be than what lies outside it.
+const MIN_STEP: f64 = 8.0;
+
+/// Which pixels look like paper: within [`PAPER_RANGE`] of the brightest
+/// ones (receipts are the brightest thing in a photo of one), as row-wise
+/// running sums of +1 for paper and -1 for anything else.
+struct PaperMap {
+    width: usize,
+    height: usize,
+    sums: Vec<i64>,
+}
+
+impl PaperMap {
+    fn of(values: &[u8], width: usize, height: usize) -> Self {
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable();
+        let brightest = sorted[(sorted.len() - 1) * 98 / 100];
+        let threshold = brightest.saturating_sub(PAPER_RANGE);
+        let stride = width + 1;
+        let mut sums = vec![0i64; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let value = if values[y * width + x] >= threshold {
+                    1
+                } else {
+                    -1
+                };
+                sums[y * stride + x + 1] = sums[y * stride + x] + value;
+            }
+        }
+        Self {
+            width,
+            height,
+            sums,
+        }
+    }
+
+    /// Paper pixels inside the convex `corners` less the other pixels
+    /// inside.
+    fn score(&self, corners: &[(f64, f64); 4]) -> i64 {
+        let stride = self.width + 1;
+        let mut total = 0;
+        for y in 0..self.height {
+            let centre = y as f64 + 0.5;
+            // Where the row's centre line crosses the four sides.
+            let (mut left, mut right) = (f64::MAX, f64::MIN);
+            for i in 0..4 {
+                let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                if (a.1 - centre) * (b.1 - centre) > 0.0 || a.1 == b.1 {
+                    continue;
+                }
+                let x = a.0 + (b.0 - a.0) * (centre - a.1) / (b.1 - a.1);
+                (left, right) = (left.min(x), right.max(x));
+            }
+            if left > right {
+                continue;
+            }
+            // Pixels whose centre lies in `left..right`.
+            let from = (left - 0.5).ceil().clamp(0.0, self.width as f64) as usize;
+            let to = ((right - 0.5).floor() + 1.0).clamp(0.0, self.width as f64) as usize;
+            if from < to {
+                total += self.sums[y * stride + to] - self.sums[y * stride + from];
+            }
+        }
+        total
+    }
+}
+
+/// How much darker than the brightest pixels paper may be: shade across
+/// the receipt, not yet the desk under it.
+const PAPER_RANGE: u8 = 20;
+
+/// The blurred brightness [`detect_corners_by_edges`] works on.
+struct Smooth<'a> {
+    values: &'a [u8],
+    width: usize,
+    height: usize,
+}
+
+impl Smooth<'_> {
+    /// Brightness at a point; `None` outside the image.
+    fn at(&self, x: f64, y: f64) -> Option<f64> {
+        if x < 0.0 || y < 0.0 {
+            return None;
+        }
+        let (x, y) = (x as usize, y as usize);
+        (x < self.width && y < self.height).then(|| f64::from(self.values[y * self.width + x]))
+    }
 }
 
 /// Area enclosed by the corners (shoelace formula).
@@ -578,18 +1066,67 @@ pub fn set_auto_corners(db: &Db, on: bool) -> Result<(), StorageError> {
     db.set_setting(RECEIPT_AUTO_CORNERS, if on { "on" } else { "off" })
 }
 
-/// Suggested corners of the receipt's first page in the upright photo
-/// (see [`detect_corners`]). Blocking: decodes the full photo.
+/// How the corners are found in a photo (setting `receipt_corner_method`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CornerMethod {
+    /// The largest bright area and its outermost points
+    /// ([`detect_corners`]); needs a background darker than the paper.
+    #[default]
+    Corners,
+    /// The paper's straight edges ([`detect_corners_by_edges`]); also on a
+    /// bright desk.
+    PaperEdges,
+}
+
+impl CornerMethod {
+    pub const ALL: [Self; 2] = [Self::Corners, Self::PaperEdges];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Corners => "corners",
+            Self::PaperEdges => "paper_edges",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.code() == code)
+    }
+
+    /// Suggested corners of the receipt in an upright photo.
+    pub fn detect(self, photo: &RgbImage) -> Option<[Point; 4]> {
+        match self {
+            Self::Corners => detect_corners(photo),
+            Self::PaperEdges => detect_corners_by_edges(photo),
+        }
+    }
+}
+
+/// The chosen [`CornerMethod`]; unset or unknown counts as the default.
+pub fn corner_method(db: &Db) -> Result<CornerMethod, StorageError> {
+    Ok(db
+        .setting(RECEIPT_CORNER_METHOD)?
+        .as_deref()
+        .and_then(CornerMethod::from_code)
+        .unwrap_or_default())
+}
+
+pub fn set_corner_method(db: &Db, method: CornerMethod) -> Result<(), StorageError> {
+    db.set_setting(RECEIPT_CORNER_METHOD, method.code())
+}
+
+/// Suggested corners of the receipt's first page in the upright photo,
+/// found by `method`. Blocking: decodes the full photo.
 pub fn detect_page_corners(
     data_dir: &Path,
     receipt: &ReceiptFiles,
+    method: CornerMethod,
 ) -> Result<Option<[Point; 4]>, ReceiptError> {
     let path = receipt
         .image_paths
         .first()
         .ok_or_else(|| ReceiptError::Image("the receipt has no image".to_string()))?;
     let bytes = std::fs::read(data_dir.join(path))?;
-    Ok(detect_corners(&decode_upright(&bytes)?.into_rgb8()))
+    Ok(method.detect(&decode_upright(&bytes)?.into_rgb8()))
 }
 
 /// Applies `edit` to the original of the receipt's first page and stores
@@ -641,6 +1178,19 @@ pub(crate) fn photograph_at_an_angle(
     width: u32,
     height: u32,
 ) -> RgbImage {
+    photograph_on(card, corners, width, height, |_, _| Rgb([90, 60, 40]))
+}
+
+/// Like [`photograph_at_an_angle`], on a table coloured by `table` at each
+/// pixel of the photo.
+#[cfg(test)]
+fn photograph_on(
+    card: &RgbImage,
+    corners: &[Point; 4],
+    width: u32,
+    height: u32,
+    table: impl Fn(u32, u32) -> Rgb<u8>,
+) -> RgbImage {
     let (w, h) = (f64::from(width), f64::from(height));
     let (cw, ch) = (f64::from(card.width()), f64::from(card.height()));
     let in_photo = corners.map(|p| (p.x * w, p.y * h));
@@ -648,21 +1198,13 @@ pub(crate) fn photograph_at_an_angle(
     let Some(to_card) = Homography::from_points(&in_photo, &card_corners) else {
         return RgbImage::new(width, height);
     };
-    warp_onto(card, &to_card, width, height)
-}
-
-/// Like [`warp`], with a table colour wherever `homography` points
-/// outside `source`.
-#[cfg(test)]
-fn warp_onto(source: &RgbImage, homography: &Homography, width: u32, height: u32) -> RgbImage {
-    let (sw, sh) = (f64::from(source.width()), f64::from(source.height()));
-    let inside = warp(source, homography, width, height);
+    let inside = warp(card, &to_card, width, height);
     RgbImage::from_fn(width, height, |x, y| {
-        let (u, v) = homography.map(f64::from(x) + 0.5, f64::from(y) + 0.5);
-        if (0.0..sw).contains(&u) && (0.0..sh).contains(&v) {
+        let (u, v) = to_card.map(f64::from(x) + 0.5, f64::from(y) + 0.5);
+        if (0.0..cw).contains(&u) && (0.0..ch).contains(&v) {
             *inside.get_pixel(x, y)
         } else {
-            Rgb([90, 60, 40])
+            table(x, y)
         }
     })
 }
@@ -917,15 +1459,20 @@ mod tests {
     /// Prints the corners found in the user's own photos (paths in
     /// `INVUSO_PHOTOS`, separated by `;`), to check them by eye; with
     /// `INVUSO_CORNERS_OUT` set to a folder, also draws them into a copy.
+    /// `INVUSO_CORNER_METHOD` picks the method by its code.
     #[test]
     #[ignore = "needs photos named in INVUSO_PHOTOS"]
     fn detects_corners_of_own_photos() {
         let paths = std::env::var("INVUSO_PHOTOS").unwrap();
         let out = std::env::var("INVUSO_CORNERS_OUT").ok();
+        let method = std::env::var("INVUSO_CORNER_METHOD")
+            .ok()
+            .and_then(|code| CornerMethod::from_code(&code))
+            .unwrap_or_default();
         for path in paths.split(';') {
             let bytes = std::fs::read(path).unwrap();
             let photo = decode_upright(&bytes).unwrap().into_rgb8();
-            let corners = detect_corners(&photo);
+            let corners = method.detect(&photo);
             println!("{path}: {corners:?}");
             let (Some(out), Some(corners)) = (&out, corners) else {
                 continue;
@@ -948,9 +1495,119 @@ mod tests {
             }
             let name = Path::new(path).file_stem().unwrap().to_string_lossy();
             drawn
-                .save(Path::new(out).join(format!("{name}.corners.png")))
+                .save(Path::new(out).join(format!("{name}.{}.png", method.code())))
                 .unwrap();
         }
+    }
+
+    /// A receipt without a frame: off-white paper with rows of grey print.
+    fn receipt_paper(width: u32, height: u32) -> RgbImage {
+        RgbImage::from_fn(width, height, |x, y| {
+            let row = y % 24 >= 10 && y % 24 < 18 && y > 20 && y < height - 20;
+            let letter = x > 20 && x < width - 20 && (x / 6) % 5 != 0 && (x * 7 + y) % 11 < 7;
+            if row && letter {
+                Rgb([60, 60, 60])
+            } else {
+                Rgb([250, 250, 248])
+            }
+        })
+    }
+
+    fn assert_close(found: &[Point; 4], expected: &[Point; 4]) {
+        for (f, c) in found.iter().zip(expected) {
+            // The downscaling and the margin move them a bit outward.
+            assert!(
+                (f.x - c.x).abs() < 0.06 && (f.y - c.y).abs() < 0.06,
+                "{found:?} vs {expected:?}"
+            );
+        }
+    }
+
+    const TILTED: [Point; 4] = [
+        Point::new(0.30, 0.10),
+        Point::new(0.70, 0.14),
+        Point::new(0.66, 0.92),
+        Point::new(0.24, 0.88),
+    ];
+
+    #[test]
+    fn paper_edges_are_found_on_a_darker_table() {
+        let photo = photograph_at_an_angle(&receipt_paper(400, 800), &TILTED, 800, 900);
+        assert_close(&detect_corners_by_edges(&photo).unwrap(), &TILTED);
+    }
+
+    #[test]
+    fn paper_edges_are_found_on_a_bright_desk_lit_from_the_side() {
+        // Neutral grey desk, as bright as the paper towards the right: no
+        // bright area stands out there, but the edge still steps.
+        let photo = photograph_on(&receipt_paper(400, 800), &TILTED, 800, 900, |x, _| {
+            let v = (200 + x * 50 / 800) as u8;
+            Rgb([v, v, v])
+        });
+        assert_close(&detect_corners_by_edges(&photo).unwrap(), &TILTED);
+    }
+
+    #[test]
+    fn paper_running_off_the_photo_ends_at_its_edge() {
+        let long = [
+            Point::new(0.30, -0.20),
+            Point::new(0.68, -0.18),
+            Point::new(0.70, 1.20),
+            Point::new(0.32, 1.18),
+        ];
+        let photo = photograph_at_an_angle(&receipt_paper(400, 1200), &long, 800, 900);
+        let found = detect_corners_by_edges(&photo).unwrap();
+        let expected = [
+            Point::new(0.30, 0.0),
+            Point::new(0.68, 0.0),
+            Point::new(0.70, 1.0),
+            Point::new(0.32, 1.0),
+        ];
+        assert_close(&found, &expected);
+    }
+
+    #[test]
+    fn no_paper_edge_suggests_nothing() {
+        let plain = RgbImage::from_fn(300, 400, |x, _| {
+            let v = (180 + x * 40 / 300) as u8;
+            Rgb([v, v, v])
+        });
+        assert_eq!(detect_corners_by_edges(&plain), None);
+    }
+
+    #[test]
+    fn a_torn_end_is_squared_outward_a_cut_one_kept() {
+        // Upright sides; the top torn off at a slant (right end lower).
+        let torn = [
+            Point::new(0.2, 0.1),
+            Point::new(0.6, 0.2),
+            Point::new(0.6, 0.9),
+            Point::new(0.2, 0.9),
+        ];
+        let squared = squared_ends(torn, 1000, 1000);
+        let close = |a: Point, b: Point| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9;
+        assert!(close(squared[0], Point::new(0.2, 0.1)));
+        assert!(close(squared[1], Point::new(0.6, 0.1)), "{squared:?}");
+        assert!(close(squared[2], torn[2]) && close(squared[3], torn[3]));
+
+        // A few degrees off: crumpled, not torn; left as found.
+        let cut = [
+            Point::new(0.2, 0.1),
+            Point::new(0.6, 0.12),
+            Point::new(0.6, 0.9),
+            Point::new(0.2, 0.9),
+        ];
+        assert_eq!(squared_ends(cut, 1000, 1000), cut);
+    }
+
+    #[test]
+    fn corner_method_defaults_to_corner_detection() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(corner_method(&db).unwrap(), CornerMethod::Corners);
+        set_corner_method(&db, CornerMethod::PaperEdges).unwrap();
+        assert_eq!(corner_method(&db).unwrap(), CornerMethod::PaperEdges);
+        db.set_setting(RECEIPT_CORNER_METHOD, "unknown").unwrap();
+        assert_eq!(corner_method(&db).unwrap(), CornerMethod::Corners);
     }
 
     #[test]

@@ -104,6 +104,10 @@ pub struct ReceiptRow {
     pub text: String,
     pub bbox: BoundingBox,
     pub kind: RowKind,
+    /// Indices of the [`RecognizedText`]s it was built from, left to
+    /// right: where its text sits in the photo and how sure the engine was
+    /// (OCR-18, OCR-37).
+    pub fragments: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

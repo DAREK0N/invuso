@@ -111,7 +111,8 @@ pub struct LineItem {
     /// Who carries the line, with weights (`6 × Bier` → 2 : 1 : 3). Empty
     /// = everyone taking part in the expense (idee.md 8.2).
     pub assigned_to: BTreeMap<PersonId, Decimal>,
-    /// Mean OCR confidence, 0–1, for lines read from a receipt.
+    /// OCR confidence, 0–1, of the least sure text the line was read from;
+    /// only for lines read from a receipt (OCR-18).
     pub ocr_confidence: Option<f32>,
     pub edited_by_user: bool,
     /// Belongs to the nearest line above that is not attached itself, e.g.

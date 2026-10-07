@@ -78,8 +78,12 @@
     --color-watermelon-800: #5b0b12;
     --color-watermelon-900: #2d0609;
     --color-pale-oak-50: #f7f4ee;
+    --color-pale-oak-100: #efeadc;
     --color-pale-oak-200: #dfd4b9;
     --color-pale-oak-300: #cfbf96;
+    --color-pale-oak-400: #bfa973;
+    --color-pale-oak-500: #af9450;
+    --color-pale-oak-600: #8c7640;
     --color-pale-oak-700: #695930;
     --color-pale-oak-900: #231e10;
     --color-thistle-50: #f6eff2;
@@ -240,6 +244,9 @@
 @layer utilities {
   .pointer-events-none {
     pointer-events: none;
+  }
+  .invisible {
+    visibility: hidden;
   }
   .visible {
     visibility: visible;
@@ -450,8 +457,8 @@
   .max-h-\[75vh\] {
     max-height: 75vh;
   }
-  .max-h-full {
-    max-height: 100%;
+  .max-h-screen {
+    max-height: 100vh;
   }
   .min-h-0 {
     min-height: calc(var(--spacing) * 0);
@@ -533,6 +540,9 @@
   }
   .w-px {
     width: 1px;
+  }
+  .max-w-\[100vw\] {
+    max-width: 100vw;
   }
   .max-w-full {
     max-width: 100%;
@@ -875,6 +885,9 @@
   .bg-muted-teal-700 {
     background-color: var(--color-muted-teal-700);
   }
+  .bg-pale-oak-100 {
+    background-color: var(--color-pale-oak-100);
+  }
   .bg-pale-oak-700 {
     background-color: var(--color-pale-oak-700);
   }
@@ -896,6 +909,30 @@
   .bg-watermelon-900 {
     background-color: var(--color-watermelon-900);
   }
+  .fill-cerulean-400\/5 {
+    fill: color-mix(in srgb, #71b1c1 5%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-cerulean-400) 5%, transparent);
+    }
+  }
+  .fill-cerulean-400\/15 {
+    fill: color-mix(in srgb, #71b1c1 15%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-cerulean-400) 15%, transparent);
+    }
+  }
+  .fill-cerulean-400\/30 {
+    fill: color-mix(in srgb, #71b1c1 30%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-cerulean-400) 30%, transparent);
+    }
+  }
+  .fill-cerulean-400\/40 {
+    fill: color-mix(in srgb, #71b1c1 40%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-cerulean-400) 40%, transparent);
+    }
+  }
   .fill-current {
     fill: currentcolor;
   }
@@ -908,8 +945,68 @@
   .fill-none {
     fill: none;
   }
+  .fill-pale-oak-300\/10 {
+    fill: color-mix(in srgb, #cfbf96 10%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-pale-oak-300) 10%, transparent);
+    }
+  }
+  .fill-pale-oak-300\/20 {
+    fill: color-mix(in srgb, #cfbf96 20%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-pale-oak-300) 20%, transparent);
+    }
+  }
+  .fill-pale-oak-300\/30 {
+    fill: color-mix(in srgb, #cfbf96 30%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-pale-oak-300) 30%, transparent);
+    }
+  }
+  .fill-pale-oak-400\/20 {
+    fill: color-mix(in srgb, #bfa973 20%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-pale-oak-400) 20%, transparent);
+    }
+  }
+  .fill-pale-oak-400\/45 {
+    fill: color-mix(in srgb, #bfa973 45%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      fill: color-mix(in oklab, var(--color-pale-oak-400) 45%, transparent);
+    }
+  }
+  .fill-transparent {
+    fill: transparent;
+  }
+  .stroke-cerulean-300 {
+    stroke: var(--color-cerulean-300);
+  }
   .stroke-cerulean-400 {
     stroke: var(--color-cerulean-400);
+  }
+  .stroke-cerulean-400\/70 {
+    stroke: color-mix(in srgb, #71b1c1 70%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      stroke: color-mix(in oklab, var(--color-cerulean-400) 70%, transparent);
+    }
+  }
+  .stroke-cerulean-600 {
+    stroke: var(--color-cerulean-600);
+  }
+  .stroke-pale-oak-300 {
+    stroke: var(--color-pale-oak-300);
+  }
+  .stroke-pale-oak-400 {
+    stroke: var(--color-pale-oak-400);
+  }
+  .stroke-pale-oak-500 {
+    stroke: var(--color-pale-oak-500);
+  }
+  .stroke-pale-oak-600 {
+    stroke: var(--color-pale-oak-600);
+  }
+  .stroke-transparent {
+    stroke: transparent;
   }
   .stroke-watermelon-400 {
     stroke: var(--color-watermelon-400);
@@ -1159,6 +1256,9 @@
   }
   .text-pale-oak-300 {
     color: var(--color-pale-oak-300);
+  }
+  .text-pale-oak-700 {
+    color: var(--color-pale-oak-700);
   }
   .text-slate-grey-50 {
     color: var(--color-slate-grey-50);

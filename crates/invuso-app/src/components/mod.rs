@@ -60,7 +60,7 @@ pub use error_banner::ErrorBanner;
 pub use expense_row::ExpenseRow;
 pub use group_icon::{GroupIcon, GroupIconGlyph};
 pub use icon_picker::{IconPicker, IconSet};
-pub use image_viewer::ImageViewer;
+pub use image_viewer::{ImageMark, ImageViewer};
 pub use keypad::Keypad;
 pub use language_picker::LanguagePicker;
 pub use link_row::LinkRow;

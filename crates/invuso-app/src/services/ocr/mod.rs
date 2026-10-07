@@ -8,6 +8,7 @@
 //! background and reports progress to the UI.
 
 mod jobs;
+mod marks;
 mod paddle;
 pub(crate) mod preprocess;
 
@@ -17,6 +18,7 @@ use image::RgbImage;
 use thiserror::Error;
 
 pub use jobs::{OcrJob, OcrJobs};
+pub use marks::{ItemMark, PhotoQuad, bounds_of, is_unsure, item_marks};
 pub use paddle::PaddleOcr;
 
 use crate::storage::{Db, OcrFragment, ReceiptText, StorageError};
@@ -88,7 +90,8 @@ pub fn analyze_receipt(
         engine.name(),
         recognition.fragments,
         recognition.skew_degrees,
-    );
+    )
+    .with_image_size(image.width(), image.height());
     db.save_receipt_text(receipt_id, &text)?;
     Ok(text)
 }
@@ -161,6 +164,7 @@ mod tests {
         assert_eq!(steps.len(), 2);
         assert_eq!(text.raw_text, "SUMME 1,99");
         assert_eq!(text.skew_degrees, 1.5);
+        assert_eq!(text.image_size, Some((40, 20)));
         assert_eq!(db.receipt_text(&receipt.id).unwrap(), Some(text));
 
         let missing = analyze_receipt(&db, &dir, &engine, "missing", &mut |_| {});
@@ -172,11 +176,15 @@ mod tests {
     /// not in the repository (`spikes/ocr/README.md`). Writes the rows to
     /// `spikes/ocr/results/app/` for `score.py`; `OCR_CONTRAST=off` skips
     /// the contrast stretch (results in `app-raw/`) to compare both.
+    /// `OCR_CORNERS=corners` or `paper_edges` first crops and straightens
+    /// each photo with the corners that method suggests, as the app does.
     #[test]
     #[ignore = "needs the AP-S1 sample photos in spikes/ocr/samples"]
     fn recognizes_the_sample_receipts() {
         use invuso_core::domain::Currency;
         use invuso_core::receipt::{TotalCheck, parse_receipt, text_rows};
+
+        use crate::services::receipt_edit::{CornerMethod, ImageEdit};
 
         let app = Path::new(env!("CARGO_MANIFEST_DIR"));
         let spike = app.join("../../spikes/ocr");
@@ -219,18 +227,26 @@ mod tests {
         .unwrap();
         let tiny_recognizer = models == "tiny";
         let stretch = std::env::var("OCR_CONTRAST").as_deref() != Ok("off");
+        let corners = std::env::var("OCR_CORNERS")
+            .ok()
+            .filter(|code| !code.is_empty())
+            .map(|code| {
+                CornerMethod::from_code(&code)
+                    .unwrap_or_else(|| panic!("unknown OCR_CORNERS `{code}`"))
+            });
         // `OCR_SAMPLES=samples_tilted` runs another folder of the spike.
         let samples = std::env::var("OCR_SAMPLES").unwrap_or_else(|_| "samples".to_string());
         let out = spike
             .join("results")
             .join(format!(
-                "app{}{}",
+                "app{}{}{}",
                 if models == "small" {
                     String::new()
                 } else {
                     format!("-{models}")
                 },
-                if stretch { "" } else { "-raw" }
+                if stretch { "" } else { "-raw" },
+                corners.map_or(String::new(), |m| format!("-{}", m.code()))
             ))
             .join(if samples == "samples" {
                 ""
@@ -251,6 +267,12 @@ mod tests {
         for path in paths {
             let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
             let mut image = preprocess::decode(&std::fs::read(&path).unwrap()).unwrap();
+            if let Some(found) = corners.and_then(|method| method.detect(&image)) {
+                let edit = ImageEdit::default().with_upright_corners(found);
+                if let Some(straight) = edit.apply(&image) {
+                    image = straight;
+                }
+            }
             if stretch {
                 preprocess::stretch_contrast(&mut image);
             }

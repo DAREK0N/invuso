@@ -212,11 +212,16 @@ pub(super) fn quantity_after_times(token: &str) -> Option<Decimal> {
 
 /// Tokens printed after the price that carry no amount: tax classes
 /// (`A`, `B`, `AW`, `*`), currency marks and per-unit marks (`EUR/kg`),
-/// and specks the recognizer read as a single foreign character (`不`).
+/// also with a star glued on (`EUR*`, fuel rows), and specks the
+/// recognizer read as a single foreign character (`不`).
 pub(super) fn is_trailing_mark(token: &str, currency: Currency) -> bool {
     let is_speck =
         token.chars().count() == 1 && !token.is_ascii() && !is_currency_mark(token, currency);
     if is_speck {
+        return true;
+    }
+    let starred = token.strip_suffix('*').filter(|rest| !rest.is_empty());
+    if starred.is_some_and(|rest| is_currency_mark(rest, currency)) {
         return true;
     }
     let is_tax_class =
@@ -481,10 +486,12 @@ mod tests {
     #[test]
     fn trailing_marks() {
         let eur = cur("EUR");
-        for token in ["A", "B", "AW", "*", "EUR", "€", "EUR/kg", "€/kg", "/kg"] {
+        for token in [
+            "A", "B", "AW", "*", "EUR", "€", "EUR*", "EUR/kg", "€/kg", "/kg",
+        ] {
             assert!(is_trailing_mark(token, eur), "{token}");
         }
-        for token in ["Kern", "ABC", "1,49", "12L"] {
+        for token in ["Kern", "ABC", "1,49", "12L", "Super*", "**"] {
             assert!(!is_trailing_mark(token, eur), "{token}");
         }
     }

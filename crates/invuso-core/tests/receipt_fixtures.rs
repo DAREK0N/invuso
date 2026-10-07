@@ -800,3 +800,33 @@ fn netto_second_app_run_with_a_doubled_separator() {
     assert_eq!(cents(receipt.total), Some(2248));
     assert_eq!(receipt.check, TotalCheck::Matches);
 }
+
+#[test]
+fn fuel_station_with_card_slip_before_the_total() {
+    // Crumpled: the items rise to the right, the sums fall. The card slip
+    // and its payment row come before `TOTAL`; the fuel row stars its
+    // amount (`20,01 EUR*`) and its product (`*Super`).
+    let receipt = parse(include_str!("fixtures/receipts/de_q1_tankstelle_2026.tsv"));
+    assert_items(
+        &receipt,
+        &[
+            ("Super", "1", Some(2001), 2001),
+            ("Red Bull Winter Edition", "1", Some(295), 295),
+            ("Pfand 25 Cent", "1", Some(25), 25),
+        ],
+    );
+    assert_eq!(receipt.items[2].kind, ItemKind::Deposit);
+    assert_eq!(cents(receipt.total), Some(2321));
+    assert_eq!(cents(receipt.tendered), Some(2321));
+    assert_eq!(receipt.check, TotalCheck::Matches);
+    assert_eq!(receipt.vat.len(), 1);
+    assert_eq!(receipt.vat[0].amount.amount_minor(), 371);
+    // Nothing of the card slip is an item.
+    assert!(
+        receipt
+            .rows
+            .iter()
+            .filter(|row| row.text.starts_with("EUR 23.21"))
+            .all(|row| row.kind == RowKind::Other)
+    );
+}

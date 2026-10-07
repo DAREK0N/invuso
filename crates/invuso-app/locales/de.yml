@@ -119,6 +119,12 @@ settings:
   receipt_section: "Kassenzettel"
   auto_corners: "Ecken automatisch erkennen"
   auto_corners_hint: "Setzt die Ecken nach dem Foto auf die Kante des Belegs; du kannst sie danach noch verschieben."
+  corner_method: "Art der Erkennung"
+  corner_method_corners: "Eckenerkennung"
+  corner_method_corners_hint: "Sucht die helle Fläche des Belegs und ihre äußersten Punkte. Braucht einen Untergrund, der dunkler ist als das Papier."
+  corner_method_edges: "Papierkante"
+  corner_method_edges_hint: "Sucht die geraden Kanten des Papiers. Klappt auch auf hellem Tisch, solange die Kante zu sehen ist."
+  corner_margin_info: "Um die erkannten Ecken bleibt ein kleiner Sicherheitsabstand. So wird nichts vom Beleg abgeschnitten und die Texterkennung kommt besser zurecht."
   data_section: "Daten"
   app_language: "Sprache der App"
 
@@ -621,6 +627,7 @@ receipt:
   take_photo: "Foto"
   choose: "Galerie"
   image_error: "Das Bild kann nicht angezeigt werden. Es bleibt archiviert."
+  mark: "Position: %{text}"
 
 items:
   title: "Positionen"
@@ -674,6 +681,11 @@ items:
   delete: "Löschen"
   cannot_split: "Diese Position lässt sich nicht weiter teilen."
   participants_hint: "Diese Personen teilen sich alles, was niemandem zugeordnet ist."
+  unsure: "Unsicher erkannt"
+  unsure_one: "1 Position ist unsicher erkannt. Tippe sie an, um sie mit dem Foto zu vergleichen."
+  unsure_other: "%{count} Positionen sind unsicher erkannt. Tippe sie an, um sie mit dem Foto zu vergleichen."
+  unsure_hint: "Unsicher erkannt: Bezeichnung und Preise bitte mit dem Foto vergleichen. Nach einer Änderung verschwindet die Markierung."
+  photo: "Stelle im Kassenzettel vergrößern"
 
 packs:
   intro: "Ohne Übersetzer des Geräts übersetzt Invuso Kassenzettel mit heruntergeladenen Sprachpaketen, danach offline. Es wird nur heruntergeladen, was du hier antippst."

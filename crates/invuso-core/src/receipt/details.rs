@@ -634,6 +634,7 @@ mod tests {
                 bottom: height,
             },
             kind,
+            fragments: Vec::new(),
         }
     }
 
