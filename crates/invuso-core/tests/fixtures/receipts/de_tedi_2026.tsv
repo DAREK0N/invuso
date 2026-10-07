@@ -1,0 +1,36 @@
+# Source: own photo of the user (TEDi, crumpled), shared for Invuso (AP-38).
+# OCR: PP-OCRv6 small via rten, app pipeline on the host (services::ocr), fragments as recognized.
+# Anonymized: address and register/cashier numbers replaced; card terminal data cut off.
+# Columns: left, top, right, bottom (pixels), text
+509	844	944	913	TEDi GmbH & Co. KG
+461	898	1008	963	Musterstraße 1
+384	940	1060	1018	99999 Musterstadt
+583	997	874	1055	Filiale 0000
+246	1097	429	1148	Kasse:0
+511	1092	1212	1159	Bon:00000 Kassierer: 000000
+510	1138	1189	1207	Datum:02.10.2026/12:46:48
+251	1145	474	1197	Shop:0000
+1127	1243	1216	1310	EUR
+980	1292	1019	1349	A
+243	1288	468	1347	Stabkerze
+240	1335	607	1395	000000000000001
+1101	1341	1214	1411	2,55
+978	1390	1019	1450	A
+234	1433	607	1496	000000000000002
+1099	1443	1212	1513	2,00
+1009	1513	1036	1526	vee
+218	1532	369	1650	TOTAL
+1092	1544	1222	1672	4,55
+207	1680	425	1759	girocard
+1089	1699	1209	1772	4,55
+202	1724	422	1812	Rückgeld
+1086	1753	1208	1824	0.00
+215	1795	537	1915	19,.00 % MwSt
+587	1833	629	1889	A
+810	1840	930	1911	4,55
+1083	1849	1205	1919	0,73
+186	1850	583	1966	Netto ohne MwSt
+1083	1903	1204	1973	3,82
+380	1920	971	2000	-K-U-N-D-E-N-B-E-L-E-G-
+235	1383	894	1447	Stabkerzenhalter Hirschkopf
+1040	1511	1133	1532	sh ans u sa

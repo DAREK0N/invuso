@@ -15,9 +15,12 @@
 //! header, amounts without minor units, counts glued to names and tax
 //! added on top (`外税`).
 
+use std::collections::BTreeMap;
+
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
+use super::details::{is_dated, read_details};
 use super::rows::group_rows;
 use super::tokens::{
     count_glued_to_name, count_in_brackets, is_currency_mark, is_piece_word, is_tax_class_word,
@@ -25,9 +28,10 @@ use super::tokens::{
     parse_quantity, quantity_after_times, quantity_before_times, quantity_fits, split_glued_amount,
     strip_tax_class,
 };
+use super::vat::read_vat;
 use super::{
-    ItemKind, ParsedItem, ParsedReceipt, ReceiptError, ReceiptRow, RecognizedText, RowKind,
-    TotalCheck,
+    ItemKind, ParsedItem, ParsedReceipt, ReceiptDetails, ReceiptError, ReceiptRow, RecognizedText,
+    RowKind, TotalCheck,
 };
 use crate::domain::{Currency, Money};
 
@@ -115,9 +119,33 @@ pub fn parse_receipt(
         tendered: money(reader.tendered),
         change: money(reader.change),
         check: TotalCheck::NoTotal,
+        details: ReceiptDetails::default(),
+        vat: Vec::new(),
     };
+    receipt.details = read_details(&receipt.rows);
+    receipt.vat = read_vat(&receipt.rows, currency);
+    // Tax is less than the total, and tax added on top is an item already.
+    let added: Vec<i64> = receipt
+        .items
+        .iter()
+        .filter(|item| item.kind == ItemKind::Tax)
+        .map(|item| item.total_price.amount_minor())
+        .collect();
+    let added_sum: i64 = added.iter().sum();
+    let total_minor = receipt.total.map(|m| m.amount_minor());
+    receipt.vat.retain(|line| {
+        let amount = line.amount.amount_minor();
+        total_minor.is_none_or(|total| amount < total)
+            && !added.contains(&amount)
+            && amount != added_sum
+    });
+    drop_items_above_the_date(&mut receipt);
+    attach_to_articles(&mut receipt);
     if let Some(total) = reader.total {
         repair_yen_marks(&mut receipt.items, total, currency);
+        repair_returns(&mut receipt.items, total);
+        drop_counts_read_as_yen(&mut receipt.items, total, currency);
+        recover_misread_prices(&mut receipt, total, &cx);
     }
     receipt.check = match receipt.total {
         None => TotalCheck::NoTotal,
@@ -138,6 +166,178 @@ pub fn parse_receipt(
     };
     Ok(receipt)
 }
+
+/// A deposit or discount printed right below an article (or below its
+/// deposit) belongs to it. Returned bottles stand on their own, and so does
+/// whatever is printed among the sums (a discount on the whole receipt).
+fn attach_to_articles(receipt: &mut ParsedReceipt) {
+    let first_sum = receipt
+        .rows
+        .iter()
+        .position(|row| matches!(row.kind, RowKind::Subtotal | RowKind::Total))
+        .unwrap_or(receipt.rows.len());
+    for at in 1..receipt.items.len() {
+        let (before, rest) = receipt.items.split_at_mut(at);
+        let (previous, item) = (&before[at - 1], &mut rest[0]);
+        let below = match (previous.rows.last(), item.rows.first()) {
+            (Some(&last), Some(&first)) => first > last && first - last <= 2 && first < first_sum,
+            _ => false,
+        };
+        let follows_article = previous.kind == ItemKind::Article || previous.attached;
+        let adds_to_it = matches!(item.kind, ItemKind::Deposit | ItemKind::Discount)
+            && !names_any(&item.text, RETURNED_BOTTLES);
+        item.attached = below && follows_article && adds_to_it;
+    }
+}
+
+/// Words of returned bottles: a refund of its own, not part of an article.
+const RETURNED_BOTTLES: &[&str] = &[
+    "leergut",
+    "pfandrück",
+    "pfandruck",
+    "pfandbon",
+    "pfandgutschrift",
+];
+
+/// Japanese receipts print shop data, then the date, then the items. When
+/// items follow the first dated row, nothing above it is an item: numbers
+/// up there are phone, slip and register numbers.
+fn drop_items_above_the_date(receipt: &mut ParsedReceipt) {
+    let japanese = super::language::detect_language(receipt.rows.iter().map(|r| r.text.as_str()))
+        == Some("ja");
+    let Some(dated) = receipt
+        .rows
+        .iter()
+        .position(|row| is_dated(&row.text, japanese))
+    else {
+        return;
+    };
+    let first_row = |item: &ParsedItem| item.rows.first().copied().unwrap_or(0);
+    if !receipt.items.iter().any(|item| first_row(item) > dated) {
+        return;
+    }
+    let rows = &mut receipt.rows;
+    receipt.items.retain(|item| {
+        let keep = first_row(item) > dated;
+        if !keep {
+            for &row in &item.rows {
+                rows[row].kind = RowKind::Other;
+            }
+        }
+        keep
+    });
+}
+
+/// Set parts and side dishes print their count (`1`) where other rows
+/// print a price; in yen that reads as 1 yen. If the items exceed the
+/// printed total by exactly the sum of such one-digit amounts, they go.
+fn drop_counts_read_as_yen(items: &mut Vec<ParsedItem>, total: i64, currency: Currency) {
+    if currency.exponent() != 0 {
+        return;
+    }
+    let is_count = |item: &ParsedItem| {
+        item.kind == ItemKind::Article
+            && item.quantity == Decimal::ONE
+            && (1..=9).contains(&item.total_price.amount_minor())
+    };
+    let sum: i64 = items.iter().map(|i| i.total_price.amount_minor()).sum();
+    let counts: i64 = items
+        .iter()
+        .filter(|i| is_count(i))
+        .map(|i| i.total_price.amount_minor())
+        .sum();
+    if counts > 0 && sum != total && sum - counts == total {
+        items.retain(|item| !is_count(item));
+    }
+}
+
+/// A price whose tax class was read as one more digit (`0,99 B` →
+/// `0,990`) is no amount, so its item is lost. If exactly one such row
+/// above the sums makes the items match the printed total, it becomes the
+/// item it was.
+fn recover_misread_prices(receipt: &mut ParsedReceipt, total: i64, cx: &Context) {
+    let exponent = cx.currency.exponent() as usize;
+    if exponent == 0 {
+        return;
+    }
+    let sum: i64 = receipt
+        .items
+        .iter()
+        .map(|item| item.total_price.amount_minor())
+        .sum();
+    let missing = total - sum;
+    if missing <= 0 {
+        return;
+    }
+    let first_sum = receipt
+        .rows
+        .iter()
+        .position(|row| matches!(row.kind, RowKind::Subtotal | RowKind::Total))
+        .unwrap_or(receipt.rows.len());
+    let candidates: Vec<(usize, String)> = receipt.rows[..first_sum]
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.kind == RowKind::Other)
+        .filter_map(|(index, row)| {
+            let mut tokens: Vec<&str> = row.text.split_whitespace().collect();
+            // Tax classes after the price (`0.,69 B`).
+            while tokens.len() > 2
+                && tokens
+                    .last()
+                    .is_some_and(|token| is_trailing_mark(token, cx.currency))
+            {
+                tokens.pop();
+            }
+            let (last, name) = tokens.split_last()?;
+            let amount = misread_price(last, cx)?;
+            let name = name.join(" ");
+            (amount == missing && name.chars().any(char::is_alphabetic)).then_some((index, name))
+        })
+        .collect();
+    let [(row, name)] = candidates.as_slice() else {
+        return;
+    };
+    let at = receipt
+        .items
+        .iter()
+        .position(|item| item.rows.first().is_some_and(|first| first > row))
+        .unwrap_or(receipt.items.len());
+    let price = Money::new(missing, cx.currency);
+    receipt.items.insert(
+        at,
+        ParsedItem {
+            text: name.clone(),
+            quantity: Decimal::ONE,
+            unit_price: Some(price),
+            total_price: price,
+            kind: ItemKind::Article,
+            rows: vec![*row],
+            attached: false,
+        },
+    );
+    receipt.rows[*row].kind = RowKind::Item;
+}
+
+/// The amount a token that is no price was most likely meant to be: one
+/// digit too many at the end (`0,990`, the class read as `0`) or a doubled
+/// separator (`0.,69`).
+fn misread_price(token: &str, cx: &Context) -> Option<i64> {
+    if cx.price(token).is_some() {
+        return None;
+    }
+    // Only an ASCII digit is dropped, so the cut is on a character boundary.
+    let without_digit = token
+        .strip_suffix(|c: char| c.is_ascii_digit())
+        .and_then(|trimmed| cx.price(trimmed));
+    let single_separator = ["..", ".,", ",.", ",,"]
+        .iter()
+        .find(|double| token.contains(*double))
+        .and_then(|double| cx.price(&token.replacen(double, ",", 1)));
+    without_digit.or(single_separator)
+}
+
+/// At most this many tax rows are tried as added tax (2^n sums).
+const MAX_TAX_CANDIDATES: usize = 8;
 
 /// At most this many items are tried in [`repair_yen_marks`] (2^n sums).
 const MAX_MARK_CANDIDATES: usize = 10;
@@ -267,6 +467,9 @@ struct Context {
     currency: Currency,
     /// False when the till prints a minus after every amount (IKEA).
     trailing_minus_negates: bool,
+    /// VAT class marks of this receipt (`A`, `B`): short capitals printed
+    /// next to prices in several rows, removed from the end of names.
+    tax_classes: Vec<String>,
 }
 
 impl Context {
@@ -277,9 +480,43 @@ impl Context {
             .filter_map(|token| parse_price(token, currency))
             .collect();
         let with_minus = prices.iter().filter(|p| p.trailing_minus).count();
+        let is_price = |token: &str| parse_price(token, currency).is_some();
+        let mut marks: BTreeMap<&str, usize> = BTreeMap::new();
+        for row in rows {
+            for pair in row.windows(2) {
+                let mark = match pair {
+                    [mark, price] if is_price(price) => mark,
+                    [price, mark] if is_price(price) => mark,
+                    _ => continue,
+                };
+                let is_class = (1..=2).contains(&mark.len())
+                    && mark.chars().all(|c| c.is_ascii_uppercase())
+                    && !is_times(mark)
+                    && !is_unit_word(mark);
+                if is_class {
+                    *marks.entry(mark).or_default() += 1;
+                }
+            }
+        }
         Self {
             currency,
             trailing_minus_negates: prices.len() < 2 || with_minus * 2 <= prices.len(),
+            tax_classes: marks
+                .into_iter()
+                .filter(|(_, count)| *count >= 2)
+                .map(|(mark, _)| mark.to_string())
+                .collect(),
+        }
+    }
+
+    fn is_tax_class(&self, token: &str) -> bool {
+        self.tax_classes.iter().any(|class| class == token)
+    }
+
+    /// The name without the VAT class at its end (`Stabkerze A`).
+    fn trim_tax_class(&self, words: &mut Vec<&str>) {
+        while words.len() > 1 && words.last().is_some_and(|word| self.is_tax_class(word)) {
+            words.pop();
         }
     }
 
@@ -360,14 +597,116 @@ const TAX_WORDS: &[&str] = &[
     "tax",
 ];
 
+/// Parts of words naming a deposit paid on top (`Pfand`, `Einwegpfand`,
+/// `PFAND 0,25`), compared in [`keyword_form`].
+const DEPOSIT_WORDS: &[&str] = &["pfand", "deposit", "cauzione"];
+
+/// Parts of words naming money given back: returned bottles, vouchers,
+/// coupons and discounts (OCR-15). Checked before [`DEPOSIT_WORDS`], since
+/// `Pfandrückgabe` and `Pfandbon` contain `pfand`.
+const RETURN_WORDS: &[&str] = &[
+    "leergut",
+    "pfandrück",
+    "pfandruck",
+    "pfandbon",
+    "pfandgutschrift",
+    "gutschein",
+    "gutschrift",
+    "coupon",
+    "voucher",
+    "rabatt",
+    "nachlass",
+    "preisvorteil",
+    "discount",
+    "クーポン",
+    "割引",
+    "値引",
+];
+
+/// What an item is: negative amounts subtract; a positive amount is a
+/// deposit if its first word says so (`Wasser inkl. Pfand` is an article).
+fn item_kind(draft: &Draft) -> ItemKind {
+    let first_word = draft.text.split_whitespace().next().unwrap_or_default();
+    if draft.tax {
+        ItemKind::Tax
+    } else if draft.total < 0 {
+        ItemKind::Discount
+    } else if names_any(first_word, DEPOSIT_WORDS) && !names_any(&draft.text, RETURN_WORDS) {
+        ItemKind::Deposit
+    } else {
+        ItemKind::Article
+    }
+}
+
+/// Whether a word of `text` contains one of `parts`.
+fn names_any(text: &str, parts: &[&str]) -> bool {
+    text.split_whitespace()
+        .map(keyword_form)
+        .any(|word| parts.iter().any(|part| word.contains(part)))
+}
+
+/// Some tills print returned bottles and vouchers without a minus
+/// (`Leergut 0,25`). If the items miss the printed total and subtracting
+/// all such lines instead of adding them makes it match exactly, they
+/// become discounts.
+fn repair_returns(items: &mut [ParsedItem], total: i64) {
+    let is_return = |item: &ParsedItem| {
+        item.kind == ItemKind::Article
+            && item.total_price.amount_minor() > 0
+            && names_any(&item.text, RETURN_WORDS)
+    };
+    let sum = items.iter().try_fold(0_i64, |sum, item| {
+        sum.checked_add(item.total_price.amount_minor())
+    });
+    let returned = items
+        .iter()
+        .filter(|item| is_return(item))
+        .try_fold(0_i64, |sum, item| {
+            sum.checked_add(item.total_price.amount_minor())
+        });
+    let (Some(sum), Some(returned)) = (sum, returned) else {
+        return;
+    };
+    let flipped = returned
+        .checked_mul(2)
+        .and_then(|twice| sum.checked_sub(twice));
+    if returned == 0 || sum == total || flipped != Some(total) {
+        return;
+    }
+    for item in items.iter_mut().filter(|item| is_return(item)) {
+        let currency = item.total_price.currency();
+        item.total_price = Money::new(-item.total_price.amount_minor(), currency);
+        item.unit_price = item
+            .unit_price
+            .map(|unit| Money::new(-unit.amount_minor(), currency));
+        item.kind = ItemKind::Discount;
+    }
+}
+
+/// Words saying a VAT amount is already in the prices.
+const INCLUDED_TAX_WORDS: &[&str] = &["inkl", "enth", "incl", "included", "netto", "brutto"];
+
 /// Japanese sum words, found anywhere in the row since tills print dates
 /// or counts in front (`2022年03月01日 小計 712`) and space the letters
 /// out (`小 計`). Checked in this order: `お預り合計` is a payment.
 const JAPANESE_KEYWORDS: &[(&[&str], Keyword)] = &[
     (&["釣", "おつり"], Keyword::Change),
-    (&["預", "現金", "クレジット", "支払"], Keyword::Payment),
-    (&["小計"], Keyword::Subtotal),
-    (&["合計", "総計", "会計"], Keyword::Total),
+    (
+        &[
+            "預",
+            "現金",
+            "クレジット",
+            "支払",
+            "電子マネー",
+            "コード",
+            "交通系",
+            "楽天ペイ",
+            "払い",
+        ],
+        Keyword::Payment,
+    ),
+    (&["小計", "税抜計", "品計"], Keyword::Subtotal),
+    (&["合計", "総計", "会計", "現計", "お買上"], Keyword::Total),
 ];
 
 /// Words of Japanese tax rows: `内税` (included), `外税` (added),
@@ -387,6 +726,21 @@ fn keyword(tokens: &[&str], cx: &Context) -> Option<Keyword> {
                 .flatten()
         })
         .or_else(|| japanese_keyword(&label(tokens, cx)))
+        .or_else(|| payment_brand(tokens))
+}
+
+/// Cashless payment brands printed with the amount paid (`nanaco支払
+/// ¥1,294`, `QRコード(PayPay等) 8,800`).
+const PAYMENT_BRANDS: &[&str] = &["paypay", "nanaco", "waon", "suica", "pasmo", "icoca"];
+
+fn payment_brand(tokens: &[&str]) -> Option<Keyword> {
+    tokens
+        .iter()
+        .any(|token| {
+            let lower = token.to_lowercase();
+            PAYMENT_BRANDS.iter().any(|brand| lower.contains(brand))
+        })
+        .then_some(Keyword::Payment)
 }
 
 fn japanese_keyword(label: &str) -> Option<Keyword> {
@@ -432,6 +786,46 @@ fn is_count_row(tokens: &[&str]) -> bool {
     });
     let yen = tokens.iter().any(|token| token.contains(['¥', '￥', '円']));
     counts && !yen
+}
+
+/// `(税合計 ¥17`, `消費税等(8%)合計 ¥229`: the tax in the total, not the
+/// total. `合計(税込)`, `税込合計` and `税抜計` are sums, `外税計` is
+/// tax added on top.
+fn is_tax_sum(label: &str) -> bool {
+    !label.is_ascii()
+        && label.contains('税')
+        && label.contains('計')
+        && !["合計", "総計", "小計", "外"]
+            .iter()
+            .any(|word| label.starts_with(word))
+        && !label.contains("税込")
+        && !label.contains("税抜")
+}
+
+/// Words of header and footer rows whose numbers are no prices: phone,
+/// registration, terminal, slip, table and staff numbers.
+const HEADER_INFO_WORDS: &[&str] = &[
+    "登録番号",
+    "電話",
+    "端末",
+    "レシート",
+    "伝票",
+    "テーブル",
+    "呼出",
+    "店舗",
+    "取引",
+    "担当",
+];
+
+/// A row of the shop's or slip's data rather than an item: `TEL03-3694-8275
+/// レジ118677`, `登録番号 T1234`, or an address (`愛知県名古屋市中区大須3-30-8`).
+fn is_header_info(tokens: &[&str]) -> bool {
+    let text: String = tokens.concat();
+    let lower = text.to_lowercase();
+    let address = ['都', '道', '府', '県'].iter().any(|c| text.contains(*c))
+        && ['市', '区', '町', '村'].iter().any(|c| text.contains(*c))
+        && text.chars().any(|c| c.is_ascii_digit());
+    lower.starts_with("tel") || HEADER_INFO_WORDS.iter().any(|word| text.contains(word)) || address
 }
 
 /// `品名 単価 数量 金額`, `数 メニュー 金額`: the column header of the item
@@ -490,6 +884,9 @@ fn analyze(tokens: &[&str], cx: &Context) -> Line {
     if is_table_header(&label) {
         return Line::Header;
     }
+    if is_tax_sum(&label) {
+        return Line::Tax;
+    }
     if let Some(keyword) = keyword(tokens, cx) {
         return Line::Keyword { keyword, prices };
     }
@@ -504,15 +901,24 @@ fn analyze(tokens: &[&str], cx: &Context) -> Line {
     {
         return Line::Plain;
     }
-    if is_count_row(tokens) {
+    if is_count_row(tokens) || is_header_info(tokens) {
         return Line::Plain;
     }
+    // `10%対象計 ¥210`, `税込対象額 ¥8,800`: the amount a rate applies to.
     let japanese_tax = !label.is_ascii()
-        && (JAPANESE_TAX_WORDS.iter().any(|word| label.contains(word)) || label.ends_with('税'));
+        && (JAPANESE_TAX_WORDS.iter().any(|word| label.contains(word))
+            || label.ends_with('税')
+            || label.contains("対象"));
     if japanese_tax {
         // `外税 8% ¥18` adds tax; `外税8%対象額 ¥228` is the base it is
         // computed on.
-        let added = matches!(label.as_str(), "外税" | "外税額");
+        // So may `消費税等(8%) ¥8` and `外8% ¥111` between the subtotals
+        // of tills that print prices without tax; whether they were added
+        // is decided against the total (`add_taxes_if_they_explain`).
+        let added = matches!(label.as_str(), "外税" | "外税額")
+            || ((label.starts_with('外') || label.starts_with("消費税"))
+                && !label.contains('内')
+                && !label.contains("対象"));
         return match prices.as_slice() {
             &[amount] if amount > 0 && added => Line::Item(Draft {
                 text: "外税".to_string(),
@@ -530,6 +936,32 @@ fn analyze(tokens: &[&str], cx: &Context) -> Line {
         .is_some_and(|token| TAX_WORDS.contains(&keyword_form(token).as_str()));
     // `Rabatt 20% -1,00` is a discount; `A 7 % 0,53 7,51 8,04` a VAT row.
     if (has_percent && (prices.len() >= 2 || first_price >= 0)) || starts_with_tax_word {
+        // `TAX 6% $1.87` between subtotal and total may be added on top;
+        // whether it was is decided against the total.
+        let included = tokens.iter().any(|token| {
+            INCLUDED_TAX_WORDS
+                .iter()
+                .any(|word| keyword_form(token).starts_with(word))
+        });
+        if starts_with_tax_word
+            && !included
+            && let &[amount] = prices.as_slice()
+            && amount > 0
+        {
+            let text = tokens
+                .iter()
+                .filter(|token| cx.price(token).is_none())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ");
+            return Line::Item(Draft {
+                text,
+                quantity: None,
+                unit: None,
+                total: amount,
+                tax: true,
+            });
+        }
         return Line::Tax;
     }
     item_or_quantity(tokens, cx)
@@ -546,7 +978,16 @@ enum Marker {
 
 fn item_or_quantity(tokens: &[&str], cx: &Context) -> Line {
     let mut end = tokens.len();
-    while end > 0 && is_trailing_mark(tokens[end - 1], cx.currency) {
+    // dm prints the VAT class as a digit after the price (`7,50 2`). With
+    // minor units a lone digit is no amount, so after a price it is a mark.
+    let tax_class_digit = |at: usize| {
+        cx.currency.exponent() > 0
+            && at >= 1
+            && tokens[at].len() == 1
+            && tokens[at].chars().all(|c| c.is_ascii_digit())
+            && cx.price(tokens[at - 1]).is_some()
+    };
+    while end > 0 && (is_trailing_mark(tokens[end - 1], cx.currency) || tax_class_digit(end - 1)) {
         end -= 1;
     }
     let mut prices = Vec::with_capacity(2);
@@ -583,6 +1024,7 @@ fn item_or_quantity(tokens: &[&str], cx: &Context) -> Line {
     if head.first().is_some_and(|word| is_tax_class_word(word)) {
         head.remove(0);
     }
+    cx.trim_tax_class(&mut head);
     // `(セット) 400 (1) ¥400`: unit price and count in brackets.
     if let &[total] = prices.as_slice()
         && let [.., unit, count] = head[..]
@@ -610,10 +1052,46 @@ fn item_or_quantity(tokens: &[&str], cx: &Context) -> Line {
             tax: false,
         });
     }
+    // `メンソレータムエクシ1,480 1,480`: the unit price glued to the name.
+    if let &[total] = prices.as_slice()
+        && let Some(last) = head.last()
+        && let Some((name, amount, "")) = split_glued_amount(last)
+        && !name.is_empty()
+        && cx.price(amount) == Some(total)
+    {
+        let at = head.len() - 1;
+        head[at] = name;
+    }
+    // `4 x Coupon 15% Bad Deo Dusche -1,33`: the count says how many
+    // articles the discount was given on, not how often it was given.
+    if let &[total] = prices.as_slice()
+        && total < 0
+    {
+        return Line::Item(Draft {
+            text: head.join(" "),
+            quantity: None,
+            unit: None,
+            total,
+            tax: false,
+        });
+    }
     let marker = take_quantity_suffix(&mut head)
         .or_else(|| take_quantity_prefix(&mut head))
         .or_else(|| take_piece_count(&mut head, &prices));
+    // `2x 1,25 Odol Med3 2,50`: dm prints count and unit price in front.
+    let leading_unit = match (marker, prices.as_slice(), head.first()) {
+        (Some(Marker::Count(q)), &[total], Some(first)) if head.len() >= 2 => cx
+            .price(first)
+            .filter(|unit| *unit > 0 && quantity_fits(q, *unit, total)),
+        _ => None,
+    };
+    if leading_unit.is_some() {
+        head.remove(0);
+    }
     let resolved = match (marker, prices.as_slice()) {
+        (Some(Marker::Count(q)), &[total]) if leading_unit.is_some() => {
+            Some((Some(q), leading_unit, total))
+        }
         (Some(Marker::PerUnit(q)), &[unit]) => {
             line_total(q, unit).map(|total| (Some(q), Some(unit), total))
         }
@@ -726,7 +1204,11 @@ fn take_name_from_above(draft: &mut Draft, above: &str, cx: &Context) {
         draft.quantity = Some(quantity);
         draft.unit = Some(unit);
     }
-    draft.text = above.to_string();
+    // TEDi prints the VAT class after the name (`Stabkerze A`), the price
+    // with the article number below.
+    let mut name: Vec<&str> = above.split_whitespace().collect();
+    cx.trim_tax_class(&mut name);
+    draft.text = name.join(" ");
 }
 
 /// Of the text rows right above some prices, the one naming the article:
@@ -866,6 +1348,9 @@ struct Reader {
     /// A quantity row that did not fit the item above; it may belong to
     /// the next item (other tills print it above).
     pending_quantity: Option<(usize, Draft)>,
+    /// Added tax printed before the first sum; it only becomes an item if
+    /// it explains the total.
+    early_taxes: Vec<(usize, Draft)>,
     sums: Vec<SumEntry>,
     subtotal: Option<i64>,
     total: Option<i64>,
@@ -882,6 +1367,7 @@ impl Reader {
             items: Vec::new(),
             last_item_open: false,
             pending_quantity: None,
+            early_taxes: Vec::new(),
             sums: Vec::new(),
             subtotal: None,
             total: None,
@@ -928,6 +1414,10 @@ impl Reader {
             }
             (_, Line::Tax) => self.kinds[row] = RowKind::Tax,
             (Zone::Items, Line::Header) => self.drop_items(),
+            (Zone::Items, Line::Item(draft)) if draft.tax => {
+                self.kinds[row] = RowKind::Tax;
+                self.early_taxes.push((row, draft));
+            }
             (Zone::Items, Line::Item(draft)) => self.add_item(row, draft),
             (Zone::Items, Line::Quantity(draft)) => self.add_quantity(row, draft),
             (Zone::Sums, Line::Item(draft)) => {
@@ -944,19 +1434,15 @@ impl Reader {
             .unit
             .or((quantity == Decimal::ONE).then_some(draft.total));
         self.kinds[row] = RowKind::Item;
+        let kind = item_kind(&draft);
         self.items.push(ParsedItem {
             text: draft.text,
             quantity,
             unit_price: unit.map(|u| Money::new(u, self.currency)),
             total_price: Money::new(draft.total, self.currency),
-            kind: if draft.tax {
-                ItemKind::Tax
-            } else if draft.total < 0 {
-                ItemKind::Discount
-            } else {
-                ItemKind::Article
-            },
+            kind,
             rows: vec![row],
+            attached: false,
         });
     }
 
@@ -1031,7 +1517,7 @@ impl Reader {
         let mut sums: Vec<(usize, Keyword, i64)> = Vec::new();
         let mut between: Vec<(usize, Draft)> = Vec::new();
         // Added tax that did not explain the step between two sums.
-        let mut taxes: Vec<(usize, Draft)> = Vec::new();
+        let mut taxes: Vec<(usize, Draft)> = std::mem::take(&mut self.early_taxes);
         for entry in std::mem::take(&mut self.sums) {
             match entry {
                 SumEntry::Adjustment { row, draft } => between.push((row, draft)),
@@ -1085,18 +1571,46 @@ impl Reader {
         mut taxes: Vec<(usize, Draft)>,
     ) -> Result<(), ReceiptError> {
         taxes.retain(|(row, _)| *row < total_row);
+        taxes.truncate(MAX_TAX_CANDIDATES);
         if taxes.is_empty() {
             return Ok(());
         }
-        let sum = self
+        let items = self
             .items
             .iter()
             .map(|item| item.total_price.amount_minor())
-            .chain(taxes.iter().map(|(_, draft)| draft.total))
             .try_fold(0_i64, i64::checked_add)
             .ok_or(ReceiptError::Overflow)?;
-        if sum == total {
-            for (row, draft) in taxes {
+        let missing = total.checked_sub(items).ok_or(ReceiptError::Overflow)?;
+        // Tills print the tax per rate and again as a sum (`外8% ¥111`,
+        // `外税計 ¥111`): the fewest rows that explain the total win, and
+        // only if every such choice adds the same amounts.
+        let amounts = |mask: u32| -> Vec<i64> {
+            let mut picked: Vec<i64> = (0..taxes.len())
+                .filter(|bit| mask & (1 << bit) != 0)
+                .map(|bit| taxes[bit].1.total)
+                .collect();
+            picked.sort_unstable();
+            picked
+        };
+        let fitting: Vec<u32> = (1_u32..(1 << taxes.len()))
+            .filter(|&mask| amounts(mask).iter().sum::<i64>() == missing)
+            .collect();
+        let Some(fewest) = fitting.iter().map(|mask| mask.count_ones()).min() else {
+            return Ok(());
+        };
+        let choices: Vec<u32> = fitting
+            .into_iter()
+            .filter(|mask| mask.count_ones() == fewest)
+            .collect();
+        if choices
+            .iter()
+            .any(|&mask| amounts(mask) != amounts(choices[0]))
+        {
+            return Ok(());
+        }
+        for (bit, (row, draft)) in taxes.into_iter().enumerate() {
+            if choices[0] & (1 << bit) != 0 {
                 self.push_item(row, draft);
             }
         }
@@ -1312,6 +1826,8 @@ mod tests {
                 ("Leergut", Decimal::ONE, Some(-25), -25),
             ]
         );
+        assert_eq!(r.items[3].kind, ItemKind::Deposit);
+        assert_eq!(r.items[4].kind, ItemKind::Discount);
         assert_eq!(r.check, TotalCheck::Matches);
     }
 
@@ -1411,6 +1927,164 @@ mod tests {
         ]);
         assert_eq!(r.items[2].total_price.amount_minor(), -75);
         assert_eq!(r.items[2].kind, ItemKind::Discount);
+        assert_eq!(r.check, TotalCheck::Matches);
+    }
+
+    fn item_kinds(receipt: &ParsedReceipt) -> Vec<ItemKind> {
+        receipt.items.iter().map(|item| item.kind).collect()
+    }
+
+    #[test]
+    fn deposit_returns_and_vouchers() {
+        let r = receipt(&[
+            "Wasser 6 x 0,49 2,94",
+            "Pfand 6 x 0,25 1,50 A",
+            "EW-Pfand 0,25",
+            "Wasser inkl. Pfand 0,99",
+            "Leergut -3,00",
+            "Pfandrückgabe -0,25",
+            "Coupon -1,00",
+            "Summe 1,43",
+        ]);
+        use ItemKind::*;
+        assert_eq!(
+            item_kinds(&r),
+            [
+                Article, Deposit, Deposit, Article, Discount, Discount, Discount
+            ]
+        );
+        assert_eq!(r.items[1].quantity, dec("6"));
+        assert_eq!(r.check, TotalCheck::Matches);
+    }
+
+    #[test]
+    fn returns_printed_without_minus_subtract_when_the_total_says_so() {
+        let r = receipt(&[
+            "Cola 1,99",
+            "Pfand 0,25",
+            "Leergut 0,75",
+            "Gutschein 1,00",
+            "Summe 0,49",
+        ]);
+        use ItemKind::*;
+        assert_eq!(item_kinds(&r), [Article, Deposit, Discount, Discount]);
+        assert_eq!(
+            items(&r)[2..],
+            [
+                ("Leergut", Decimal::ONE, Some(-75), -75),
+                ("Gutschein", Decimal::ONE, Some(-100), -100)
+            ]
+        );
+        assert_eq!(r.check, TotalCheck::Matches);
+        // A bought voucher stays an article: subtracting it does not fit.
+        let r = receipt(&["Gutschein 25,00", "Summe 25,00"]);
+        assert_eq!(item_kinds(&r), [Article]);
+        // Without a total nothing tells, so nothing changes.
+        let r = receipt(&["Cola 1,99", "Leergut 0,25"]);
+        assert_eq!(item_kinds(&r), [Article, Article]);
+    }
+
+    #[test]
+    fn dm_layout_tax_digit_leading_unit_and_coupon_counts() {
+        let r = receipt(&[
+            "Papiertragetasche 0,20 1",
+            "2x 3,75 always Ult. Binden 7,50 2",
+            "3x 0,95 WC-Frisch 2,85",
+            "Zwischensumme 10,55",
+            "4 x Coupon 15% Bad -1,33",
+            "SUMME EUR 9,22",
+        ]);
+        assert_eq!(
+            items(&r),
+            [
+                ("Papiertragetasche", Decimal::ONE, Some(20), 20),
+                ("always Ult. Binden", dec("2"), Some(375), 750),
+                ("WC-Frisch", dec("3"), Some(95), 285),
+                ("4 x Coupon 15% Bad", Decimal::ONE, Some(-133), -133),
+            ]
+        );
+        assert_eq!(r.check, TotalCheck::Matches);
+        // A lone digit stays an amount where there are no minor units.
+        let r = yen(&["お茶 2", "合計 2"]);
+        assert_eq!(r.items.len(), 1);
+    }
+
+    #[test]
+    fn price_with_its_tax_class_read_as_a_digit_is_recovered_by_the_total() {
+        let r = receipt(&[
+            "Chips 1,19 B",
+            "Leckermaeulchen 0,990",
+            "Rabatt -0,20",
+            "Summe 1,98",
+        ]);
+        assert_eq!(
+            items(&r)[1],
+            ("Leckermaeulchen", Decimal::ONE, Some(99), 99)
+        );
+        assert_eq!(r.check, TotalCheck::Matches);
+        // A row ending in a multi-byte character is no candidate (and
+        // does not break the cut).
+        let r = receipt(&["Chips 1,19 B", "Gutschein 0,99 €", "Summe 1,98"]);
+        assert_eq!(r.items.len(), 2);
+        let r = receipt(&["Chips 1,19 B", "Hinweis 0,9円", "Summe 2,18"]);
+        assert_eq!(r.items.len(), 1);
+        // A doubled separator, the tax class after it.
+        let r = receipt(&["Chips 1,19 B", "Spinat Feta 0.,69 B", "Summe 1,88"]);
+        assert_eq!(items(&r)[1], ("Spinat Feta", Decimal::ONE, Some(69), 69));
+        // Without the total saying so, nothing is guessed.
+        let r = receipt(&["Chips 1,19 B", "Leckermaeulchen 0,990", "Summe 1,19"]);
+        assert_eq!(r.items.len(), 1);
+    }
+
+    #[test]
+    fn tax_added_on_top_of_a_subtotal() {
+        let r = receipt_in(
+            &[
+                "SOCKS $5.99",
+                "HOODIE $14.99",
+                "SUBTOTAL $20.98",
+                "TAX 6% $1.26",
+                "TOTAL $22.24",
+            ],
+            "USD",
+        );
+        assert_eq!(r.items.len(), 3);
+        assert_eq!(r.items[2].kind, ItemKind::Tax);
+        assert_eq!(r.check, TotalCheck::Matches);
+        // Included VAT stays out.
+        let r = receipt(&["Brot 1,99", "SUMME 1,99", "ENTH. MwSt 7% 0,13"]);
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.check, TotalCheck::Matches);
+    }
+
+    #[test]
+    fn deposits_and_discounts_belong_to_the_article_above() {
+        let r = receipt(&[
+            "Wasser 1,99",
+            "Pfand 0,25",
+            "Rabatt -0,20",
+            "Leergut -0,25",
+            "Brot 1,00",
+            "Summe 2,79",
+            "Coupon -0,10",
+            "Summe 2,69",
+        ]);
+        let attached: Vec<(&str, bool)> = r
+            .items
+            .iter()
+            .map(|item| (item.text.as_str(), item.attached))
+            .collect();
+        assert_eq!(
+            attached,
+            [
+                ("Wasser", false),
+                ("Pfand", true),
+                ("Rabatt", true),
+                ("Leergut", false),
+                ("Brot", false),
+                ("Coupon", false),
+            ]
+        );
         assert_eq!(r.check, TotalCheck::Matches);
     }
 
@@ -1603,6 +2277,20 @@ mod tests {
         let r = yen(&["弁当 500", "外税 0", "合計 500"]);
         assert_eq!(r.items.len(), 1);
         assert_eq!(r.rows[1].kind, RowKind::Tax);
+    }
+
+    #[test]
+    fn tax_in_the_total_is_no_total() {
+        let r = yen(&[
+            "天然水 ¥116",
+            "合計/ 1点 ¥116",
+            "(税合計 ¥10",
+            "お預り ¥200",
+        ]);
+        assert_eq!(r.total.map(|m| m.amount_minor()), Some(116));
+        assert_eq!(r.rows[2].kind, RowKind::Tax);
+        let r = yen(&["弁当 ¥500", "税込合計 ¥540"]);
+        assert_eq!(r.total.map(|m| m.amount_minor()), Some(540));
     }
 
     #[test]

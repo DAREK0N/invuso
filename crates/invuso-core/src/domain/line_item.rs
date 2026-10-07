@@ -114,6 +114,10 @@ pub struct LineItem {
     /// Mean OCR confidence, 0–1, for lines read from a receipt.
     pub ocr_confidence: Option<f32>,
     pub edited_by_user: bool,
+    /// Belongs to the nearest line above that is not attached itself, e.g.
+    /// its deposit or discount: it is carried by whoever carries that line
+    /// (user decision in AP-38).
+    pub attached: bool,
 }
 
 impl LineItem {
@@ -220,22 +224,42 @@ impl LineItem {
                     (a, b) => a.or(b),
                 },
                 edited_by_user: true,
+                attached: self.attached,
             }
         })
     }
+}
+
+/// Who carries each line: an attached line is carried like the line it
+/// belongs to; a first line has nothing to belong to.
+pub fn effective_assignments(items: &[LineItem]) -> Vec<BTreeMap<PersonId, Decimal>> {
+    let mut owner: Option<&BTreeMap<PersonId, Decimal>> = None;
+    items
+        .iter()
+        .map(|item| match owner {
+            Some(assigned) if item.attached => assigned.clone(),
+            _ => {
+                owner = Some(&item.assigned_to);
+                item.assigned_to.clone()
+            }
+        })
+        .collect()
 }
 
 /// The lines that are split by assignment (idee.md 8.2 steps 1–3), as
 /// [`split_by_items`](crate::split::split_by_items) takes them. Tax, tip,
 /// service charge and the rest up to the total are left out: they are
 /// shared proportionally (step 4).
+/// Attached lines (a deposit, a discount) count for whoever carries
+/// their article.
 pub fn item_lines(items: &[LineItem]) -> Vec<ItemLine> {
     items
         .iter()
-        .filter(|item| item.kind.is_assignable())
-        .map(|item| ItemLine {
+        .zip(effective_assignments(items))
+        .filter(|(item, _)| item.kind.is_assignable())
+        .map(|(item, assigned_to)| ItemLine {
             amount_minor: item.total_minor,
-            assigned_to: item.assigned_to.clone(),
+            assigned_to,
         })
         .collect()
 }
@@ -254,6 +278,37 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+
+    #[test]
+    fn attached_lines_are_carried_like_their_article() {
+        let anna = PersonId::from("anna");
+        let line = |total: i64, kind, attached, assigned: &[&PersonId]| LineItem {
+            quantity: Decimal::ONE,
+            total_minor: total,
+            kind,
+            attached,
+            assigned_to: assigned
+                .iter()
+                .map(|p| ((*p).clone(), Decimal::ONE))
+                .collect(),
+            ..LineItem::default()
+        };
+        let items = [
+            line(199, LineItemKind::Article, false, &[&anna]),
+            line(25, LineItemKind::Deposit, true, &[]),
+            line(-20, LineItemKind::Discount, true, &[]),
+            line(99, LineItemKind::Article, false, &[]),
+            line(25, LineItemKind::Deposit, true, &[]),
+        ];
+        let lines = item_lines(&items);
+        let carried: Vec<bool> = lines
+            .iter()
+            .map(|l| l.assigned_to.contains_key(&anna))
+            .collect();
+        assert_eq!(carried, [true, true, true, false, false]);
+        // An attached first line has nothing to belong to.
+        assert!(effective_assignments(&items[1..2])[0].is_empty());
+    }
 
     fn d(value: &str) -> Decimal {
         Decimal::from_str(value).unwrap()

@@ -179,21 +179,59 @@ mod tests {
         use invuso_core::receipt::{TotalCheck, parse_receipt, text_rows};
 
         let app = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let read = |name: &str| std::fs::read(app.join("assets/ocr").join(name)).unwrap();
-        let dictionary = String::from_utf8(read("ppocrv6_dict.txt")).unwrap();
+        let spike = app.join("../../spikes/ocr");
+        // `OCR_MODELS=tiny-small` (tiny detector, small recognizer) or
+        // `tiny` compares the smaller PP-OCRv6 models of the spike; the tiny
+        // recognizer knows no kana, so only German receipts are checked.
+        let models = std::env::var("OCR_MODELS").unwrap_or_else(|_| "small".to_string());
+        let read = |dir: &str, name: &str| std::fs::read(app.join(dir).join(name)).unwrap();
+        let (detector, recognizer, dictionary) = match models.as_str() {
+            "small" => (
+                "PP-OCRv6_det_small.onnx",
+                "PP-OCRv6_rec_small.onnx",
+                "ppocrv6_dict.txt",
+            ),
+            "tiny-small" => (
+                "PP-OCRv6_det_tiny.onnx",
+                "PP-OCRv6_rec_small.onnx",
+                "ppocrv6_dict.txt",
+            ),
+            "tiny" => (
+                "PP-OCRv6_det_tiny.onnx",
+                "PP-OCRv6_rec_tiny.onnx",
+                "ppocrv6_tiny_dict.txt",
+            ),
+            other => panic!("unknown OCR_MODELS `{other}`"),
+        };
+        let dir = |name: &str| {
+            if app.join("assets/ocr").join(name).exists() {
+                "assets/ocr"
+            } else {
+                "../../spikes/ocr/models"
+            }
+        };
+        let dictionary = String::from_utf8(read(dir(dictionary), dictionary)).unwrap();
         let engine = PaddleOcr::load(
-            read("PP-OCRv6_det_small.onnx"),
-            read("PP-OCRv6_rec_small.onnx"),
+            read(dir(detector), detector),
+            read(dir(recognizer), recognizer),
             &dictionary,
         )
         .unwrap();
+        let tiny_recognizer = models == "tiny";
         let stretch = std::env::var("OCR_CONTRAST").as_deref() != Ok("off");
-        let spike = app.join("../../spikes/ocr");
         // `OCR_SAMPLES=samples_tilted` runs another folder of the spike.
         let samples = std::env::var("OCR_SAMPLES").unwrap_or_else(|_| "samples".to_string());
         let out = spike
             .join("results")
-            .join(format!("app{}", if stretch { "" } else { "-raw" }))
+            .join(format!(
+                "app{}{}",
+                if models == "small" {
+                    String::new()
+                } else {
+                    format!("-{models}")
+                },
+                if stretch { "" } else { "-raw" }
+            ))
             .join(if samples == "samples" {
                 ""
             } else {
@@ -209,6 +247,7 @@ mod tests {
         paths.sort();
         let mut german = 0;
         let mut japanese_matched = 0;
+        let mut misses: Vec<String> = Vec::new();
         for path in paths {
             let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
             let mut image = preprocess::decode(&std::fs::read(&path).unwrap()).unwrap();
@@ -267,7 +306,9 @@ mod tests {
                 .unwrap();
                 if stem.starts_with("de_") {
                     german += 1;
-                    assert_eq!(parsed.check, TotalCheck::Matches, "{stem}");
+                    if parsed.check != TotalCheck::Matches {
+                        misses.push(stem.clone());
+                    }
                 }
                 // Japanese photos that are no till receipt (`donki` header
                 // only, `receipt_jpy` handwritten) or whose set parts read
@@ -278,14 +319,95 @@ mod tests {
                     "ja_mcd_kanayama",
                     "ja_mcd_yabacho",
                 ];
-                if japanese && !unparseable.contains(&stem.as_str()) {
+                if japanese && !tiny_recognizer && !unparseable.contains(&stem.as_str()) {
                     japanese_matched += 1;
-                    assert_eq!(parsed.check, TotalCheck::Matches, "{stem}");
+                    if parsed.check != TotalCheck::Matches {
+                        misses.push(stem.clone());
+                    }
                 }
             }
         }
         assert!(german > 0, "no German samples");
-        println!("{japanese_matched} Japanese receipts match their total");
+        println!("{japanese_matched} Japanese receipts checked");
+        assert!(misses.is_empty(), "items miss the total: {misses:?}");
+    }
+
+    /// The whole chain on a dataset export (`spikes/ocr/jawildtext_export.py`
+    /// or `synthetic_export.py`, folder in `OCR_EXPORT_DIR`): each
+    /// `image.jpg` goes through what the app does with a photo (automatic
+    /// corners, straightening, contrast, recognition) and the levelled
+    /// boxes land in `ocr.tsv` beside it, for
+    /// `JAWILDTEXT_BOXES=ocr.tsv cargo test -p invuso-core --test jawildtext`.
+    /// Already recognized receipts are skipped; `OCR_LIMIT` caps the count;
+    /// `OCR_CORNERS=off` reads the whole photo and writes `ocr-full.tsv`;
+    /// `OCR_OUT` names the output file.
+    #[test]
+    #[ignore = "needs a dataset export in OCR_EXPORT_DIR"]
+    fn recognizes_a_dataset_export() {
+        use crate::services::receipt_edit::{ImageEdit, detect_corners};
+
+        let app = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |name: &str| std::fs::read(app.join("assets/ocr").join(name)).unwrap();
+        let dictionary = String::from_utf8(read("ppocrv6_dict.txt")).unwrap();
+        let engine = PaddleOcr::load(
+            read("PP-OCRv6_det_small.onnx"),
+            read("PP-OCRv6_rec_small.onnx"),
+            &dictionary,
+        )
+        .unwrap();
+        let root = std::path::PathBuf::from(std::env::var("OCR_EXPORT_DIR").unwrap());
+        let corners = std::env::var("OCR_CORNERS").as_deref() != Ok("off");
+        let out_name = std::env::var("OCR_OUT")
+            .unwrap_or_else(|_| if corners { "ocr.tsv" } else { "ocr-full.tsv" }.to_string());
+        let out_name = out_name.as_str();
+        let limit: usize = std::env::var("OCR_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(usize::MAX);
+        let mut dirs: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|dir| dir.join("image.jpg").exists() && !dir.join(out_name).exists())
+            .collect();
+        dirs.sort();
+        let started = std::time::Instant::now();
+        for (done, dir) in dirs.iter().take(limit).enumerate() {
+            let bytes = std::fs::read(dir.join("image.jpg")).unwrap();
+            let mut image = preprocess::decode(&bytes).unwrap();
+            // As the app suggests by default (RCP-05); without corners the
+            // whole photo is read.
+            if let Some(corners) = detect_corners(&image).filter(|_| corners) {
+                let edit = ImageEdit {
+                    corners,
+                    ..ImageEdit::default()
+                };
+                if let Some(straight) = edit.apply(&image) {
+                    image = straight;
+                }
+            }
+            preprocess::stretch_contrast(&mut image);
+            let recognition = engine.recognize(&image, &mut |_| {}).unwrap();
+            let text = ReceiptText::new(
+                engine.name(),
+                recognition.fragments,
+                recognition.skew_degrees,
+            );
+            let rows: Vec<String> = text
+                .recognized()
+                .iter()
+                .map(|f| {
+                    let b = f.bbox;
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        b.left, b.top, b.right, b.bottom, f.text
+                    )
+                })
+                .collect();
+            std::fs::write(dir.join(out_name), rows.join("\n") + "\n").unwrap();
+            if done % 10 == 9 {
+                println!("{} receipts, {} s", done + 1, started.elapsed().as_secs());
+            }
+        }
     }
 
     /// AP-34: a receipt photographed at an angle is read better once its

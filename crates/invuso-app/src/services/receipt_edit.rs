@@ -273,10 +273,16 @@ pub fn detect_corners(photo: &RgbImage) -> Option<[Point; 4]> {
     let (width, height) = small.dimensions();
     let (w, h) = (width as usize, height as usize);
     // Paper is bright in every channel; light wood or skin is bright too,
-    // but not in blue. Blurred, so the print does not cut holes into it.
+    // but not in blue, and a light beige desk is bright but tinted. So the
+    // darkest channel counts, less twice the tint. Blurred, so the print
+    // does not cut holes into it.
     let whiteness: Vec<u8> = small
         .pixels()
-        .map(|p| p.0.into_iter().min().unwrap_or(0))
+        .map(|p| {
+            let low = i32::from(p.0.into_iter().min().unwrap_or(0));
+            let high = i32::from(p.0.into_iter().max().unwrap_or(0));
+            (low - TINT_WEIGHT * (high - low)).clamp(0, 255) as u8
+        })
         .collect();
     let whiteness = local_mean(&whiteness, w, h, BLUR_RADIUS);
     let threshold = otsu(&whiteness);
@@ -315,12 +321,30 @@ pub fn detect_corners(photo: &RgbImage) -> Option<[Point; 4]> {
         extreme(sum, true, (1.0, 1.0))?,
         extreme(difference, false, (-1.0, 1.0))?,
     ];
+    // A little desk in the picture costs nothing, a price cut off at the
+    // edge costs an item: measured on the synthetic and jawildtext photos
+    // (AP-38), tight corners lost more than they gained.
+    let outward = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+    let corners = std::array::from_fn(|i| {
+        let (dx, dy) = outward[i];
+        Point::new(
+            (corners[i].x + dx * CORNER_MARGIN).clamp(0.0, 1.0),
+            (corners[i].y + dy * CORNER_MARGIN).clamp(0.0, 1.0),
+        )
+    });
     let edit = ImageEdit {
         corners,
         ..ImageEdit::default()
     };
     edit.is_valid().then_some(corners)
 }
+
+/// How much a pixel's tint (brightest minus darkest channel) lowers its
+/// whiteness: receipts are neutral white, desks and wood are tinted.
+const TINT_WEIGHT: i32 = 2;
+
+/// Margin added around detected corners, as a share of the photo.
+const CORNER_MARGIN: f64 = 0.03;
 
 /// Blur of the whiteness before thresholding, in pixels of the
 /// [`DETECT_SIDE`] image: about the height of a printed line there.
@@ -875,9 +899,10 @@ mod tests {
         let photo = photograph_at_an_angle(&card(400, 600), &corners, 800, 800);
         let found = detect_corners(&photo).unwrap();
         for (f, c) in found.iter().zip(&corners) {
-            // The card's black frame and the downscaling move them a bit.
+            // The card's black frame, the downscaling and the margin move
+            // them a bit outward.
             assert!(
-                (f.x - c.x).abs() < 0.03 && (f.y - c.y).abs() < 0.03,
+                (f.x - c.x).abs() < 0.06 && (f.y - c.y).abs() < 0.06,
                 "{f:?} vs {c:?}"
             );
         }
@@ -890,15 +915,41 @@ mod tests {
     }
 
     /// Prints the corners found in the user's own photos (paths in
-    /// `INVUSO_PHOTOS`, separated by `;`), to check them by eye.
+    /// `INVUSO_PHOTOS`, separated by `;`), to check them by eye; with
+    /// `INVUSO_CORNERS_OUT` set to a folder, also draws them into a copy.
     #[test]
     #[ignore = "needs photos named in INVUSO_PHOTOS"]
     fn detects_corners_of_own_photos() {
         let paths = std::env::var("INVUSO_PHOTOS").unwrap();
+        let out = std::env::var("INVUSO_CORNERS_OUT").ok();
         for path in paths.split(';') {
             let bytes = std::fs::read(path).unwrap();
             let photo = decode_upright(&bytes).unwrap().into_rgb8();
-            println!("{path}: {:?}", detect_corners(&photo));
+            let corners = detect_corners(&photo);
+            println!("{path}: {corners:?}");
+            let (Some(out), Some(corners)) = (&out, corners) else {
+                continue;
+            };
+            let mut drawn =
+                image::imageops::thumbnail(&photo, photo.width() / 4, photo.height() / 4);
+            let (w, h) = (f64::from(drawn.width()), f64::from(drawn.height()));
+            for i in 0..4 {
+                let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                for step in 0..=400 {
+                    let t = f64::from(step) / 400.0;
+                    let (x, y) = ((a.x + (b.x - a.x) * t) * w, (a.y + (b.y - a.y) * t) * h);
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let (px, py) = (x as u32 + dx, y as u32 + dy);
+                        if px < drawn.width() && py < drawn.height() {
+                            drawn.put_pixel(px, py, Rgb([255, 0, 0]));
+                        }
+                    }
+                }
+            }
+            let name = Path::new(path).file_stem().unwrap().to_string_lossy();
+            drawn
+                .save(Path::new(out).join(format!("{name}.corners.png")))
+                .unwrap();
         }
     }
 

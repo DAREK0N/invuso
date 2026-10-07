@@ -452,7 +452,8 @@ age:
 
 expense:
   currency_required: "Bitte die Währung des Kassenzettels wählen."
-  currency_unset_hint: "Die Währung wird bei Kassenzetteln nicht vorbelegt. Wähle sie, dann werden Betrag und Positionen übernommen."
+  currency_unset_hint: "Die Währung des Kassenzettels ist noch nicht bekannt. Wähle sie, dann werden Betrag und Positionen übernommen."
+  currency_detected: "Währung aus dem Kassenzettel erkannt."
   amount: "Betrag"
   currency: "Währung"
   amount_required: "Bitte einen Betrag größer als 0 eingeben."
@@ -635,6 +636,10 @@ items:
   empty: "Noch keine Positionen"
   sum: "Summe Positionen"
   total: "GESAMT"
+  vat_rate: "darin Steuer %{rate} %"
+  vat: "darin Steuer"
+  attached: "Gehört zur Position darüber"
+  attached_hint: "Pfand oder Rabatt: wird von denselben Personen getragen wie die Position darüber."
   difference: "Positionen und Gesamtbetrag weichen um %{amount} ab. Die Differenz wird anteilig verteilt."
   add: "Position hinzufügen"
   no_text: "(ohne Bezeichnung)"

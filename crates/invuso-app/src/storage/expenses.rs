@@ -640,7 +640,8 @@ fn load_expenses(
 }
 
 /// One stored `line_item` row: id, expense, texts (original, translated,
-/// user), quantity, unit and total price, kind, confidence, edited.
+/// user), quantity, unit and total price, kind, confidence, edited, the
+/// line it belongs to.
 type LineItemRow = (
     String,
     String,
@@ -653,6 +654,7 @@ type LineItemRow = (
     String,
     Option<f64>,
     bool,
+    Option<String>,
 );
 
 /// The line items of the expenses matching `filter`, by expense id, in
@@ -691,7 +693,7 @@ fn load_line_items(
     let mut statement = conn.prepare(&format!(
         "SELECT l.id, l.expense_id, l.original_text, l.translated_text, l.user_text,
                 l.quantity, l.unit_price_minor, l.total_price_minor, l.kind, l.ocr_confidence,
-                l.edited_by_user
+                l.edited_by_user, l.belongs_to
          FROM line_item l JOIN expense e ON e.id = l.expense_id
          WHERE {filter} AND e.deleted_at IS NULL AND l.deleted_at IS NULL
          ORDER BY l.position, l.id"
@@ -710,6 +712,7 @@ fn load_line_items(
                 row.get(8)?,
                 row.get(9)?,
                 row.get(10)?,
+                row.get(11)?,
             ))
         })?
         .collect::<Result<Vec<LineItemRow>, _>>()?;
@@ -727,6 +730,7 @@ fn load_line_items(
         kind,
         confidence,
         edited,
+        belongs_to,
     ) in rows
     {
         let kind = LineItemKind::from_code(&kind)
@@ -742,6 +746,8 @@ fn load_line_items(
             assigned_to: assignments.remove(&id).unwrap_or_default(),
             ocr_confidence: confidence.map(|c| c as f32),
             edited_by_user: edited,
+            // Lines are stored right below the line they belong to.
+            attached: belongs_to.is_some(),
         });
     }
     Ok(items)
@@ -962,14 +968,21 @@ fn insert_parts(
             ],
         )?;
     }
+    // The line an attached one belongs to: the nearest one above that
+    // stands on its own.
+    let mut owner: Option<String> = None;
     for (position, item) in (0_i64..).zip(&new.line_items) {
         let item_id = new_id();
+        let belongs_to = if item.attached { owner.clone() } else { None };
+        if !item.attached || owner.is_none() {
+            owner = Some(item_id.clone());
+        }
         conn.execute(
             "INSERT INTO line_item
                  (id, expense_id, position, original_text, translated_text, user_text, quantity,
                   unit_price_minor, total_price_minor, kind, ocr_confidence, edited_by_user,
-                  created_at, updated_at, origin_device_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)",
+                  created_at, updated_at, origin_device_id, belongs_to)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15)",
             params![
                 item_id,
                 id.as_str(),
@@ -984,7 +997,8 @@ fn insert_parts(
                 item.ocr_confidence.map(f64::from),
                 item.edited_by_user,
                 now,
-                device_id
+                device_id,
+                belongs_to
             ],
         )?;
         for (person, weight) in &item.assigned_to {
@@ -2135,6 +2149,51 @@ mod tests {
             source: ExpenseSource::Scan,
             ..ramen(s)
         }
+    }
+
+    #[test]
+    fn a_deposit_attached_to_its_article_is_carried_with_it() {
+        let s = setup("EUR");
+        let ben = add_ben(&s).id;
+        let rate = s.db.latest_rate(cur("EUR"), cur("EUR")).unwrap().unwrap();
+        let receipt = s.db.create_receipt("receipts/w.jpg", None).unwrap();
+        s.db.save_receipt_text(
+            &receipt.id,
+            &crate::storage::ReceiptText::new("test", Vec::new(), 0.0),
+        )
+        .unwrap();
+        let mut water = line("Wasser", "1", 2_000, LineItemKind::Article);
+        water.assigned_to = BTreeMap::from([(ben.clone(), d("1"))]);
+        let mut deposit = line("Pfand", "1", 300, LineItemKind::Deposit);
+        deposit.attached = true;
+        let mut new = scanned(&s, &ben, &receipt.id);
+        new.line_items = vec![
+            water,
+            deposit,
+            line("Brot", "1", 1_000, LineItemKind::Article),
+        ];
+        new.total = Money::new(3_300, cur("EUR"));
+        new.split = SplitMode::Items {
+            participants: [&s.me.id, &s.anna.id, &ben]
+                .into_iter()
+                .map(|p| (p.clone(), Decimal::ONE))
+                .collect(),
+            items: item_lines(&new.line_items),
+        };
+
+        let saved = s.db.create_expense(new, &rate).unwrap();
+        let stored = s.db.expense(&saved.id).unwrap().unwrap();
+        assert!(stored.line_items[1].attached);
+        assert!(!stored.line_items[2].attached);
+        // Ben carries the water and its deposit, the bread is shared.
+        assert_eq!(
+            group_balances(&s),
+            BTreeMap::from([
+                (s.me.id.clone(), 3_300 - 334),
+                (s.anna.id.clone(), -333),
+                (ben.clone(), -2_300 - 333),
+            ])
+        );
     }
 
     #[test]

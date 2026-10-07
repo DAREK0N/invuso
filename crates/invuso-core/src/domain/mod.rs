@@ -18,7 +18,9 @@ pub use expense::{
     validate_split,
 };
 pub use group::{Group, GroupError, GroupId, GroupMember, is_iso_date, validate_period};
-pub use line_item::{LineItem, LineItemError, LineItemKind, item_lines, line_items_sum};
+pub use line_item::{
+    LineItem, LineItemError, LineItemKind, effective_assignments, item_lines, line_items_sum,
+};
 pub use money::{Money, MoneyError};
 pub use payment_method::{
     PaymentMethod, PaymentMethodError, PaymentMethodId, PaymentMethodKind, validate_last4,

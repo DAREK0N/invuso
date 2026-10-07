@@ -452,7 +452,8 @@ age:
 
 expense:
   currency_required: "Please choose the currency of the receipt."
-  currency_unset_hint: "Receipts start without a currency. Choose it and the amount and lines are filled in."
+  currency_unset_hint: "The receipt's currency is not known yet. Choose it and the amount and lines are filled in."
+  currency_detected: "Currency read from the receipt."
   amount: "Amount"
   currency: "Currency"
   amount_required: "Please enter an amount greater than 0."
@@ -635,6 +636,10 @@ items:
   empty: "No items yet"
   sum: "Sum of items"
   total: "TOTAL"
+  vat_rate: "incl. tax %{rate} %"
+  vat: "incl. tax"
+  attached: "Belongs to the line above"
+  attached_hint: "Deposit or discount: carried by the same people as the line above."
   difference: "Items and total differ by %{amount}. The difference is shared proportionally."
   add: "Add item"
   no_text: "(no description)"

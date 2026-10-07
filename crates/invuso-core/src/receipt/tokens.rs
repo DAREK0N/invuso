@@ -24,6 +24,8 @@ const SYMBOLS: [&str; 8] = ["€", "$", "¥", "￥", "円", "£", "EUR", "JPY"];
 /// More digits than any receipt needs; keeps `i64` far from overflowing.
 const MAX_PRICE_DIGITS: usize = 15;
 const MAX_QUANTITY_DIGITS: usize = 9;
+/// Yen amounts above 9,999,999 are printed with thousands separators.
+const MAX_PLAIN_YEN_DIGITS: usize = 7;
 
 /// Parses a price in the receipt currency: `1,49`, `3.60`, `1.234,56`,
 /// `-0,88`, `13,98-`, `9,99-A`, `€3,99`, `¥1,410`, `1,410円`.
@@ -35,10 +37,17 @@ const MAX_QUANTITY_DIGITS: usize = 9;
 /// thousands.
 pub(super) fn parse_price(token: &str, currency: Currency) -> Option<Price> {
     let mut rest = token.trim();
+    // A reduced-rate mark in front of a yen amount (`*198`, `※198`).
+    if let Some(amount) = rest.strip_prefix(['*', '※'])
+        && amount.starts_with(|c: char| c.is_ascii_digit() || c == '¥' || c == '￥')
+    {
+        rest = amount;
+    }
     // Tax classes glued to the amount: IKEA's `9,99-A`, Edeka's `0,15*A`
     // (`*` = not discountable) and `-9,83*B`, or plain `2,99A`, `1,00AW`.
+    // Only with minor units: in yen `2P` is a count, not 2 yen.
     let without_class = rest.trim_end_matches(|c: char| c.is_ascii_uppercase());
-    if (rest.len() - without_class.len()) <= 2 {
+    if currency.exponent() > 0 && (rest.len() - without_class.len()) <= 2 {
         let without_star = without_class.strip_suffix('*').unwrap_or(without_class);
         if without_star.ends_with(|c: char| c.is_ascii_digit() || c == '-') {
             rest = without_star;
@@ -126,7 +135,10 @@ fn parse_amount_body(body: &str, exponent: usize) -> Option<i64> {
     }
     digits.push_str(fraction);
 
-    if digits.len() > MAX_PRICE_DIGITS {
+    // Without separators, yen amounts this long are codes (JAN, register).
+    if digits.len() > MAX_PRICE_DIGITS
+        || (exponent == 0 && separators.is_empty() && digits.len() > MAX_PLAIN_YEN_DIGITS)
+    {
         return None;
     }
     digits.parse().ok()
@@ -419,6 +431,9 @@ mod tests {
         assert_eq!(yen("0"), Some(0));
         assert_eq!(yen("3.60"), None);
         assert_eq!(yen("14,10"), None);
+        assert_eq!(yen("*198"), Some(198));
+        assert_eq!(yen("※1,100"), Some(1100));
+        assert_eq!(yen("2P"), None);
     }
 
     #[test]

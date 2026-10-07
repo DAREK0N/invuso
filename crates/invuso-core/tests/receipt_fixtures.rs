@@ -1,4 +1,4 @@
-//! Real German receipts as an OCR engine saw them (CORE-11, AP-17).
+//! Real receipts as an OCR engine saw them (CORE-11, AP-17, AP-20, AP-38).
 //!
 //! Fixtures in `fixtures/receipts/` are raw PP-OCRv6 fragments from the
 //! OCR prototype (`spikes/ocr`), anonymized; sources and licences are in
@@ -7,7 +7,8 @@
 use invuso_core::Decimal;
 use invuso_core::domain::Currency;
 use invuso_core::receipt::{
-    BoundingBox, ItemKind, ParsedReceipt, RecognizedText, RowKind, TotalCheck, parse_receipt,
+    BoundingBox, ItemKind, ParsedReceipt, PaymentKind, RecognizedText, RowKind, TotalCheck,
+    detect_currency, parse_receipt, text_rows,
 };
 
 fn fragments(tsv: &str) -> Vec<RecognizedText> {
@@ -418,4 +419,384 @@ fn mcdonalds_set_with_count_in_brackets() {
         receipt.check,
         TotalCheck::Differs { difference, .. } if difference.amount_minor() == -39
     ));
+}
+
+// Deposit, returned bottles and discounts (OCR-15, AP-38).
+
+#[test]
+fn drinks_market_with_deposit_returns_and_discounts() {
+    let receipt = parse(include_str!("fixtures/receipts/de_getraenke_pfand.tsv"));
+    assert_items(
+        &receipt,
+        &[
+            ("Mineralwasser still", "6", Some(59), 354),
+            ("Pfand Einweg", "6", Some(25), 150),
+            ("Apfelschorle 1,0l", "1", Some(129), 129),
+            ("Pfand Mehrweg", "1", Some(15), 15),
+            ("Leergut", "1", Some(-330), -330),
+            ("Rabatt 10%", "1", Some(-13), -13),
+            ("Coupon Schorle", "1", Some(-20), -20),
+        ],
+    );
+    use ItemKind::*;
+    let kinds: Vec<ItemKind> = receipt.items.iter().map(|item| item.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            Article, Deposit, Article, Deposit, Discount, Discount, Discount
+        ]
+    );
+    assert_eq!(cents(receipt.total), Some(285));
+    assert_eq!(cents(receipt.change), Some(215));
+    assert_eq!(receipt.check, TotalCheck::Matches);
+}
+
+#[test]
+fn discounts_of_the_real_receipts_keep_the_total() {
+    let fressnapf = parse(FRESSNAPF);
+    assert_eq!(fressnapf.items[3].kind, ItemKind::Discount);
+    assert_eq!(fressnapf.check, TotalCheck::Matches);
+    let maxvalu = parse_yen(include_str!("fixtures/receipts/ja_maxvalu.tsv"));
+    assert_eq!(maxvalu.items[1].kind, ItemKind::Discount);
+    assert_eq!(maxvalu.check, TotalCheck::Matches);
+}
+
+// Merchant, date, time, currency and payment (OCR-16, AP-38).
+
+/// (fixture, merchant, date, time, payment) as read from the receipt.
+type Details<'a> = (
+    &'a str,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<PaymentKind>,
+);
+
+fn assert_details(receipt: &ParsedReceipt, expected: Details) {
+    let (name, merchant, date, time, payment) = expected;
+    let details = &receipt.details;
+    assert_eq!(details.merchant.as_deref(), merchant, "{name}");
+    assert_eq!(details.date.as_deref(), date, "{name}");
+    assert_eq!(details.time.as_deref(), time, "{name}");
+    assert_eq!(details.payment, payment, "{name}");
+}
+
+fn currency_of(tsv: &str) -> Option<&'static str> {
+    let rows = text_rows(&fragments(tsv));
+    detect_currency(rows.iter().map(String::as_str)).map(|c| c.code())
+}
+
+#[test]
+fn german_headers_and_footers() {
+    use PaymentKind::*;
+    let cases: [(&str, Details); 6] = [
+        (
+            LIDL_AURICH,
+            (
+                "lidl aurich",
+                Some("LDL"),
+                Some("2019-05-04"),
+                Some("12:00"),
+                Some(Card),
+            ),
+        ),
+        (
+            LIDL_HESEL,
+            (
+                "lidl hesel",
+                Some("LiDL"),
+                Some("2019-05-04"),
+                Some("15:30"),
+                Some(Card),
+            ),
+        ),
+        (
+            FRESSNAPF,
+            (
+                "fressnapf",
+                Some("Fressnapf Köln-Ehrenfeld"),
+                Some("2020-12-04"),
+                Some("09:36"),
+                Some(Cash),
+            ),
+        ),
+        // The company's name without its legal form (`GmbH & Co.KG`).
+        (
+            IKEA,
+            (
+                "ikea",
+                Some("IKEA Deutschland"),
+                Some("2009-06-12"),
+                Some("14:46"),
+                Some(Cash),
+            ),
+        ),
+        // Date and time glued together (`10.09.202017:01`); the name is the
+        // row above the address block (`gegründet 1328` reads like a street).
+        (
+            AUGUSTINER,
+            (
+                "augustiner",
+                Some("BräuMünchen"),
+                Some("2020-09-10"),
+                Some("17:01"),
+                Some(Cash),
+            ),
+        ),
+        (
+            include_str!("fixtures/receipts/de_getraenke_pfand.tsv"),
+            (
+                "getraenke",
+                Some("Getränkemarkt Muster"),
+                Some("2026-10-06"),
+                Some("14:32"),
+                Some(Cash),
+            ),
+        ),
+    ];
+    for (tsv, expected) in cases {
+        assert_details(&parse(tsv), expected);
+        assert_eq!(currency_of(tsv), Some("EUR"), "{}", expected.0);
+    }
+}
+
+#[test]
+fn japanese_headers_and_footers() {
+    use PaymentKind::*;
+    let cases: [(&str, Details); 9] = [
+        (
+            include_str!("fixtures/receipts/ja_camelmart.tsv"),
+            (
+                "camelmart",
+                Some("キャメルマート"),
+                Some("2022-09-17"),
+                Some("13:07"),
+                Some(Cash),
+            ),
+        ),
+        (
+            include_str!("fixtures/receipts/ja_lawson_naha.tsv"),
+            (
+                "lawson",
+                Some("LAWSON"),
+                Some("2019-11-12"),
+                Some("07:42"),
+                None,
+            ),
+        ),
+        // The advertising rows (`★…★`) are no name.
+        (
+            LOTTERIA,
+            (
+                "lotteria",
+                Some("ロッテリア上野公園ルエノFS店"),
+                Some("2015-03-22"),
+                Some("08:07"),
+                Some(Cash),
+            ),
+        ),
+        // `2019/11/ 9`: one-digit day padded with a space; the brand is
+        // only printed as a logo (read as `/EON`), the operating company
+        // (`イオン琉球株式会社`) is no shop name.
+        (
+            include_str!("fixtures/receipts/ja_maxvalu.tsv"),
+            (
+                "maxvalu",
+                Some("/EON"),
+                Some("2019-11-09"),
+                Some("20:20"),
+                Some(Cash),
+            ),
+        ),
+        // Opening hours (`6:00-24:00`) are no purchase time.
+        (
+            include_str!("fixtures/receipts/ja_mcd_yabacho.tsv"),
+            (
+                "mcd",
+                Some("M マク上ナル上矢場町店"),
+                Some("2022-03-11"),
+                Some("07:59"),
+                None,
+            ),
+        ),
+        (
+            include_str!("fixtures/receipts/ja_sugakiya_akamon.tsv"),
+            (
+                "sugakiya",
+                Some("Sugakiya"),
+                Some("2019-10-09"),
+                Some("12:12"),
+                Some(Cash),
+            ),
+        ),
+        (
+            include_str!("fixtures/receipts/ja_yabaton.tsv"),
+            (
+                "yabaton",
+                Some("矢場人"),
+                Some("2022-06-21"),
+                Some("11:05"),
+                None,
+            ),
+        ),
+        // The table header is no name; nothing else qualifies.
+        (
+            SUKIYA,
+            ("sukiya", None, Some("2022-03-03"), Some("07:49"), None),
+        ),
+        // `29.04.01` counts years by the era (Heisei 29): no date.
+        (
+            SIMPLE_2017,
+            ("simple", Some("あたあめや"), None, Some("17:10"), None),
+        ),
+    ];
+    for (tsv, expected) in cases {
+        assert_details(&parse_yen(tsv), expected);
+        assert_eq!(currency_of(tsv), Some("JPY"), "{}", expected.0);
+    }
+}
+
+#[test]
+fn dm_with_tax_class_digits_leading_unit_prices_and_coupons() {
+    let receipt = parse(include_str!("fixtures/receipts/de_dm_2026.tsv"));
+    // Some VAT class digits after the price were read (`7,50 2`).
+    let named = |text: &str| {
+        receipt
+            .items
+            .iter()
+            .find(|item| item.text == text)
+            .unwrap_or_else(|| panic!("no item {text}"))
+    };
+    let binden = named("always Ult. Binden Sec");
+    assert_eq!(binden.quantity, Decimal::from(2));
+    assert_eq!(cents(binden.unit_price), Some(375));
+    assert_eq!(
+        cents(Some(named("Papiertragetasche").total_price)),
+        Some(20)
+    );
+    // `2x 1,25 Name 2,50`: count and unit price in front of the name.
+    let odol = named("0do1 Med3 ZC White&Shi");
+    assert_eq!(odol.quantity, Decimal::from(2));
+    assert_eq!(cents(odol.unit_price), Some(125));
+    // Coupons count the articles they apply to, not themselves.
+    let coupon = named("4 x Coupon 15% Bad Deo Dusche");
+    assert_eq!(coupon.quantity, Decimal::ONE);
+    assert_eq!(coupon.kind, ItemKind::Discount);
+    assert_eq!(receipt.items.len(), 30);
+    // The VAT table: net + VAT = gross per rate.
+    let vat: Vec<(String, i64)> = receipt
+        .vat
+        .iter()
+        .map(|line| (line.rate.unwrap().to_string(), line.amount.amount_minor()))
+        .collect();
+    assert_eq!(vat, [("19".to_string(), 859), ("7".to_string(), 49)]);
+    assert_eq!(cents(receipt.subtotal), Some(6370));
+    assert_eq!(cents(receipt.total), Some(6133));
+    assert_eq!(receipt.check, TotalCheck::Matches);
+    assert_details(
+        &receipt,
+        (
+            "dm",
+            Some("dm dm-drogerie markt"),
+            Some("2026-10-06"),
+            Some("16:58"),
+            Some(PaymentKind::Card),
+        ),
+    );
+}
+
+#[test]
+fn netto_with_the_price_column_shifted_by_curved_paper() {
+    // Each price sits about half a row above its name; without moving the
+    // price column the prices pair with the neighbouring rows, while the
+    // items still add up to the total.
+    let receipt = parse(include_str!("fixtures/receipts/de_netto_2026.tsv"));
+    let pairs: Vec<(&str, i64)> = receipt
+        .items
+        .iter()
+        .map(|item| (item.text.as_str(), item.total_price.amount_minor()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("bauwolltragetasche GRS ST", 199),
+            ("BO-SpinatFeta Stange 1 ST", 69),
+            ("Preisaenderung", -35),
+            ("Effect Energy 0,33 L DS", 109),
+            ("EV-Pfand 0.25 EUR", 25),
+            ("Crunchips sort. 150g", 199),
+            ("Cl.KnabbersnackSalz1256", 119),
+            ("Leckerwaeulchen sort.150g", 99),
+            ("Rabatt 20%", -20),
+            ("SC Blaetterkrokant 150g", 458),
+            ("Hamdong ChickenNood1.120g", 298),
+            ("UL Eier BH 10ST", 249),
+            ("Kingsgard 2ig.pap.10x50ST", 122),
+            ("As Baconi 100g", 357),
+        ]
+    );
+    assert_eq!(receipt.items[4].kind, ItemKind::Deposit);
+    assert_eq!(receipt.items[9].quantity, Decimal::from(2));
+    // Price change, deposit and discount belong to the article above.
+    let attached: Vec<usize> = (0..receipt.items.len())
+        .filter(|&i| receipt.items[i].attached)
+        .collect();
+    assert_eq!(attached, [2, 4, 8]);
+    assert_eq!(cents(receipt.total), Some(2248));
+    assert_eq!(receipt.check, TotalCheck::Matches);
+}
+
+#[test]
+fn tedi_with_names_above_article_numbers_and_prices() {
+    let receipt = parse(include_str!("fixtures/receipts/de_tedi_2026.tsv"));
+    assert_items(
+        &receipt,
+        &[
+            ("Stabkerze", "1", Some(255), 255),
+            ("Stabkerzenhalter Hirschkopf", "1", Some(200), 200),
+        ],
+    );
+    assert_eq!(cents(receipt.total), Some(455));
+    assert_eq!(receipt.vat.len(), 1);
+    assert_eq!(receipt.vat[0].amount.amount_minor(), 73);
+    assert_eq!(receipt.check, TotalCheck::Matches);
+    assert_details(
+        &receipt,
+        (
+            "tedi",
+            Some("TEDi"),
+            Some("2026-10-02"),
+            Some("12:46"),
+            Some(PaymentKind::Card),
+        ),
+    );
+}
+
+#[test]
+fn netto_as_the_app_read_it_with_a_misread_tax_class() {
+    // The app's own recognition of the cropped photo: `0,99 B` came out as
+    // `0,990`; the printed total brings the item back.
+    let receipt = parse(include_str!("fixtures/receipts/de_netto_2026_app.tsv"));
+    let leckermaeulchen = receipt
+        .items
+        .iter()
+        .find(|item| item.text.starts_with("Leckerwaeulchen"))
+        .expect("Leckermaeulchen");
+    assert_eq!(leckermaeulchen.total_price.amount_minor(), 99);
+    assert_eq!(receipt.items.len(), 14);
+    assert_eq!(cents(receipt.total), Some(2248));
+    assert_eq!(receipt.check, TotalCheck::Matches);
+}
+
+#[test]
+fn netto_second_app_run_with_a_doubled_separator() {
+    let receipt = parse(include_str!("fixtures/receipts/de_netto_2026_app2.tsv"));
+    let spinach = receipt
+        .items
+        .iter()
+        .find(|item| item.text.starts_with("BO-SpinatFeta"))
+        .expect("BO-SpinatFeta");
+    assert_eq!(spinach.total_price.amount_minor(), 69);
+    assert_eq!(cents(receipt.total), Some(2248));
+    assert_eq!(receipt.check, TotalCheck::Matches);
 }

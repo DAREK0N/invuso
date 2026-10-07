@@ -5,13 +5,17 @@
 //! [`ParsedItem`]s plus the printed total, so the review screen can show
 //! whether both agree. The rules follow German till receipts plus the
 //! Japanese specifics of OCR-17 (`小計`, `合計`, `お釣り`, `内税`/`外税`,
-//! counts glued to names, amounts without minor units).
+//! counts glued to names, amounts without minor units). Header and footer
+//! give merchant, date, time, currency and payment (OCR-16).
 
+mod details;
 mod language;
 mod parse;
 mod rows;
 mod tokens;
+mod vat;
 
+pub use details::{PaymentKind, ReceiptDetails, detect_currency};
 pub use language::detect_language;
 pub use parse::parse_receipt;
 
@@ -105,8 +109,10 @@ pub struct ReceiptRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemKind {
     Article,
-    /// Negative amount, e.g. a discount or a returned deposit.
+    /// Negative amount: a discount, voucher or returned deposit (`Leergut`).
     Discount,
+    /// Deposit paid on top of an article (`Pfand`).
+    Deposit,
     /// Tax added on top of the prices (`外税`), shared like the rest of
     /// the bill (idee.md 8.2 step 4).
     Tax,
@@ -125,6 +131,9 @@ pub struct ParsedItem {
     pub kind: ItemKind,
     /// Indices into [`ParsedReceipt::rows`] this item was read from.
     pub rows: Vec<usize>,
+    /// A deposit or discount printed right below its article, which it
+    /// belongs to (`LineItem::attached`).
+    pub attached: bool,
 }
 
 /// Result of the plausibility check (OCR-14).
@@ -150,6 +159,19 @@ pub struct ParsedReceipt {
     pub tendered: Option<Money>,
     pub change: Option<Money>,
     pub check: TotalCheck,
+    /// Merchant, date, time and payment as printed (OCR-16).
+    pub details: ReceiptDetails,
+    /// VAT contained in the prices, as printed; tax added on top is an
+    /// item instead.
+    pub vat: Vec<VatLine>,
+}
+
+/// One VAT amount the receipt states as contained in its prices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VatLine {
+    /// Percent, e.g. 19; unknown if the row names none.
+    pub rate: Option<Decimal>,
+    pub amount: Money,
 }
 
 impl ParsedReceipt {

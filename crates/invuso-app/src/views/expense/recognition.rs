@@ -4,7 +4,7 @@ use dioxus_free_icons::{
     icons::ld_icons::{LdCircleAlert, LdRotateCcw, LdScanText, LdTriangleAlert},
 };
 use invuso_core::domain::Currency;
-use invuso_core::receipt::{ParsedReceipt, TotalCheck, parse_receipt};
+use invuso_core::receipt::{ParsedReceipt, TotalCheck, detect_currency, parse_receipt, text_rows};
 
 use crate::format::{NumberFormat, format_money};
 use crate::services::ocr::{OcrJob, OcrJobs, OcrProgress};
@@ -18,12 +18,14 @@ use crate::storage::Db;
 /// empty amount and the line items; a reading with nothing in it does not
 /// count, so a later currency change can still fill them. Without a
 /// currency (`None`, a receipt before the user picked one) nothing is read
-/// into the form yet.
+/// into the form yet; the currency the receipt names is offered once
+/// through `on_currency` instead (OCR-16).
 #[component]
 pub(super) fn ReceiptRecognition(
     receipt_id: String,
     currency: ReadSignal<Option<Currency>>,
     on_read: EventHandler<ParsedReceipt>,
+    on_currency: EventHandler<Currency>,
 ) -> Element {
     let db = use_context::<Db>();
     let revision = use_context::<DataRevision>();
@@ -52,6 +54,23 @@ pub(super) fn ReceiptRecognition(
             if matches!(*stored.read(), Ok(None)) && jobs.peek(&id).is_none() {
                 jobs.start(db.clone(), id.clone(), revision);
             }
+        }
+    });
+
+    let mut currency_offered = use_signal(|| false);
+    use_effect(move || {
+        let detected = match &*stored.read() {
+            Ok(Some(text)) if currency().is_none() => {
+                let rows = text_rows(&text.recognized());
+                detect_currency(rows.iter().map(String::as_str))
+            }
+            _ => None,
+        };
+        if let Some(detected) = detected
+            && !*currency_offered.peek()
+        {
+            currency_offered.set(true);
+            on_currency.call(detected);
         }
     });
 

@@ -13,3 +13,5 @@
 *.md
 !README.md
 !THIRD-PARTY-NOTICES.md
+/spikes/ocr/datasets/
+/spikes/ocr/samples_one/

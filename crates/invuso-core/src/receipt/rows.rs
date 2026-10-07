@@ -21,22 +21,33 @@ pub(super) struct Row {
 /// rows the closest fitting one wins. Integer arithmetic only, so every
 /// platform groups identically.
 pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
-    let mut sorted: Vec<&RecognizedText> = fragments
+    let fragments: Vec<&RecognizedText> = fragments
         .iter()
         .filter(|f| !f.text.trim().is_empty())
         .collect();
-    sorted.sort_by_key(|f| (f.bbox.center_y2(), f.bbox.left));
-
-    let mut rows: Vec<Vec<&RecognizedText>> = Vec::new();
-    for fragment in sorted {
-        let open = rows.len().saturating_sub(OPEN_ROWS);
-        let best = (open..rows.len())
-            .filter(|&i| !shares_column(&rows[i], fragment))
-            .filter_map(|i| distance(&rows[i], fragment).map(|d| (d, i)))
-            .min();
-        match best {
-            Some((_, i)) => rows[i].push(fragment),
-            None => rows.push(vec![fragment]),
+    let in_price_column = price_column(&fragments);
+    // Curved or tilted paper lifts or lowers the right-aligned price column
+    // against the names: names and prices then pair up off-centre, or with
+    // the neighbouring row. Only then are other offsets tried; the one that
+    // pairs the most names with prices, most closely, wins.
+    let height = typical_height(&fragments);
+    let unit = height / OFFSET_STEPS;
+    let mut rows = group_shifted(&fragments, &in_price_column, 0);
+    let (_, misfit) = pairing(&rows, &fragments, &in_price_column, 0);
+    if unit > 0 && misfit.is_some_and(|misfit| misfit * 4 > height) {
+        // (rank, rows) of the best offset so far.
+        let mut best: Option<(Rank, Vec<Vec<&RecognizedText>>)> = None;
+        for step in -OFFSET_STEPS..=OFFSET_STEPS {
+            let offset = step * unit;
+            let shifted = group_shifted(&fragments, &in_price_column, offset);
+            let (score, misfit) = pairing(&shifted, &fragments, &in_price_column, offset);
+            let rank = (score, -misfit.unwrap_or(height), -step.abs());
+            if best.as_ref().is_none_or(|(top, _)| rank > *top) {
+                best = Some((rank, shifted));
+            }
+        }
+        if let Some((_, shifted)) = best {
+            rows = shifted;
         }
     }
 
@@ -58,18 +69,138 @@ pub(super) fn group_rows(fragments: &[RecognizedText]) -> Vec<Row> {
         .collect()
 }
 
+/// Pairs, closeness of the pairs and nearness to no offset, compared in
+/// this order.
+type Rank = (i64, i64, i64);
+
 /// How many of the newest rows a fragment may still join.
 const OPEN_ROWS: usize = 3;
 
+/// Offsets of the price column tried, in eighths of a typical box height,
+/// up and down.
+const OFFSET_STEPS: i64 = 8;
+
+/// Groups the fragments with the price column moved down by `offset`
+/// pixels (up if negative); see [`group_rows`].
+fn group_shifted<'a>(
+    fragments: &[&'a RecognizedText],
+    in_price_column: &[bool],
+    offset: i64,
+) -> Vec<Vec<&'a RecognizedText>> {
+    let shift = |index: usize| if in_price_column[index] { offset } else { 0 };
+    let mut order: Vec<usize> = (0..fragments.len()).collect();
+    order.sort_by_key(|&i| {
+        (
+            fragments[i].bbox.center_y2() + 2 * shift(i),
+            fragments[i].bbox.left,
+        )
+    });
+
+    // Row members as indices, so the shifted position stays known.
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for index in order {
+        let open = rows.len().saturating_sub(OPEN_ROWS);
+        let best = (open..rows.len())
+            .filter(|&r| !shares_column(rows[r].iter().map(|&i| fragments[i]), fragments[index]))
+            .filter_map(|r| {
+                let members = rows[r].iter().map(|&i| (fragments[i], shift(i)));
+                distance(members, fragments[index], shift(index)).map(|d| (d, r))
+            })
+            .min();
+        match best {
+            Some((_, r)) => rows[r].push(index),
+            None => rows.push(vec![index]),
+        }
+    }
+    rows.into_iter()
+        .map(|row| row.into_iter().map(|i| fragments[i]).collect())
+        .collect()
+}
+
+/// How well names and prices pair up when the price column is moved by
+/// `offset`: rows with a name and a price count, rows with a price alone
+/// count against; and the median vertical distance between a row's name
+/// and its price (`None` without such rows).
+fn pairing(
+    rows: &[Vec<&RecognizedText>],
+    fragments: &[&RecognizedText],
+    in_price_column: &[bool],
+    offset: i64,
+) -> (i64, Option<i64>) {
+    let is_price = |fragment: &RecognizedText| {
+        fragments
+            .iter()
+            .position(|f| std::ptr::eq(*f, fragment))
+            .is_some_and(|i| in_price_column[i])
+    };
+    let mut score = 0;
+    let mut misfits: Vec<i64> = Vec::new();
+    for row in rows {
+        let prices: Vec<&&RecognizedText> = row.iter().filter(|f| is_price(f)).collect();
+        let names: Vec<&&RecognizedText> = row
+            .iter()
+            .filter(|f| !is_price(f) && f.text.chars().any(char::is_alphabetic))
+            .collect();
+        match (names.first(), prices.first()) {
+            (Some(name), Some(price)) => {
+                score += 2;
+                // Centres are doubled; halve the difference.
+                misfits
+                    .push((name.bbox.center_y2() - price.bbox.center_y2() - 2 * offset).abs() / 2);
+            }
+            (None, Some(_)) => score -= 1,
+            _ => {}
+        }
+    }
+    misfits.sort_unstable();
+    (score, misfits.get(misfits.len() / 2).copied())
+}
+
+/// Fragments ending at the right edge of the text with a digit in them:
+/// the price column, which tills align right.
+fn price_column(fragments: &[&RecognizedText]) -> Vec<bool> {
+    let left = fragments.iter().map(|f| f.bbox.left).min().unwrap_or(0);
+    let right = fragments.iter().map(|f| f.bbox.right).max().unwrap_or(0);
+    let width = i64::from(right) - i64::from(left);
+    fragments
+        .iter()
+        .map(|f| {
+            let flush_right =
+                (i64::from(right) - i64::from(f.bbox.right)) * PRICE_COLUMN_SHARE < width;
+            let right_half = (i64::from(f.bbox.left) - i64::from(left)) * 2 > width;
+            flush_right && right_half && f.text.chars().any(|c| c.is_ascii_digit())
+        })
+        .collect()
+}
+
+/// A fragment ending within 1/8 of the text width from its right edge is
+/// in the price column.
+const PRICE_COLUMN_SHARE: i64 = 8;
+
+/// Median height of the fragments.
+fn typical_height(fragments: &[&RecognizedText]) -> i64 {
+    let mut heights: Vec<i64> = fragments.iter().map(|f| f.bbox.height()).collect();
+    heights.sort_unstable();
+    heights.get(heights.len() / 2).copied().unwrap_or(0)
+}
+
 /// How far the fragment's centre is from the row's mean centre, relative
-/// to the row (scaled by 2n), if it is close enough to join.
-fn distance(row: &[&RecognizedText], fragment: &RecognizedText) -> Option<i64> {
-    let n = row.len() as i64;
-    let top_sum: i64 = row.iter().map(|f| i64::from(f.bbox.top)).sum();
-    let bottom_sum: i64 = row.iter().map(|f| i64::from(f.bbox.bottom)).sum();
+/// to the row (scaled by 2n), if it is close enough to join. Each box is
+/// taken as moved down by its shift.
+fn distance<'a>(
+    row: impl Iterator<Item = (&'a RecognizedText, i64)>,
+    fragment: &RecognizedText,
+    shift: i64,
+) -> Option<i64> {
+    let (mut n, mut top_sum, mut bottom_sum) = (0_i64, 0_i64, 0_i64);
+    for (member, member_shift) in row {
+        n += 1;
+        top_sum += i64::from(member.bbox.top) + member_shift;
+        bottom_sum += i64::from(member.bbox.bottom) + member_shift;
+    }
     // Everything scaled by 2n to stay in integers:
     // |centre − mean centre| < min(height, mean height) / 2
-    let distance = (n * fragment.bbox.center_y2() - (top_sum + bottom_sum)).abs();
+    let distance = (n * (fragment.bbox.center_y2() + 2 * shift) - (top_sum + bottom_sum)).abs();
     let limit = (n * fragment.bbox.height()).min(bottom_sum - top_sum);
     // Compared across rows of different sizes, so per fragment.
     (distance < limit).then(|| distance / n)
@@ -77,8 +208,11 @@ fn distance(row: &[&RecognizedText], fragment: &RecognizedText) -> Option<i64> {
 
 /// Whether the fragment overlaps a fragment of the row horizontally by
 /// more than a third of the narrower one.
-fn shares_column(row: &[&RecognizedText], fragment: &RecognizedText) -> bool {
-    row.iter().any(|other| {
+fn shares_column<'a>(
+    mut row: impl Iterator<Item = &'a RecognizedText>,
+    fragment: &RecognizedText,
+) -> bool {
+    row.any(|other| {
         let overlap =
             fragment.bbox.right.min(other.bbox.right) - fragment.bbox.left.max(other.bbox.left);
         let narrower = (fragment.bbox.right - fragment.bbox.left)

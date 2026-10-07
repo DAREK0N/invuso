@@ -1,0 +1,35 @@
+# Source: self-made for Invuso (AP-38): a typical German drinks-market layout with deposit,
+# returned bottles, a percentage discount and a coupon; no real receipt, no third-party rights.
+# Fragments as an OCR engine reports them: name and price in separate boxes, slightly offset.
+# Columns: left, top, right, bottom (pixels), text
+120	100	880	210	Getränkemarkt Muster
+120	222	538	302	Musterweg 1
+120	314	500	394	50000 Köln
+1500	410	1760	489	EUR
+120	498	842	578	Mineralwasser still
+1500	502	1760	581	3,54 B
+120	590	424	670	6 x 0,59
+120	682	576	762	Pfand Einweg
+1500	686	1760	765	1,50 A
+120	774	424	854	6 x 0,25
+120	866	766	946	Apfelschorle 1,0l
+1500	870	1760	949	1,29 B
+120	958	614	1038	Pfand Mehrweg
+1500	962	1760	1041	0,15 A
+120	1050	386	1130	Leergut
+1500	1054	1760	1133	-3,30 A
+120	1142	500	1222	Rabatt 10%
+1500	1146	1760	1225	-0,13 B
+120	1234	652	1314	Coupon Schorle
+1500	1238	1760	1317	-0,20 B
+120	1326	310	1446	SUMME
+1500	1330	1760	1449	2,85
+120	1458	234	1538	Bar
+1500	1462	1760	1541	5,00
+120	1550	424	1630	Rückgeld
+1500	1554	1760	1633	2,15
+120	1642	994	1722	MwSt% Netto MwSt Brutto
+120	1734	1032	1814	A 19 % -1,39 -0,26 -1,65
+120	1826	880	1906	B 7 % 4,24 0,30 4,50
+120	1918	994	1998	06.10.26 14:32 Bon 0815
+120	2010	1222	2090	Vielen Dank für Ihren Einkauf

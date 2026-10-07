@@ -9,22 +9,22 @@ use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdArrowDown, LdArrowUp, LdDownload, LdLanguages, LdMerge, LdMinus, LdPlus, LdSplit,
-        LdTrash2, LdTriangleAlert,
+        LdArrowDown, LdArrowUp, LdCornerDownRight, LdDownload, LdLanguages, LdMerge, LdMinus,
+        LdPlus, LdSplit, LdTrash2, LdTriangleAlert,
     },
 };
 use invuso_core::Decimal;
 use invuso_core::domain::{
     Currency, GroupMember, LineItem, LineItemError, LineItemKind, Money, Person, PersonId,
-    line_items_sum,
+    effective_assignments, line_items_sum,
 };
-use invuso_core::receipt::{ItemKind, ParsedReceipt};
+use invuso_core::receipt::{ItemKind, ParsedReceipt, VatLine};
 use invuso_core::split::allocate;
 
 use crate::Route;
 use crate::components::{
     Avatar, AvatarEntry, AvatarSize, AvatarStack, BottomSheet, Chip, CompactAmountInput,
-    CompactNumberInput, TextField,
+    CompactNumberInput, SwitchRow, TextField,
 };
 use crate::format::{
     NumberFormat, amount_text, fit_amount_text, format_money, format_number, format_plain,
@@ -63,6 +63,7 @@ pub(super) fn drafts_from_parsed(receipt: &ParsedReceipt) -> Vec<ItemDraft> {
             let kind = match parsed.kind {
                 ItemKind::Article => LineItemKind::Article,
                 ItemKind::Discount => LineItemKind::Discount,
+                ItemKind::Deposit => LineItemKind::Deposit,
                 ItemKind::Tax => LineItemKind::Tax,
             };
             ItemDraft::new(LineItem {
@@ -71,6 +72,7 @@ pub(super) fn drafts_from_parsed(receipt: &ParsedReceipt) -> Vec<ItemDraft> {
                 unit_price_minor: parsed.unit_price.map(|m| m.amount_minor()),
                 total_minor: kind.signed(parsed.total_price.amount_minor()),
                 kind,
+                attached: parsed.attached,
                 ..LineItem::default()
             })
         })
@@ -189,10 +191,15 @@ pub(super) fn ReceiptItems(
     #[props(default)] on_open: Option<EventHandler<u64>>,
     #[props(default)] on_add: Option<EventHandler<()>>,
     #[props(default)] translation: Option<TranslationNote>,
+    /// VAT the receipt says is contained in its prices (AP-38).
+    #[props(default)]
+    vat: Vec<VatLine>,
 ) -> Element {
     let format = NumberFormat::current();
     let mut show_original = use_signal(|| false);
     let lines = line_items(&items);
+    // Who carries each line, attached ones as their article.
+    let carried = effective_assignments(&lines);
     // The switch only makes sense once some line reads differently.
     let has_other_text = lines
         .iter()
@@ -246,9 +253,11 @@ pub(super) fn ReceiptItems(
                     if items.is_empty() {
                         p { class: "px-1 py-6 text-center text-sm text-jet-black-600", {t!("items.empty").to_string()} }
                     }
-                    for draft in items.iter().cloned() {
+                    for (index, draft) in items.iter().cloned().enumerate() {
                         ItemRow {
                             key: "{draft.key}",
+                            attached: draft.item.attached && index > 0,
+                            carried_by: carried.get(index).cloned().unwrap_or_default(),
                             item: draft.item.clone(),
                             currency,
                             people: people.clone(),
@@ -266,6 +275,17 @@ pub(super) fn ReceiptItems(
                             label: t!("items.total").to_string(),
                             value: total.map(|t| format_plain(t, format)).unwrap_or_else(|| "–".to_string()),
                             strong: true,
+                        }
+                        for line in vat.iter() {
+                            div { class: "flex items-baseline justify-between gap-3 text-xs tabular-nums text-jet-black-600",
+                                span {
+                                    match line.rate {
+                                        Some(rate) => t!("items.vat_rate", rate = format_number(rate, format)).to_string(),
+                                        None => t!("items.vat").to_string(),
+                                    }
+                                }
+                                span { {format_plain(line.amount, format)} }
+                            }
                         }
                     }
                 }
@@ -314,6 +334,10 @@ fn SumLine(label: String, value: String, #[props(default)] strong: bool) -> Elem
 #[component]
 fn ItemRow(
     item: LineItem,
+    /// Belongs to the line above (a deposit, a discount).
+    attached: bool,
+    /// Who carries the line; for an attached line, who carries its article.
+    carried_by: BTreeMap<PersonId, Decimal>,
     currency: Currency,
     people: Vec<Person>,
     assignable: bool,
@@ -351,8 +375,7 @@ fn ItemRow(
         .filter(|line| !line.is_empty());
     let ignored = !item.kind.counts();
     let kind_label = (item.kind != LineItemKind::Article).then(|| kind_label(item.kind));
-    let holders: Vec<AvatarEntry> = item
-        .assigned_to
+    let holders: Vec<AvatarEntry> = carried_by
         .iter()
         .filter(|(_, weight)| !weight.is_zero())
         .filter_map(|(id, _)| people.iter().find(|p| &p.id == id))
@@ -374,6 +397,9 @@ fn ItemRow(
                     onclick.call(());
                 }
             },
+            if attached {
+                Icon { icon: LdCornerDownRight, class: "mt-1 h-4 w-4 shrink-0 text-jet-black-500" }
+            }
             span { class: "flex min-w-0 flex-1 flex-col",
                 span {
                     class: "text-base break-words",
@@ -565,6 +591,11 @@ pub(super) fn ItemSheet(
         let edit = edit.clone();
         move |_| edit(&|line| line.assigned_to.clear())
     };
+    let set_attached = {
+        let edit = edit.clone();
+        move |attached: bool| edit(&|line| line.attached = attached)
+    };
+    let attached = item.attached && has_previous;
 
     rsx! {
         BottomSheet { title: t!("items.edit_title").to_string(), on_close,
@@ -629,7 +660,17 @@ pub(super) fn ItemSheet(
                     }
                     p { class: "px-1 text-xs text-floral-white-400", {kind_hint(item.kind)} }
                 }
-                if assignable && item.kind.is_assignable() {
+                if has_previous {
+                    div { class: "overflow-hidden rounded-2xl border border-jet-black-800 bg-jet-black-950",
+                        SwitchRow {
+                            label: t!("items.attached").to_string(),
+                            hint: t!("items.attached_hint").to_string(),
+                            checked: attached,
+                            onchange: set_attached,
+                        }
+                    }
+                }
+                if assignable && item.kind.is_assignable() && !attached {
                     div { class: "flex flex-col gap-2",
                         div { class: "flex items-center justify-between gap-2",
                             span { class: "text-sm font-medium text-floral-white-300", {t!("items.who").to_string()} }

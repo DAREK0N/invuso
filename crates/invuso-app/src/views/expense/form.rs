@@ -13,11 +13,11 @@ use dioxus_free_icons::{
 use invuso_core::Decimal;
 use invuso_core::domain::{
     Category, Currency, Expense, ExpenseError, ExpenseId, ExpenseSource, Group, GroupId,
-    GroupMember, LineItem, LineItemError, Money, PaymentMethod, PaymentMethodId, Person, PersonId,
-    is_iso_date, validate_participants, validate_payments, validate_split,
+    GroupMember, LineItem, LineItemError, Money, PaymentMethod, PaymentMethodId, PaymentMethodKind,
+    Person, PersonId, is_iso_date, validate_participants, validate_payments, validate_split,
 };
 use invuso_core::fx::{self, Rate};
-use invuso_core::receipt::{ParsedReceipt, detect_language};
+use invuso_core::receipt::{ParsedReceipt, PaymentKind, VatLine, detect_language};
 use invuso_core::split::allocate;
 
 use super::detail::ReceiptCard;
@@ -254,10 +254,16 @@ fn ExpenseForm(data: FormData) -> Element {
     });
     let mut currency = use_signal(|| start_currency);
     // A receipt starts without a currency (AP-34): until the user picks
-    // one, `currency` only stands in, nothing is read or saved with it.
-    // Suggesting it from the receipt is OCR-16 (AP-38).
+    // one or the receipt names it (OCR-16), `currency` only stands in,
+    // nothing is read or saved with it.
     let mut currency_chosen = use_signal(|| !review);
     let read_currency = use_memo(move || currency_chosen().then_some(currency()));
+    // The currency was read from the receipt, not picked.
+    let mut currency_detected = use_signal(|| false);
+    // What the receipt suggests (OCR-16) only fills what the user has not
+    // changed yet (user decision in AP-38).
+    let mut when_touched = use_signal(|| false);
+    let mut method_touched = use_signal(|| false);
     let mut title = use_signal(|| {
         prefill
             .as_ref()
@@ -360,6 +366,8 @@ fn ExpenseForm(data: FormData) -> Element {
     let mut source_language = use_signal(|| editing.then(|| data.receipt_language.clone()));
     let mut translation = use_signal(|| None::<TranslationState>);
     let mut translation_run = use_signal(|| 0_u64);
+    // VAT the receipt states as contained in its prices (AP-38).
+    let mut vat_lines = use_signal(Vec::<VatLine>::new);
 
     let groups = data.groups.clone();
     let home_currency = data.home_currency;
@@ -525,8 +533,7 @@ fn ExpenseForm(data: FormData) -> Element {
             group.set(new_group);
         });
 
-    let pick_currency = move |new_currency: Currency| {
-        sheet.set(None);
+    let mut apply_currency = move |new_currency: Currency| {
         let format = NumberFormat::current();
         let fitted = fit_amount_text(&amount_text_signal.peek(), new_currency, format);
         amount_text_signal.set(fitted);
@@ -542,6 +549,19 @@ fn ExpenseForm(data: FormData) -> Element {
         currency.set(new_currency);
         currency_chosen.set(true);
         amount_error.set(None);
+    };
+    let pick_currency = move |new_currency: Currency| {
+        sheet.set(None);
+        currency_detected.set(false);
+        apply_currency(new_currency);
+    };
+    // Taken as if picked (user decision in AP-38); a hint says where it
+    // came from and the user can still change it.
+    let take_detected_currency = move |detected: Currency| {
+        if !*currency_chosen.peek() {
+            apply_currency(detected);
+            currency_detected.set(true);
+        }
     };
 
     let edit_payer = use_callback(move |(index, text): (usize, String)| {
@@ -829,8 +849,49 @@ fn ExpenseForm(data: FormData) -> Element {
     let show_items = by_items || (current_group.is_none() && (review || !item_list.is_empty()));
 
     // What the recognition read fills what is still empty (idee.md 7.2
-    // step 3): the amount, in review also from the lines' sum, and the lines.
+    // step 3): the amount, in review also from the lines' sum, and the lines;
+    // merchant, day and payment method fill what the user has not changed
+    // (OCR-16).
+    let read_methods = data.methods.clone();
+    let read_last = data.last_methods.clone();
     let on_read = move |parsed: ParsedReceipt| {
+        vat_lines.set(parsed.vat.clone());
+        let details = &parsed.details;
+        if let Some(merchant) = &details.merchant
+            && title.peek().trim().is_empty()
+        {
+            title.set(merchant.clone());
+            title_error.set(None);
+        }
+        // A day still to come was misread; a time alone may be of any day.
+        let (today, _) = clock::local_now();
+        if let Some(day) = details.date.as_ref()
+            && !*when_touched.peek()
+            && is_iso_date(day)
+            && *day <= today
+        {
+            date.set(day.clone());
+            if let Some(at) = &details.time {
+                time.set(at.clone());
+            }
+            date_error.set(None);
+        }
+        let suggested = match (details.payment, payers.peek().as_slice()) {
+            (Some(payment), [payer]) if !*method_touched.peek() => method_for_payment(
+                payment,
+                &payer.person,
+                payer.method.as_ref(),
+                &read_methods,
+                &read_last,
+            )
+            .filter(|method| payer.method.as_ref() != Some(method)),
+            _ => None,
+        };
+        if let Some(method) = suggested
+            && let Some(payer) = payers.write().first_mut()
+        {
+            payer.method = Some(method);
+        }
         let total = parsed
             .total
             .or_else(|| parsed.items_sum().ok().filter(|_| review))
@@ -890,7 +951,8 @@ fn ExpenseForm(data: FormData) -> Element {
                     currency_label: t!("expense.currency").to_string(),
                     value: amount_text_signal(),
                     currency: cur,
-                    autofocus: !editing,
+                    // A scanned receipt fills the amount itself (OCR-16).
+                    autofocus: !editing && !review,
                     oninput: move |text| {
                         amount_text_signal.set(text);
                         amount_error.set(None);
@@ -902,6 +964,8 @@ fn ExpenseForm(data: FormData) -> Element {
                     p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
                 } else if !currency_chosen() {
                     p { class: "px-1 text-sm text-pale-oak-200", {t!("expense.currency_unset_hint").to_string()} }
+                } else if currency_detected() {
+                    p { class: "px-1 text-sm text-floral-white-400", role: "status", {t!("expense.currency_detected").to_string()} }
                 }
                 match &*preview.read() {
                     Err(message) => rsx! { ErrorBanner { error: Some(message.clone()) } },
@@ -955,10 +1019,12 @@ fn ExpenseForm(data: FormData) -> Element {
                 error: date_error(),
                 on_date: move |value| {
                     date.set(value);
+                    when_touched.set(true);
                     date_error.set(None);
                 },
                 on_time: move |value| {
                     time.set(value);
+                    when_touched.set(true);
                     date_error.set(None);
                 },
             }
@@ -1022,6 +1088,7 @@ fn ExpenseForm(data: FormData) -> Element {
                                 receipt_id: attached.id.clone(),
                                 currency: read_currency,
                                 on_read,
+                                on_currency: take_detected_currency,
                             }
                             button {
                                 class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-floral-white-300 active:bg-jet-black-800 transition-colors",
@@ -1270,6 +1337,7 @@ fn ExpenseForm(data: FormData) -> Element {
                     },
                     on_add: add_item,
                     translation: translation_note(translation.read().as_ref(), &item_list),
+                    vat: vat_lines(),
                 }
             }
             ErrorBanner { error: save_error() }
@@ -1361,6 +1429,7 @@ fn ExpenseForm(data: FormData) -> Element {
                         methods: methods_for(&payer.person, &data.methods),
                         on_select: move |method: Option<PaymentMethodId>| {
                             sheet.set(None);
+                            method_touched.set(true);
                             if let Some(entry) = payers.write().get_mut(index) {
                                 entry.method = method;
                             }
@@ -1959,6 +2028,35 @@ fn default_method(
     }
 }
 
+/// The person's method of the kind the receipt names (OCR-16): the one
+/// already chosen or used last (PAY-06) if it is of that kind, else the
+/// first one of that kind; none if they have no such method.
+fn method_for_payment(
+    payment: PaymentKind,
+    person: &Person,
+    current: Option<&PaymentMethodId>,
+    methods: &[PaymentMethod],
+    last: &BTreeMap<PersonId, PaymentMethodId>,
+) -> Option<PaymentMethodId> {
+    let fits = |kind: PaymentMethodKind| match payment {
+        PaymentKind::Cash => kind == PaymentMethodKind::Cash,
+        PaymentKind::Card => matches!(
+            kind,
+            PaymentMethodKind::CreditCard | PaymentMethodKind::DebitCard
+        ),
+    };
+    let usable: Vec<PaymentMethod> = methods_for(person, methods)
+        .into_iter()
+        .filter(|method| fits(method.kind))
+        .collect();
+    [current, last.get(&person.id)]
+        .into_iter()
+        .flatten()
+        .find(|id| usable.iter().any(|method| &method.id == *id))
+        .cloned()
+        .or_else(|| usable.first().map(|method| method.id.clone()))
+}
+
 /// Methods a person can pay with: their own and those without owner.
 fn methods_for(person: &Person, methods: &[PaymentMethod]) -> Vec<PaymentMethod> {
     methods
@@ -2135,6 +2233,69 @@ mod tests {
             ("2026-10-03".to_string(), "19:30".to_string())
         );
         assert_eq!(split_occurred_at(""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn receipt_payment_picks_a_method_of_that_kind() {
+        let anna = Person {
+            id: PersonId::new("anna"),
+            name: "Anna".into(),
+            color: "cerulean".into(),
+            avatar_path: None,
+            is_me: true,
+            note: None,
+        };
+        let method = |id: &str, kind, owner: Option<&str>| PaymentMethod {
+            id: PaymentMethodId::new(id),
+            name: id.into(),
+            kind,
+            owner_person_id: owner.map(PersonId::new),
+            last4: None,
+            color: "cerulean".into(),
+            icon: "credit-card".into(),
+            archived: false,
+        };
+        let methods = [
+            method("bens-visa", PaymentMethodKind::CreditCard, Some("ben")),
+            method("cash", PaymentMethodKind::Cash, Some("anna")),
+            method("visa", PaymentMethodKind::CreditCard, Some("anna")),
+            method("giro", PaymentMethodKind::DebitCard, Some("anna")),
+        ];
+        let id = |text: &str| PaymentMethodId::new(text);
+        let pick = |payment, current: Option<&str>, last: Option<&str>| {
+            let current = current.map(id);
+            let last: BTreeMap<PersonId, PaymentMethodId> =
+                last.map(|m| (anna.id.clone(), id(m))).into_iter().collect();
+            method_for_payment(payment, &anna, current.as_ref(), &methods, &last)
+        };
+        assert_eq!(
+            pick(PaymentKind::Cash, Some("visa"), None),
+            Some(id("cash"))
+        );
+        // The first card of her own, not Ben's.
+        assert_eq!(
+            pick(PaymentKind::Card, Some("cash"), None),
+            Some(id("visa"))
+        );
+        // A chosen or last used card stays.
+        assert_eq!(
+            pick(PaymentKind::Card, Some("giro"), None),
+            Some(id("giro"))
+        );
+        assert_eq!(
+            pick(PaymentKind::Card, None, Some("giro")),
+            Some(id("giro"))
+        );
+        assert_eq!(
+            method_for_payment(
+                PaymentKind::Cash,
+                &anna,
+                None,
+                &methods[..1],
+                &BTreeMap::new()
+            ),
+            None
+        );
     }
 
     #[test]

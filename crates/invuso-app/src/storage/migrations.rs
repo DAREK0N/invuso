@@ -12,6 +12,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0004_cash_movement_card.sql"),
     include_str!("../../migrations/0005_expense_coordinates.sql"),
     include_str!("../../migrations/0006_receipt_image_edited.sql"),
+    include_str!("../../migrations/0007_line_item_belongs_to.sql"),
 ];
 
 /// Schema version of a fully migrated database.

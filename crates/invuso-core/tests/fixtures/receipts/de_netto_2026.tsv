@@ -1,0 +1,50 @@
+# Source: own photo of the user (Netto Marken-Discount, crumpled, curved), shared for Invuso (AP-38).
+# OCR: PP-OCRv6 small via rten, app pipeline on the host (services::ocr), fragments as recognized.
+# Anonymized: address and register/cashier numbers replaced; card terminal data cut off.
+# Columns: left, top, right, bottom (pixels), text
+632	513	1075	662	Netto
+751	631	1051	699	Marken-Discount
+568	690	1125	767	99999 Musterstadt, Musterstr. 1
+1012	732	1109	764	Orehay
+672	737	998	798	WWW.NETTO-ONLINE.DE
+1065	765	1126	810	EUR
+1050	803	1163	851	1.99 A
+521	804	954	887	bauwolltragetasche GRS ST
+1049	842	1162	890	0.69 B
+524	845	936	920	BO-SpinatFeta Stange 1 ST
+1040	877	1130	926	-0.35
+530	903	751	947	Preisaenderung
+1056	916	1167	964	1.09 A
+530	926	905	994	Effect Energy 0,33 L DS
+1058	953	1170	1003	0,25*A
+532	976	808	1030	EV-Pfand 0.25 EUR
+1061	994	1173	1042	1,99 B
+529	1015	862	1070	Crunchips sort. 150g
+1065	1033	1176	1081	1,19 B
+525	1051	913	1111	Cl.KnabbersnackSalz1256
+1065	1073	1178	1121	0,99
+519	1091	949	1151	Leckerwaeulchen sort.150g
+1057	1113	1155	1163	-0,20
+515	1142	695	1186	Rabatt 20%
+903	1166	985	1216	2.29
+643	1177	714	1223	2x
+1076	1194	1190	1247	4,58 E
+509	1205	918	1261	SC Blaetterkrokant 150g
+905	1248	988	1294	1,49
+642	1254	706	1291	2 X
+1078	1275	1191	1329	2.98 E
+496	1274	955	1344	Hamdong ChickenNood1.120g
+1078	1319	1191	1371	2,49 E
+497	1316	775	1380	UL Eier BH 10ST
+1080	1363	1194	1412	1,22*H
+493	1354	950	1421	Kingsgard 2ig.pap.10x50ST
+901	1401	988	1451	1,19
+639	1406	708	1449	3 X
+1082	1449	1200	1496	3,57 B
+500	1443	739	1497	As Baconi 100g
+1064	1490	1164	1540	22,48
+505	1486	690	1534	SUMME [15]
+1057	1573	1165	1627	22.48
+508	1564	606	1613	SUMME
+1051	1616	1161	1673	22,48
+499	1608	808	1666	Kartenzahlung EUR

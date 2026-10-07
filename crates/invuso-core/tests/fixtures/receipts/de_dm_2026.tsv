@@ -1,0 +1,99 @@
+# Source: own photo of the user (dm-drogerie markt, 2026-10-06), shared for Invuso (AP-38).
+# OCR: PP-OCRv6 small via rten, app pipeline on the host (services::ocr), fragments as recognized.
+# Anonymized: address, phone and register numbers replaced; PAYBACK, TSE and card data cut off.
+# The detector missed the row `2 x Coupon 15% Haar` (only its amount -0,71 is read).
+# Columns: left, top, right, bottom (pixels), text
+598	162	681	217	dm
+752	179	889	199	dm-drogerie markt
+759	196	882	214	Musterstraße 1
+713	209	929	231	99999 Musterstadt
+558	218	675	237	HIER BIN ICH MENSCH
+766	227	877	246	00000/0000000
+618	228	719	250	PIER KAUF ICH EIN
+559	263	787	289	************** Bonduplikat
+797	268	925	286	本本车本本本不本本本家家本本
+558	288	867	317	06.10.2026 16:58 D5CG/4 000101/6
+886	294	928	317	5857
+559	316	773	342	Soft&Sicher Pocket 6x8St
+862	321	903	342	0,85
+560	335	738	357	Tempo Minipack 9x5St
+863	339	903	359	1,45
+559	352	827	375	2x 1,25 S&S Feu.ToiPa Duo Sens
+863	356	904	375	2,50
+559	369	810	392	Prof. Gefrierbeutel-Trio Set
+865	373	905	392	1,45
+867	389	906	408	2,85
+868	405	908	425	1,35
+867	421	909	443	2,95
+560	422	828	442	Sil Fleckenentf. Spr 1fürAlles
+868	439	909	459	0,95
+560	439	812	459	DONTODENT Zungenreiniger 1St
+869	456	911	477	0,55
+561	456	823	476	Dontodent Zahnseide Minze 12m
+871	474	911	494	1,65
+561	488	831	510	2x 1,25 0do1 Med3 ZC White&Shi
+871	491	912	511	2,50
+871	508	913	529	4,65
+561	523	823	545	Wilkinson Klingen Int, Compl.
+866	525	913	547	12,45
+561	540	773	562	Balea RG Pure Cotton PG
+873	543	915	563	0,95
+561	557	836	580	Balea MEN Sens Rasierschaum PG
+874	560	916	581	0,75
+562	575	764	598	ebelin Wattepads 140St
+875	578	916	599	0,95
+562	592	809	616	ebelin Kosmetiktücher 200St
+876	596	918	617	0,95
+562	610	766	633	Palmolive Dusche Milch
+878	614	919	636	1,35
+562	628	839	651	2x 2,95 Rexona Deo Spray Showe
+878	632	920	655	5,90
+562	647	840	669	Rexona Wom.Deospr.Max.Prot. PG
+880	651	922	673	1,65
+562	664	841	688	2x 3,75 always Ult. Binden Sec
+880	670	921	691	7,50
+934	674	945	690	2
+563	682	813	706	Elvital SH Hydra Pure 250m1
+880	688	922	709	3,45
+562	700	751	726	Wellaflex HS PG 75m1
+882	707	923	728	1,25
+563	718	789	744	essence Gel Nagellack 33
+882	724	925	746	1,75
+563	737	835	763	ebelin NL-Entferner Strawb.50
+883	742	926	764	0,45
+564	756	780	781	ebelin Reisebox ZB-Kopf
+813	757	845	781	1St
+883	761	927	782	0,45
+563	775	726	800	Papiertragetasche
+884	779	928	802	0,20
+942	785	951	799	1
+566	797	690	817	Zwischensumme
+876	799	928	821	63,70
+564	811	891	840	dm-Rabatte auf rabattfähige Artikel
+563	831	839	858	4 x Coupon 15% Bad Deo Dusche
+879	837	929	861	-1,33
+879	857	930	882	-0,71
+562	869	830	897	2 x Coupon 15% Deko Kosmetik
+878	877	931	900	-0,33
+564	891	655	913	SUMME EUR
+879	897	932	920	61,33
+564	910	645	933	VISA EUR
+874	916	933	941	-61,33
+564	940	654	964	MwSt-Satz
+714	941	777	965	Brutto
+817	945	869	969	Netto
+917	947	961	971	MwSt
+565	959	646	983	1=19,00%
+723	961	777	985	53,83
+817	964	869	988	45,24
+918	965	962	989	8,59
+565	979	637	1002	2=7,00%
+733	981	777	1004	7,50
+826	984	869	1008	7,01
+919	985	963	1008	0,49
+565	998	963	1025	******************************************
+559	386	830	408	3x 0,95 WC-Frisch Kraft.Akt. M
+559	403	813	425	SOS Desinfekt.tücher PG 10St
+559	471	760	493	Meridol Zahncreme 20m1
+559	505	789	528	meridol ZB ParodontExpert
+939	728	948	744	1

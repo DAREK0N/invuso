@@ -1,0 +1,51 @@
+# Source: own photo of the user (Netto Marken-Discount), a second app run on the emulator
+# (AP-38, corners with margin): PP-OCRv6 small, levelled boxes; "0,69 B" came out as "0.,69 B".
+# Anonymized: address replaced; card terminal data cut off.
+# Columns: left, top, right, bottom (pixels), text
+197	111	653	251	Netto
+322	229	632	290	Marken-Discount
+130	286	717	360	99999 Musterstadt, Musterstr. 1
+240	335	579	395	WWW.NETTO-ONLINE.DE
+605	337	689	367	Ah
+648	368	713	418	EUR
+85	408	532	479	bauwolltragetasche GRS ST
+636	409	750	459	1.99 A
+89	448	515	517	BO-SpinatFeta Stange 1 ST
+633	449	750	499	0.,69 B
+626	486	718	536	-0.35
+95	499	328	549	Preisaenderung
+642	524	757	576	1.09 A
+97	532	487	592	Effect Energy 0,33 L DS
+646	564	760	614	0.25*A
+102	581	386	630	EW-Pfand 0,25 EUR
+649	606	763	653	1,99 B
+100	622	443	672	Crunchips sort. 150g
+654	645	767	694	1,19 B
+96	660	498	714	Cl.KnabbersnackSalz1256
+655	686	770	733	0,99
+93	701	535	756	Leckerwaeulchen sort.150g
+647	727	746	777	-0.20
+88	748	275	792	Rabatt 20%
+490	777	574	829	2.29
+223	786	295	830	2 x
+669	808	782	862	4,58 E
+85	816	506	868	SC Blaetterkrokant 150g
+495	860	579	907	1,49
+223	861	291	902	2 X
+76	887	545	951	Hamdong ChickenNood1.120g
+671	892	786	945	2,98 E
+76	927	364	989	UL Eier BH 10ST
+672	935	786	985	2,49 B
+75	967	543	1029	Kingsgard 2ig.pap.10x50ST
+675	979	790	1027	1,22*H
+495	1013	583	1064	1,19
+226	1018	297	1060	3 X
+84	1053	329	1107	AS Bacon 100g
+677	1064	797	1111	3.57 B
+90	1097	279	1143	SUMME [15]
+660	1104	762	1154	22,48
+97	1174	197	1223	SUMME
+656	1186	763	1239	22,48
+488	1197	504	1216	E
+88	1217	403	1276	Kartenzahlung EUR
+650	1229	759	1285	22,48
