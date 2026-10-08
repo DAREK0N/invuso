@@ -276,6 +276,42 @@ pub fn validate_split(
     Ok(split(total_minor, mode)?)
 }
 
+/// Who would carry how much if the expense were saved as it stands
+/// (OCR-39): the same shares a saved [`Expense`] gives.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharePreview {
+    /// Each person's share in the expense's currency, as
+    /// [`Expense::shares`] gives it.
+    pub shares: BTreeMap<PersonId, i64>,
+    /// What the lines nobody in particular had add up to (the
+    /// "Allgemeinheit", idee.md 8.2 step 3), before they are shared; 0 when
+    /// the expense is not split by line items.
+    pub general: i64,
+}
+
+impl SharePreview {
+    /// The shares in the base currency once the total is converted to
+    /// `total_in_base`, as [`Expense::shares_in_base`] gives them.
+    pub fn in_base(&self, total_in_base: i64) -> Result<BTreeMap<PersonId, i64>, ExpenseError> {
+        Ok(rescale(total_in_base, &self.shares)?)
+    }
+}
+
+/// The shares of an expense of `total_minor` split by `mode`, while it is
+/// still being entered (OCR-39).
+pub fn preview_shares(total_minor: i64, mode: &SplitMode) -> Result<SharePreview, ExpenseError> {
+    let shares = validate_split(total_minor, mode)?;
+    let general = match mode {
+        SplitMode::Items { items, .. } => items
+            .iter()
+            .filter(|item| item.assigned_to.is_empty())
+            .try_fold(0_i64, |sum, item| sum.checked_add(item.amount_minor))
+            .ok_or(SplitError::Overflow)?,
+        _ => 0,
+    };
+    Ok(SharePreview { shares, general })
+}
+
 /// Checks `occurred_at`: `YYYY-MM-DDTHH:MM:SS` followed by `Z` or `±HH:MM`,
 /// with a real calendar date and time.
 pub fn validate_occurred_at(occurred_at: &str) -> Result<(), ExpenseError> {
@@ -384,6 +420,56 @@ mod tests {
         assert_eq!(base.values().sum::<i64>(), 563);
         // Rests: a 0.042, b and c 0.479; the leftover cent goes to b by id.
         assert_eq!(base, [(p("a"), 188), (p("b"), 188), (p("c"), 187)].into());
+    }
+
+    #[test]
+    fn preview_matches_the_saved_shares() {
+        use crate::split::ItemLine;
+        let one = rust_decimal::Decimal::ONE;
+        let line = |amount: i64, ids: &[&str]| ItemLine {
+            amount_minor: amount,
+            assigned_to: ids.iter().map(|id| (p(id), one)).collect(),
+        };
+        // 1 487 ¥: beer for a, two thirds of a melon for b and c, rice for
+        // everyone, a coupon on b's melon, 108 ¥ tax on top.
+        let mode = SplitMode::Items {
+            participants: [(p("a"), one), (p("b"), one), (p("c"), one)].into(),
+            items: vec![
+                line(480, &["a"]),
+                line(500, &["b", "c"]),
+                line(-50, &["b", "c"]),
+                line(449, &[]),
+            ],
+        };
+        let preview = preview_shares(1_487, &mode).unwrap();
+        assert_eq!(preview.general, 449);
+        // 1 JPY = 0.00563 EUR → 8.37 EUR.
+        let e = expense(
+            Money::new(1_487, cur("JPY")),
+            Money::new(837, cur("EUR")),
+            mode,
+        );
+        assert_eq!(e.shares(), Ok(preview.shares.clone()));
+        assert_eq!(e.shares_in_base(), preview.in_base(837));
+        assert_eq!(preview.shares.values().sum::<i64>(), 1_487);
+        assert_eq!(preview.in_base(837).unwrap().values().sum::<i64>(), 837);
+    }
+
+    #[test]
+    fn preview_of_other_modes_has_no_general_part() {
+        let mode = SplitMode::Equal([p("a"), p("b")].into());
+        let preview = preview_shares(1_001, &mode).unwrap();
+        assert_eq!(preview.general, 0);
+        assert_eq!(preview.shares, [(p("a"), 501), (p("b"), 500)].into());
+        // Three decimals in the base currency (BHD).
+        assert_eq!(
+            preview.in_base(4_701),
+            Ok([(p("a"), 2_353), (p("b"), 2_348)].into())
+        );
+        assert_eq!(
+            preview_shares(1_001, &SplitMode::Equal(BTreeSet::new())),
+            Err(ExpenseError::NoParticipants)
+        );
     }
 
     #[test]

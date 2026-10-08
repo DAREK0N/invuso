@@ -242,7 +242,7 @@ group:
   icon: "Symbol"
   color: "Farbe"
   base_currency: "Basiswährung"
-  base_currency_hint: "Alle Salden der Gruppe werden in dieser Währung berechnet."
+  base_currency_hint: "Alle Salden der Gruppe werden in dieser Währung berechnet. Kassenzettel lassen sich in ihr anzeigen."
   target_language: "Übersetzen in"
   target_language_hint: "Sprache, in die Kassenzettel dieser Gruppe übersetzt werden."
   language_global: "Wie in den Einstellungen (%{language})"
@@ -686,6 +686,13 @@ items:
   unsure_other: "%{count} Positionen sind unsicher erkannt. Tippe sie an, um sie mit dem Foto zu vergleichen."
   unsure_hint: "Unsicher erkannt: Bezeichnung und Preise bitte mit dem Foto vergleichen. Nach einer Änderung verschwindet die Markierung."
   photo: "Stelle im Kassenzettel vergrößern"
+  show_in: "In %{currency}"
+  converted: "Umgerechnet mit %{line}, nur zur Anzeige."
+  paint: "Zuordnen"
+  paint_hint: "Person wählen, dann Positionen antippen."
+  paint_done: "Fertig"
+  preview_title: "Anteile"
+  preview_general: "Darin enthalten: %{amount} für alle zusammen."
 
 packs:
   intro: "Ohne Übersetzer des Geräts übersetzt Invuso Kassenzettel mit heruntergeladenen Sprachpaketen, danach offline. Es wird nur heruntergeladen, was du hier antippst."

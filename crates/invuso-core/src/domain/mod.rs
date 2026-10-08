@@ -14,8 +14,8 @@ pub use cash::{CashError, CashMovementId, CashMovementKind, cash_balances, cash_
 pub use currency::{Currency, CurrencyError};
 pub use expense::{
     Category, CategoryId, Expense, ExpenseError, ExpenseId, ExpensePayment, ExpenseSource,
-    GeoPoint, local_date, validate_occurred_at, validate_participants, validate_payments,
-    validate_split,
+    GeoPoint, SharePreview, local_date, preview_shares, validate_occurred_at,
+    validate_participants, validate_payments, validate_split,
 };
 pub use group::{Group, GroupError, GroupId, GroupMember, is_iso_date, validate_period};
 pub use line_item::{

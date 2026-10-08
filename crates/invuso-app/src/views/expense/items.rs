@@ -1,6 +1,9 @@
-//! The line items of an expense (idee.md 7.2 step 5, OCR-30..35, SPL-02):
+//! The line items of an expense (idee.md 7.2 step 5, OCR-30..39, SPL-02):
 //! a list that looks like the printed receipt, and a sheet to correct one
-//! line, split or merge it and say who had how much of it.
+//! line, split or merge it and say who had how much of it. Lines can also
+//! be assigned by tapping them with a person picked (OCR-38), with each
+//! person's share shown live (OCR-39), and their prices shown in the
+//! target currency (OCR-36).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,15 +12,17 @@ use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdArrowDown, LdArrowUp, LdCornerDownRight, LdDownload, LdLanguages, LdMerge, LdMinus,
-        LdPlus, LdSplit, LdTrash2, LdTriangleAlert,
+        LdArrowDown, LdArrowLeftRight, LdArrowUp, LdCheck, LdCornerDownRight, LdDownload,
+        LdLanguages, LdMerge, LdMinus, LdPaintbrush, LdPlus, LdSplit, LdTrash2, LdTriangleAlert,
+        LdUsers,
     },
 };
 use invuso_core::Decimal;
 use invuso_core::domain::{
     Currency, GroupMember, LineItem, LineItemError, LineItemKind, Money, Person, PersonId,
-    effective_assignments, line_items_sum,
+    SharePreview, effective_assignments, line_items_sum,
 };
+use invuso_core::fx::{self, Rate};
 use invuso_core::receipt::{ItemKind, ParsedReceipt, VatLine};
 use invuso_core::split::allocate;
 
@@ -28,7 +33,7 @@ use crate::components::{
 };
 use crate::format::{
     NumberFormat, amount_text, fit_amount_text, format_money, format_number, format_plain,
-    number_text, parse_amount, parse_number,
+    format_rate, number_text, parse_amount, parse_number,
 };
 use crate::preferences::kind_label;
 use crate::services::ocr::{ItemMark, PhotoQuad, bounds_of, is_unsure};
@@ -171,6 +176,85 @@ pub(super) fn apply(
     }
 }
 
+/// What tapping a line does in paint mode (OCR-38).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Brush {
+    /// Gives the line back to everyone (the "Allgemeinheit").
+    Everyone,
+    /// Adds the person to the line, or takes them off again (user decision
+    /// in AP-37); whoever else had it keeps it.
+    Person(PersonId),
+}
+
+/// Paints the line with `key`. A line that belongs to the one above (a
+/// deposit, a discount) is carried like its article, so the article is
+/// painted. Returns whether a line changed; tax and the like cannot be
+/// assigned.
+pub(super) fn paint(drafts: &mut [ItemDraft], key: u64, brush: &Brush) -> bool {
+    let Some(mut index) = drafts.iter().position(|d| d.key == key) else {
+        return false;
+    };
+    while index > 0 && drafts[index].item.attached {
+        index -= 1;
+    }
+    let item = &mut drafts[index].item;
+    if !item.kind.is_assignable() {
+        return false;
+    }
+    // Saying who had a line corrects nothing that was read: an unsure line
+    // stays marked (as in the sheet).
+    match brush {
+        Brush::Everyone => item.assigned_to.clear(),
+        Brush::Person(person) => {
+            if item.assigned_to.remove(person).is_none() {
+                item.assigned_to.insert(person.clone(), Decimal::ONE);
+            }
+        }
+    }
+    true
+}
+
+/// `minor` units of `currency`, converted with `rate` if one is given; only
+/// shown, nothing is stored converted (OCR-36).
+fn shown(minor: i64, currency: Currency, rate: Option<Rate>) -> Money {
+    let amount = Money::new(minor, currency);
+    rate.and_then(|rate| fx::convert(amount, &rate).ok())
+        .unwrap_or(amount)
+}
+
+/// The shares of a [`SharePreview`] in the currency they are shown in.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct PreviewAmounts {
+    pub shares: BTreeMap<PersonId, i64>,
+    pub general: i64,
+    pub currency: Currency,
+}
+
+/// The preview in the expense's currency, or with `rate` in the target
+/// currency: the total converted like a saved expense's and the shares
+/// scaled to it, so they are the ones the expense will have in its base
+/// currency (idee.md 8.2 step 5). Falls back to the expense's currency
+/// when they cannot be scaled.
+pub(super) fn preview_amounts(
+    preview: &SharePreview,
+    total: Money,
+    rate: Option<Rate>,
+) -> PreviewAmounts {
+    let converted = rate.and_then(|rate| {
+        let total_in_base = fx::convert(total, &rate).ok()?;
+        Some(PreviewAmounts {
+            shares: preview.in_base(total_in_base.amount_minor()).ok()?,
+            general: shown(preview.general, total.currency(), Some(rate)).amount_minor(),
+            currency: rate.quote(),
+        })
+    });
+    converted.unwrap_or_else(|| PreviewAmounts {
+        shares: preview.shares.clone(),
+        general: preview.general,
+        currency: total.currency(),
+    })
+}
+
 /// Shortens the amounts to what `to` allows after switching the currency,
 /// like the other amount fields of the form (`12,50 €` → `12 ¥`).
 pub(super) fn fit_currency(
@@ -205,7 +289,9 @@ pub(super) struct TranslationNote {
 /// correction or translation large, the printed text small underneath,
 /// swapped by a switch (OCR-35); `quantity × unit price`, the total and
 /// who had it (OCR-33).
-/// Below the lines their sum against the expense's total (OCR-14, OCR-32).
+/// Below the lines their sum against the expense's total (OCR-14, OCR-32)
+/// and who would carry how much (OCR-39). With `on_paint`, a person can be
+/// picked and lines tapped to give them to that person (OCR-38).
 /// Without `on_open` the list only shows the lines (expense detail).
 #[component]
 pub(super) fn ReceiptItems(
@@ -223,9 +309,26 @@ pub(super) fn ReceiptItems(
     /// VAT the receipt says is contained in its prices (AP-38).
     #[props(default)]
     vat: Vec<VatLine>,
+    /// Rate from `currency` into the target currency, which is the group's
+    /// base currency (user decision in AP-37); offers to show the prices in
+    /// it (OCR-36).
+    #[props(default)]
+    rate: Option<Rate>,
+    /// Who would carry how much as the lines are assigned now (OCR-39).
+    #[props(default)]
+    preview: Option<SharePreview>,
+    /// Assigns the tapped line in paint mode (OCR-38).
+    #[props(default)]
+    on_paint: Option<EventHandler<(u64, Brush)>>,
 ) -> Element {
     let format = NumberFormat::current();
     let mut show_original = use_signal(|| false);
+    let mut in_target = use_signal(|| false);
+    let mut brush = use_signal(|| None::<Brush>);
+    let rate = rate.filter(|r| r.base() == currency && r.quote() != currency);
+    let shown_rate = rate.filter(|_| in_target());
+    let can_paint = assignable && on_paint.is_some();
+    let painting = brush().filter(|_| can_paint);
     let lines = line_items(&items);
     // Who carries each line, attached ones as their article.
     let carried = effective_assignments(&lines);
@@ -240,24 +343,93 @@ pub(super) fn ReceiptItems(
         (Some(total), Some(sum)) => Some(total.amount_minor() - sum),
         _ => None,
     };
+    let amounts = preview
+        .zip(total)
+        .filter(|_| assignable)
+        .map(|(preview, total)| preview_amounts(&preview, total, shown_rate));
+    let share_of = |person: &PersonId| {
+        amounts.as_ref().map(|a| {
+            format_money(
+                Money::new(a.shares.get(person).copied().unwrap_or(0), a.currency),
+                format,
+            )
+        })
+    };
+    // Who carries something, in the order of `people`.
+    let holders: Vec<(Person, String)> = people
+        .iter()
+        .filter(|person| {
+            amounts
+                .as_ref()
+                .is_some_and(|a| a.shares.get(&person.id).is_some_and(|s| *s != 0))
+        })
+        .map(|person| (person.clone(), share_of(&person.id).unwrap_or_default()))
+        .collect();
+    let brush_shares: Vec<Option<String>> = people.iter().map(|p| share_of(&p.id)).collect();
+    let general = amounts
+        .as_ref()
+        .filter(|a| a.general != 0)
+        .map(|a| format_money(Money::new(a.general, a.currency), format));
+    let first_person = people.first().map(|p| p.id.clone());
+    let toggle = "flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors";
 
     rsx! {
         section { class: "flex flex-col gap-2",
-            div { class: "flex min-h-11 items-center justify-between gap-3 px-1",
+            div { class: "flex min-h-11 flex-wrap items-center justify-between gap-x-3 px-1",
                 h2 { class: "text-sm font-medium text-floral-white-300", {t!("items.title").to_string()} }
-                if has_other_text {
-                    button {
-                        class: "flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors",
-                        r#type: "button",
-                        aria_pressed: if original_first { "true" } else { "false" },
-                        onclick: move |_| show_original.toggle(),
-                        Icon { icon: LdLanguages, class: "h-4 w-4" }
-                        if original_first {
-                            {t!("items.show_translation").to_string()}
-                        } else {
-                            {t!("items.show_original").to_string()}
+                div { class: "flex flex-wrap items-center justify-end",
+                    if has_other_text {
+                        button {
+                            class: toggle,
+                            r#type: "button",
+                            aria_pressed: if original_first { "true" } else { "false" },
+                            onclick: move |_| show_original.toggle(),
+                            Icon { icon: LdLanguages, class: "h-4 w-4" }
+                            if original_first {
+                                {t!("items.show_translation").to_string()}
+                            } else {
+                                {t!("items.show_original").to_string()}
+                            }
                         }
                     }
+                    if let Some(rate) = rate {
+                        button {
+                            class: toggle,
+                            r#type: "button",
+                            aria_pressed: if in_target() { "true" } else { "false" },
+                            onclick: move |_| in_target.toggle(),
+                            Icon { icon: LdArrowLeftRight, class: "h-4 w-4" }
+                            if in_target() {
+                                {t!("items.show_in", currency = currency.code()).to_string()}
+                            } else {
+                                {t!("items.show_in", currency = rate.quote().code()).to_string()}
+                            }
+                        }
+                    }
+                    if can_paint && painting.is_none() && !items.is_empty() {
+                        button {
+                            class: toggle,
+                            r#type: "button",
+                            onclick: move |_| {
+                                brush.set(Some(first_person.clone().map_or(Brush::Everyone, Brush::Person)));
+                            },
+                            Icon { icon: LdPaintbrush, class: "h-4 w-4" }
+                            {t!("items.paint").to_string()}
+                        }
+                    }
+                }
+            }
+            if let Some(rate) = shown_rate {
+                p { class: "px-1 text-sm tabular-nums text-floral-white-400", role: "status",
+                    {t!(
+                        "items.converted",
+                        line = t!(
+                            "converter.rate_line",
+                            base = rate.base().code(),
+                            rate = format_rate(rate.value(), format),
+                            quote = rate.quote().code()
+                        )
+                    ).to_string()}
                 }
             }
             if let Some(note) = translation {
@@ -303,20 +475,25 @@ pub(super) fn ReceiptItems(
                             carried_by: carried.get(index).cloned().unwrap_or_default(),
                             item: draft.item.clone(),
                             currency,
+                            rate: shown_rate,
                             people: people.clone(),
                             assignable,
                             original_first,
-                            onclick: on_open.map(|open| EventHandler::new(move |_: ()| open.call(draft.key))),
+                            painting: painting.clone(),
+                            onclick: match (painting.clone(), on_paint) {
+                                (Some(brush), Some(paint)) => Some(EventHandler::new(move |_: ()| paint.call((draft.key, brush.clone())))),
+                                _ => on_open.map(|open| EventHandler::new(move |_: ()| open.call(draft.key))),
+                            },
                         }
                     }
                     div { class: "mt-2 flex flex-col gap-1 border-t-2 border-dashed border-jet-black-300 px-1 pt-3 text-sm",
                         SumLine {
                             label: t!("items.sum").to_string(),
-                            value: sum.map(|s| format_plain(Money::new(s, currency), format)).unwrap_or_default(),
+                            value: sum.map(|s| format_plain(shown(s, currency, shown_rate), format)).unwrap_or_default(),
                         }
                         SumLine {
                             label: t!("items.total").to_string(),
-                            value: total.map(|t| format_plain(t, format)).unwrap_or_else(|| "–".to_string()),
+                            value: total.map(|t| format_plain(shown(t.amount_minor(), currency, shown_rate), format)).unwrap_or_else(|| "–".to_string()),
                             strong: true,
                         }
                         for line in vat.iter() {
@@ -327,7 +504,7 @@ pub(super) fn ReceiptItems(
                                         None => t!("items.vat").to_string(),
                                     }
                                 }
-                                span { {format_plain(line.amount, format)} }
+                                span { {format_plain(shown(line.amount.amount_minor(), line.amount.currency(), shown_rate), format)} }
                             }
                         }
                     }
@@ -348,6 +525,29 @@ pub(super) fn ReceiptItems(
                     }
                 },
             }
+            if amounts.is_some() && painting.is_none() {
+                div {
+                    class: "flex flex-col gap-2 rounded-2xl border border-jet-black-800 bg-jet-black-900 px-3 py-3",
+                    aria_live: "polite",
+                    h3 { class: "text-sm font-medium text-floral-white-300", {t!("items.preview_title").to_string()} }
+                    div { class: "flex flex-wrap gap-2",
+                        for (person, share) in holders.iter().cloned() {
+                            div {
+                                key: "{person.id.as_str()}",
+                                class: "flex min-h-11 items-center gap-2 rounded-full bg-jet-black-800 py-1 pr-3 pl-1",
+                                Avatar { name: person.name.clone(), color: person.color.clone(), size: AvatarSize::Sm }
+                                span { class: "max-w-32 truncate text-sm text-floral-white-100", "{person.name}" }
+                                span { class: "text-sm font-semibold tabular-nums text-floral-white-50", "{share}" }
+                            }
+                        }
+                    }
+                    if let Some(general) = general.clone() {
+                        p { class: "px-1 text-xs tabular-nums text-floral-white-400",
+                            {t!("items.preview_general", amount = general).to_string()}
+                        }
+                    }
+                }
+            }
             if let Some(on_add) = on_add {
                 button {
                     class: "flex min-h-11 items-center gap-2 self-start rounded-full px-3 text-sm font-medium text-cerulean-300 active:bg-jet-black-800 transition-colors",
@@ -356,6 +556,108 @@ pub(super) fn ReceiptItems(
                     Icon { icon: LdPlus, class: "h-4 w-4" }
                     {t!("items.add").to_string()}
                 }
+            }
+            if let Some(current) = painting.clone() {
+                // Keeps the last lines reachable above the paint bar.
+                div { class: "h-44", aria_hidden: "true" }
+                PaintBar {
+                    brush: current,
+                    people: people.clone(),
+                    shares: brush_shares,
+                    general: general.clone(),
+                    on_brush: move |next| brush.set(Some(next)),
+                    on_done: move |_| brush.set(None),
+                }
+            }
+        }
+    }
+}
+
+/// The people to paint with (OCR-38), each with their share as it stands
+/// (OCR-39), floating above the bottom edge while paint mode is on.
+#[component]
+fn PaintBar(
+    brush: Brush,
+    people: Vec<Person>,
+    /// Each person's share as shown, in the order of `people`.
+    shares: Vec<Option<String>>,
+    /// What everyone shares, as shown.
+    general: Option<String>,
+    on_brush: EventHandler<Brush>,
+    on_done: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-x-0 bottom-0 z-40 safe-area-x animate-sheet-in",
+            style: "padding-bottom: calc(0.5rem + var(--safe-area-bottom));",
+            div { class: "glass mx-2 flex flex-col gap-2 rounded-2xl px-3 py-2",
+                div { class: "flex items-center justify-between gap-2",
+                    p { class: "min-w-0 px-1 text-sm text-floral-white-300", {t!("items.paint_hint").to_string()} }
+                    button {
+                        class: "flex min-h-11 shrink-0 items-center gap-2 rounded-full bg-cerulean-500 px-4 text-sm font-semibold text-jet-black-950 active:bg-cerulean-400 transition-colors",
+                        r#type: "button",
+                        onclick: move |_| on_done.call(()),
+                        Icon { icon: LdCheck, class: "h-4 w-4" }
+                        {t!("items.paint_done").to_string()}
+                    }
+                }
+                div {
+                    class: "flex gap-2 overflow-x-auto overscroll-contain pb-1",
+                    role: "radiogroup",
+                    aria_label: t!("items.paint").to_string(),
+                    BrushChip {
+                        label: t!("items.everyone").to_string(),
+                        amount: general.unwrap_or_default(),
+                        selected: brush == Brush::Everyone,
+                        onclick: move |_| on_brush.call(Brush::Everyone),
+                        span { class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-jet-black-700 text-floral-white-200",
+                            Icon { icon: LdUsers, class: "h-4 w-4" }
+                        }
+                    }
+                    for (person, share) in people.iter().cloned().zip(shares) {
+                        BrushChip {
+                            key: "{person.id.as_str()}",
+                            label: person.name.clone(),
+                            amount: share.unwrap_or_default(),
+                            selected: brush == Brush::Person(person.id.clone()),
+                            onclick: {
+                                let id = person.id.clone();
+                                move |_| on_brush.call(Brush::Person(id.clone()))
+                            },
+                            Avatar { name: person.name.clone(), color: person.color.clone(), size: AvatarSize::Sm }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One brush of the paint bar: who, and what they carry so far.
+#[component]
+fn BrushChip(
+    label: String,
+    amount: String,
+    selected: bool,
+    onclick: EventHandler<()>,
+    children: Element,
+) -> Element {
+    rsx! {
+        button {
+            class: "flex min-h-14 shrink-0 items-center gap-2 rounded-2xl border px-2 py-1 text-left transition-colors ease-apple",
+            class: if selected { "border-cerulean-400 bg-cerulean-900" } else { "border-jet-black-700 bg-jet-black-900 active:bg-jet-black-800" },
+            r#type: "button",
+            role: "radio",
+            aria_checked: if selected { "true" } else { "false" },
+            onclick: move |_| onclick.call(()),
+            {children}
+            span { class: "flex min-w-0 flex-col pr-1",
+                span {
+                    class: "max-w-28 truncate text-sm font-medium",
+                    class: if selected { "text-floral-white-50" } else { "text-floral-white-200" },
+                    "{label}"
+                }
+                span { class: "text-xs tabular-nums text-floral-white-400", "{amount}" }
             }
         }
     }
@@ -373,7 +675,8 @@ fn SumLine(label: String, value: String, #[props(default)] strong: bool) -> Elem
     }
 }
 
-/// One line of the receipt; tapping opens its sheet, if there is one.
+/// One line of the receipt; tapping opens its sheet, if there is one, or
+/// in paint mode gives it to the brush's person.
 #[component]
 fn ItemRow(
     item: LineItem,
@@ -384,10 +687,14 @@ fn ItemRow(
     /// Who carries the line; for an attached line, who carries its article.
     carried_by: BTreeMap<PersonId, Decimal>,
     currency: Currency,
+    /// Shows the prices converted with this rate (OCR-36).
+    rate: Option<Rate>,
     people: Vec<Person>,
     assignable: bool,
     /// The printed text large and the translation small (OCR-35).
     original_first: bool,
+    /// The brush while in paint mode (OCR-38).
+    painting: Option<Brush>,
     onclick: Option<EventHandler<()>>,
 ) -> Element {
     let format = NumberFormat::current();
@@ -408,7 +715,7 @@ fn ItemRow(
         .then(|| {
             let unit = item
                 .unit_price_minor
-                .map(|u| format_plain(Money::new(u, currency), format));
+                .map(|u| format_plain(shown(u, currency, rate), format));
             match unit {
                 Some(unit) if item.quantity != Decimal::ONE => {
                     format!("{} × {unit}", format_number(item.quantity, format))
@@ -430,19 +737,39 @@ fn ItemRow(
         })
         .collect();
     let show_holders = assignable && item.kind.is_assignable();
+    // In paint mode: whether the line is the brush's already, and whether
+    // it can be painted at all.
+    let painted = item.kind.is_assignable()
+        && match &painting {
+            Some(Brush::Person(person)) => carried_by.get(person).is_some_and(|w| !w.is_zero()),
+            Some(Brush::Everyone) => carried_by.values().all(Decimal::is_zero),
+            None => false,
+        };
+    let paintable = painting.is_none() || item.kind.is_assignable();
 
     rsx! {
         button {
-            class: "flex min-h-14 w-full items-start gap-3 border-b border-dashed border-jet-black-200 px-1 py-2 text-left transition-colors ease-apple",
+            class: "relative flex min-h-14 w-full items-start gap-3 border-b border-dashed border-jet-black-200 px-1 py-2 text-left transition-colors ease-apple",
             class: if unsure { "bg-pale-oak-100" },
-            class: if onclick.is_some() { "active:bg-floral-white-200" },
+            class: if onclick.is_some() && paintable { "active:bg-floral-white-200" },
+            class: if painting.is_some() { "pl-3" },
+            class: if !paintable { "opacity-50" },
             r#type: "button",
-            disabled: onclick.is_none(),
+            disabled: onclick.is_none() || !paintable,
+            aria_pressed: match (&painting, painted) {
+                (Some(_), true) => Some("true"),
+                (Some(_), false) => Some("false"),
+                (None, _) => None,
+            },
             onclick: move |_| {
                 if let Some(onclick) = onclick {
                     onclick.call(());
                 }
             },
+            // The rows' border is dashed; the mark of a painted line is not.
+            if painted {
+                span { class: "absolute inset-y-1 left-0 w-1 rounded-full bg-cerulean-500", aria_hidden: "true" }
+            }
             if attached {
                 Icon { icon: LdCornerDownRight, class: "mt-1 h-4 w-4 shrink-0 text-jet-black-500" }
             }
@@ -475,7 +802,7 @@ fn ItemRow(
                     span {
                         class: "text-base tabular-nums",
                         class: if ignored { "text-jet-black-500 line-through" },
-                        {format_plain(Money::new(item.total_minor, currency), format)}
+                        {format_plain(shown(item.total_minor, currency, rate), format)}
                     }
                 }
                 if show_holders {
@@ -1171,6 +1498,191 @@ mod tests {
         assert!(corrected.unsure());
         assert!(!draft("Wasser", "1", 99).unsure());
         assert_eq!(snippet_region(&[], (400, 300)), None);
+    }
+
+    #[test]
+    fn painting_toggles_people_on_a_line() {
+        let (anna, ben) = (PersonId::from("anna"), PersonId::from("ben"));
+        let mut deposit = draft("Pfand", "1", 25);
+        deposit.item.kind = LineItemKind::Deposit;
+        deposit.item.attached = true;
+        let mut tax = draft("MwSt", "1", 80);
+        tax.item.kind = LineItemKind::Tax;
+        let mut unsure = draft("Bier", "1", 450);
+        unsure.item.ocr_confidence = Some(0.5);
+        let mut list = vec![unsure, deposit, tax];
+        let (beer, deposit, tax) = (list[0].key, list[1].key, list[2].key);
+        let holders = |list: &[ItemDraft]| list[0].item.assigned_to.clone();
+
+        assert!(paint(&mut list, beer, &Brush::Person(anna.clone())));
+        assert_eq!(holders(&list), [(anna.clone(), Decimal::ONE)].into());
+        // The deposit is carried like the beer, so tapping it paints the beer.
+        assert!(paint(&mut list, deposit, &Brush::Person(ben.clone())));
+        assert_eq!(
+            holders(&list),
+            [(anna.clone(), Decimal::ONE), (ben.clone(), Decimal::ONE)].into()
+        );
+        assert!(list[1].item.assigned_to.is_empty());
+        // A second tap takes the person off again.
+        assert!(paint(&mut list, beer, &Brush::Person(anna)));
+        assert_eq!(holders(&list), [(ben, Decimal::ONE)].into());
+        assert!(paint(&mut list, beer, &Brush::Everyone));
+        assert!(holders(&list).is_empty());
+        // Tax is shared proportionally and cannot be painted.
+        assert!(!paint(&mut list, tax, &Brush::Everyone));
+        assert!(!paint(&mut list, 0, &Brush::Everyone));
+        // Assigning corrects nothing that was read.
+        assert!(list[0].unsure());
+    }
+
+    #[test]
+    fn preview_matches_the_saved_shares() {
+        use std::collections::BTreeSet;
+
+        use invuso_core::domain::{ExpenseSource, item_lines};
+        use invuso_core::fx::Rate;
+        use invuso_core::split::SplitMode;
+
+        use super::super::split::{SplitDraft, SplitKind};
+        use crate::services::expenses::save_expense;
+        use crate::services::rates::{RateError, RateProvider};
+        use crate::storage::{
+            Db, NewExchangeRate, NewExpense, NewExpensePayment, NewGroup, NewPerson, Profile,
+        };
+
+        struct Offline;
+        impl RateProvider for Offline {
+            fn source(&self) -> &'static str {
+                "offline"
+            }
+            fn latest(&self) -> Result<Vec<NewExchangeRate>, RateError> {
+                Err(RateError::Format("offline".into()))
+            }
+            fn on_date(&self, _date: &str) -> Result<Vec<NewExchangeRate>, RateError> {
+                Err(RateError::Format("offline".into()))
+            }
+        }
+
+        let db = Db::open_in_memory().unwrap();
+        db.save_profile(&Profile {
+            name: "Ich".into(),
+            home_currency: cur("EUR"),
+            target_language: "de".into(),
+        })
+        .unwrap();
+        let me = db.me().unwrap().unwrap();
+        let trip = db
+            .create_group(NewGroup {
+                name: "Japan".into(),
+                icon: "plane".into(),
+                color: "cerulean".into(),
+                base_currency: cur("EUR"),
+                start_date: None,
+                end_date: None,
+                target_language: None,
+            })
+            .unwrap();
+        let mut people = vec![me.id.clone()];
+        for name in ["Anna", "Ben"] {
+            let person = db
+                .create_person(NewPerson {
+                    name: name.into(),
+                    color: "cerulean".into(),
+                    is_me: false,
+                    note: None,
+                })
+                .unwrap();
+            db.add_group_member(&trip.id, &person.id).unwrap();
+            people.push(person.id);
+        }
+        db.add_group_member(&trip.id, &me.id).ok();
+        db.archive_rates(
+            "frankfurter",
+            1,
+            &[NewExchangeRate {
+                rate: Rate::new(cur("EUR"), cur("JPY"), d("161.37")).unwrap(),
+                rate_date: "2026-10-01".into(),
+            }],
+        )
+        .unwrap();
+
+        // 2 391 ¥: Anna's beer with its deposit, two thirds of the sashimi
+        // for Ben and me, rice for everyone, 10 % tax on top.
+        let line = |text: &str, total: i64, holders: &[&PersonId]| {
+            let mut line = draft(text, "1", total);
+            line.item.assigned_to = holders
+                .iter()
+                .map(|p| ((*p).clone(), Decimal::ONE))
+                .collect();
+            line
+        };
+        let mut list = vec![
+            line("ビール", 580, &[&people[1]]),
+            draft("容器", "1", 20),
+            line("刺身", 1_200, &[&people[2], &people[0]]),
+            line("ごはん", 394, &[]),
+        ];
+        list[1].item.kind = LineItemKind::Deposit;
+        list[1].item.attached = true;
+        let mut tax = draft("消費税", "1", 197);
+        tax.item.kind = LineItemKind::Tax;
+        list.push(tax);
+        let lines = line_items(&list);
+        let total = Money::new(2_391, cur("JPY"));
+        assert_eq!(line_items_sum(&lines), Ok(2_391));
+
+        // What the form previews …
+        let mut split = SplitDraft::equal(people.iter().cloned().collect::<BTreeSet<_>>());
+        split.kind = SplitKind::Items;
+        let mode = split.mode(&BTreeMap::new(), cur("JPY"), DE, &lines);
+        assert!(matches!(mode, SplitMode::Items { ref items, .. } if *items == item_lines(&lines)));
+        let preview = invuso_core::domain::preview_shares(total.amount_minor(), &mode).unwrap();
+        assert_eq!(preview.general, 394);
+        let rate = db
+            .rate_near(cur("JPY"), cur("EUR"), "2026-10-04")
+            .unwrap()
+            .unwrap()
+            .quote
+            .rate;
+        let in_yen = preview_amounts(&preview, total, None);
+        let in_euro = preview_amounts(&preview, total, Some(rate));
+        assert_eq!(in_euro.currency, cur("EUR"));
+
+        // … is what the saved expense carries.
+        let saved = save_expense(
+            &db,
+            &Offline,
+            &Offline,
+            NewExpense {
+                group_id: Some(trip.id.clone()),
+                title: "Izakaya".into(),
+                category_id: None,
+                occurred_at: "2026-10-04T20:15:00+09:00".into(),
+                total,
+                payments: vec![NewExpensePayment {
+                    person_id: me.id.clone(),
+                    payment_method_id: None,
+                    amount_minor: 2_391,
+                }],
+                split: mode,
+                receipt_id: None,
+                line_items: lines,
+                source: ExpenseSource::Scan,
+                note: None,
+                location: None,
+                coordinates: None,
+                own_rate: None,
+            },
+        )
+        .unwrap();
+        let stored = db.expense(&saved.expense.id).unwrap().unwrap();
+        assert_eq!(stored.shares(), Ok(in_yen.shares.clone()));
+        assert_eq!(stored.shares_in_base(), Ok(in_euro.shares.clone()));
+        assert_eq!(
+            in_euro.shares.values().sum::<i64>(),
+            stored.total_in_base.amount_minor()
+        );
+        assert_eq!(in_yen.shares.values().sum::<i64>(), 2_391);
     }
 
     #[test]

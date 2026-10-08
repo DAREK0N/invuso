@@ -14,7 +14,8 @@ use invuso_core::Decimal;
 use invuso_core::domain::{
     Category, Currency, Expense, ExpenseError, ExpenseId, ExpenseSource, Group, GroupId,
     GroupMember, LineItem, LineItemError, Money, PaymentMethod, PaymentMethodId, PaymentMethodKind,
-    Person, PersonId, is_iso_date, validate_participants, validate_payments, validate_split,
+    Person, PersonId, is_iso_date, preview_shares, validate_participants, validate_payments,
+    validate_split,
 };
 use invuso_core::fx::{self, Rate};
 use invuso_core::receipt::{PaymentKind, VatLine, detect_language};
@@ -22,7 +23,7 @@ use invuso_core::split::allocate;
 
 use super::detail::ReceiptCard;
 use super::items::{
-    self, ItemAction, ItemDraft, ItemSheet, ReceiptItems, ReceiptPhoto, TranslationNote,
+    self, Brush, ItemAction, ItemDraft, ItemSheet, ReceiptItems, ReceiptPhoto, TranslationNote,
     drafts_from_parsed, drafts_from_saved,
 };
 use super::recognition::{ReceiptReading, ReceiptRecognition};
@@ -379,12 +380,8 @@ fn ExpenseForm(data: FormData) -> Element {
     let base_currency = use_memo(move || base_of(&groups, group().as_ref(), home_currency));
     let groups = data.groups.clone();
     let global_language = data.target_language.clone();
-    let target_language = use_memo(move || {
-        group()
-            .and_then(|id| groups.iter().find(|g| g.id == id))
-            .and_then(|g| g.target_language.clone())
-            .unwrap_or_else(|| global_language.clone())
-    });
+    let target_language =
+        use_memo(move || target_language_of(&groups, group().as_ref(), &global_language));
     let originals = use_memo(move || {
         let mut texts: Vec<String> = items
             .read()
@@ -844,6 +841,18 @@ fn ExpenseForm(data: FormData) -> Element {
         BTreeMap::new()
     };
     let hint = sum_hint(&split, Money::new(total_minor, cur), format);
+    // The target currency is the base currency (user decision in AP-37);
+    // the lines can be shown in it with the rate the expense will be
+    // converted with (OCR-36).
+    let target_rate = if currency_chosen() && cur != base_currency() {
+        match (own_rate(), &*preview.read()) {
+            (Some(own), _) => Some(toward(own, cur)),
+            (None, Ok(Some(Some(near)))) => Some(near.quote.rate),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let selected = draft.participants.clone();
     let current_group = group();
     let group_entry = current_group
@@ -858,6 +867,10 @@ fn ExpenseForm(data: FormData) -> Element {
         .collect();
     let all_selected = members.iter().all(|m| selected.contains(&m.person.id));
     let by_items = current_group.is_some() && draft.kind == SplitKind::Items;
+    // Who would carry how much, as the lines are assigned now (OCR-39).
+    let share_preview = (by_items && total_minor > 0)
+        .then(|| preview_shares(total_minor, &split).ok())
+        .flatten();
     // A personal expense shows the lines it has, without assigning them.
     let show_items = by_items || (current_group.is_none() && (review || !item_list.is_empty()));
 
@@ -1368,6 +1381,13 @@ fn ExpenseForm(data: FormData) -> Element {
                     on_add: add_item,
                     translation: translation_note(translation.read().as_ref(), &item_list),
                     vat: vat_lines(),
+                    rate: target_rate,
+                    preview: share_preview,
+                    on_paint: move |(key, brush): (u64, Brush)| {
+                        if items::paint(&mut items.write(), key, &brush) {
+                            participants_error.set(None);
+                        }
+                    },
                 }
             }
             ErrorBanner { error: save_error() }
@@ -2053,6 +2073,15 @@ fn saved_payers(expense: &Expense, people: &[GroupMember]) -> Vec<PayerDraft> {
         .collect()
 }
 
+/// Language the lines are translated into: the group's own one, else the
+/// global one (TRL-05, GRP-06).
+fn target_language_of(groups: &[Group], group: Option<&GroupId>, global: &str) -> String {
+    group
+        .and_then(|id| groups.iter().find(|g| &g.id == id))
+        .and_then(|g| g.target_language.clone())
+        .unwrap_or_else(|| global.to_string())
+}
+
 fn base_of(groups: &[Group], group: Option<&GroupId>, home: Currency) -> Currency {
     group
         .and_then(|id| groups.iter().find(|g| &g.id == id))
@@ -2244,6 +2273,17 @@ mod tests {
             Some(GroupId::new("new"))
         );
         assert_eq!(preselected_group(None, &[]), None);
+    }
+
+    #[test]
+    fn group_target_language_wins_over_the_global_one() {
+        let mut trip = group("trip");
+        trip.target_language = Some("en".into());
+        let flat = group("flat");
+        let groups = [trip.clone(), flat.clone()];
+        assert_eq!(target_language_of(&groups, Some(&trip.id), "de"), "en");
+        assert_eq!(target_language_of(&groups, Some(&flat.id), "de"), "de");
+        assert_eq!(target_language_of(&groups, None, "de"), "de");
     }
 
     #[test]

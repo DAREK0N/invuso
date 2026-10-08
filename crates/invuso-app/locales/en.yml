@@ -242,7 +242,7 @@ group:
   icon: "Icon"
   color: "Color"
   base_currency: "Base currency"
-  base_currency_hint: "All balances of the group are calculated in this currency."
+  base_currency_hint: "All balances of the group are calculated in this currency. Receipts can be shown in it."
   target_language: "Translate into"
   target_language_hint: "Language receipts of this group are translated into."
   language_global: "As in settings (%{language})"
@@ -686,6 +686,13 @@ items:
   unsure_other: "%{count} items may be misread. Tap them to compare them with the photo."
   unsure_hint: "Possibly misread: please compare text and prices with the photo. The mark goes away once you change something."
   photo: "Enlarge this spot of the receipt"
+  show_in: "In %{currency}"
+  converted: "Converted at %{line}, for display only."
+  paint: "Assign"
+  paint_hint: "Pick a person, then tap lines."
+  paint_done: "Done"
+  preview_title: "Shares"
+  preview_general: "Includes %{amount} shared by everyone."
 
 packs:
   intro: "Without a translator on the device, Invuso translates receipts with downloaded language packs, offline afterwards. Only what you tap here is downloaded."
