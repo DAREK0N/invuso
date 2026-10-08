@@ -69,8 +69,11 @@
     --color-cerulean-800: #1f3f47;
     --color-cerulean-900: #101f23;
     --color-muted-teal-50: #f0f5f0;
+    --color-muted-teal-200: #c2d6c5;
     --color-muted-teal-300: #a4c1a7;
     --color-muted-teal-700: #3e5b41;
+    --color-muted-teal-800: #293d2c;
+    --color-muted-teal-950: #0e150f;
     --color-watermelon-200: #f4a4ab;
     --color-watermelon-300: #ee7781;
     --color-watermelon-400: #e94957;
@@ -909,6 +912,12 @@
   .bg-muted-teal-700 {
     background-color: var(--color-muted-teal-700);
   }
+  .bg-muted-teal-800 {
+    background-color: var(--color-muted-teal-800);
+  }
+  .bg-muted-teal-950 {
+    background-color: var(--color-muted-teal-950);
+  }
   .bg-pale-oak-100 {
     background-color: var(--color-pale-oak-100);
   }
@@ -1245,6 +1254,9 @@
   .text-muted-teal-50 {
     color: var(--color-muted-teal-50);
   }
+  .text-muted-teal-200 {
+    color: var(--color-muted-teal-200);
+  }
   .text-muted-teal-300 {
     color: var(--color-muted-teal-300);
   }
@@ -1449,6 +1461,11 @@
   .active\:bg-cerulean-700 {
     &:active {
       background-color: var(--color-cerulean-700);
+    }
+  }
+  .active\:bg-cerulean-800 {
+    &:active {
+      background-color: var(--color-cerulean-800);
     }
   }
   .active\:bg-floral-white-200 {

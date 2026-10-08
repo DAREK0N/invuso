@@ -149,6 +149,7 @@ fn AppRoot(db: Db) -> Element {
     use_context_provider(state::DataRevision::new);
     use_context_provider(state::Toaster::new);
     use_context_provider(state::RateStatus::new);
+    use_context_provider(state::TimelineFilters::new);
     use_context_provider(services::ocr::OcrJobs::new);
     use_context_provider(services::translation::downloads::PackDownloads::new);
     services::rates::use_rate_refresh();

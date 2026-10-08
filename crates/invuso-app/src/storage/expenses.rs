@@ -83,6 +83,18 @@ pub struct TimelineEntry {
     pub payers: Vec<TimelinePayer>,
     /// Receipt thumbnail, relative to the data directory (GRP-21).
     pub thumbnail_path: Option<String>,
+    /// The expense's merchant, else the one read from its receipt (GRP-25).
+    pub merchant: Option<String>,
+    /// Whether a receipt is attached, also one without thumbnail (GRP-24).
+    pub has_receipt: bool,
+    /// Everyone taking part: payers, people sharing it and people its lines
+    /// are assigned to (GRP-24, user decision in AP-29).
+    pub people: BTreeSet<PersonId>,
+    /// Methods it was paid with (GRP-24).
+    pub method_ids: BTreeSet<PaymentMethodId>,
+    /// Every text of its lines: original, translation and correction
+    /// (GRP-25).
+    pub item_texts: Vec<String>,
 }
 
 /// An expense in the list of latest expenses on Home (HOME-03).
@@ -261,7 +273,8 @@ impl Db {
         self.with(|conn| {
             let mut statement = conn.prepare(
                 "SELECT e.id, e.title, e.category_id, e.occurred_at, e.total_minor, e.currency,
-                        e.total_base_minor, e.base_currency, r.thumbnail_path
+                        e.total_base_minor, e.base_currency, r.thumbnail_path,
+                        COALESCE(e.merchant, r.detected_merchant), r.id IS NOT NULL
                  FROM expense e
                  LEFT JOIN receipt r ON r.id = e.receipt_id AND r.deleted_at IS NULL
                  WHERE e.group_id = ?1 AND e.deleted_at IS NULL
@@ -280,13 +293,15 @@ impl Db {
                         row.get::<_, i64>(6)?,
                         row.get::<_, String>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, bool>(10)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
 
             // All payers of the group in one query instead of one per row.
             let mut statement = conn.prepare(
-                "SELECT ep.expense_id, p.name, pm.name
+                "SELECT ep.expense_id, p.name, pm.name, ep.person_id, ep.payment_method_id
                  FROM expense_payment ep
                  JOIN expense e ON e.id = ep.expense_id
                  JOIN person p ON p.id = ep.person_id
@@ -295,6 +310,8 @@ impl Db {
                  ORDER BY ep.created_at, ep.id",
             )?;
             let mut payers: BTreeMap<String, Vec<TimelinePayer>> = BTreeMap::new();
+            let mut people: BTreeMap<String, BTreeSet<PersonId>> = BTreeMap::new();
+            let mut methods: BTreeMap<String, BTreeSet<PaymentMethodId>> = BTreeMap::new();
             for row in statement.query_map([group.as_str()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -302,10 +319,69 @@ impl Db {
                         name: row.get(1)?,
                         method: row.get(2)?,
                     },
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })? {
-                let (expense, payer) = row?;
+                let (expense, payer, person, method) = row?;
+                people
+                    .entry(expense.clone())
+                    .or_default()
+                    .insert(PersonId::new(person));
+                if let Some(method) = method {
+                    methods
+                        .entry(expense.clone())
+                        .or_default()
+                        .insert(PaymentMethodId::new(method));
+                }
                 payers.entry(expense).or_default().push(payer);
+            }
+
+            // Everyone else taking part: shares and assigned lines.
+            let mut statement = conn.prepare(
+                "SELECT es.expense_id, es.person_id
+                 FROM expense_share es JOIN expense e ON e.id = es.expense_id
+                 WHERE e.group_id = ?1 AND e.deleted_at IS NULL AND es.deleted_at IS NULL
+                 UNION
+                 SELECT li.expense_id, la.person_id
+                 FROM line_item_assignment la
+                 JOIN line_item li ON li.id = la.line_item_id
+                 JOIN expense e ON e.id = li.expense_id
+                 WHERE e.group_id = ?1 AND e.deleted_at IS NULL
+                       AND li.deleted_at IS NULL AND la.deleted_at IS NULL",
+            )?;
+            for row in statement.query_map([group.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })? {
+                let (expense, person) = row?;
+                people
+                    .entry(expense)
+                    .or_default()
+                    .insert(PersonId::new(person));
+            }
+
+            let mut statement = conn.prepare(
+                "SELECT li.expense_id, li.original_text, li.translated_text, li.user_text
+                 FROM line_item li JOIN expense e ON e.id = li.expense_id
+                 WHERE e.group_id = ?1 AND e.deleted_at IS NULL AND li.deleted_at IS NULL
+                 ORDER BY li.expense_id, li.position",
+            )?;
+            let mut item_texts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for row in statement.query_map([group.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })? {
+                let (expense, original, translated, corrected) = row?;
+                item_texts.entry(expense).or_default().extend(
+                    [Some(original), translated, corrected]
+                        .into_iter()
+                        .flatten()
+                        .filter(|text| !text.trim().is_empty()),
+                );
             }
 
             rows.into_iter()
@@ -320,9 +396,16 @@ impl Db {
                         base,
                         base_currency,
                         thumbnail_path,
+                        merchant,
+                        has_receipt,
                     )| {
                         Ok(TimelineEntry {
                             thumbnail_path,
+                            merchant,
+                            has_receipt,
+                            people: people.remove(&id).unwrap_or_default(),
+                            method_ids: methods.remove(&id).unwrap_or_default(),
+                            item_texts: item_texts.remove(&id).unwrap_or_default(),
                             payers: payers.remove(&id).unwrap_or_default(),
                             id: ExpenseId::new(id),
                             title,

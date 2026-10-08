@@ -1,9 +1,13 @@
 //! App-wide state shared through the Dioxus context (idee.md 2.3 `state/`).
 //! Both are provided above the router, so they outlive single screens.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use invuso_core::domain::GroupId;
+
+use crate::services::timeline::TimelineFilter;
 
 /// Counter bumped after every write to the database. Screens read it inside
 /// their queries (`use_memo`) and reload when data changed elsewhere, e.g.
@@ -58,6 +62,35 @@ impl RateStatus {
 }
 
 impl Default for RateStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Filters and search of each group's timeline (GRP-24, GRP-25), kept
+/// while the app runs, so they are still set after opening an expense and
+/// coming back.
+#[derive(Clone, Copy, PartialEq)]
+pub struct TimelineFilters(Signal<BTreeMap<GroupId, TimelineFilter>>);
+
+impl TimelineFilters {
+    /// Must be called inside a component, like any `Signal::new`.
+    pub fn new() -> Self {
+        Self(Signal::new(BTreeMap::new()))
+    }
+
+    /// The group's filter; subscribes the caller to changes.
+    pub fn get(&self, group: &GroupId) -> TimelineFilter {
+        self.0.read().get(group).cloned().unwrap_or_default()
+    }
+
+    /// Changes the group's filter in place.
+    pub fn update(&mut self, group: &GroupId, change: impl FnOnce(&mut TimelineFilter)) {
+        change(self.0.write().entry(group.clone()).or_default());
+    }
+}
+
+impl Default for TimelineFilters {
     fn default() -> Self {
         Self::new()
     }
