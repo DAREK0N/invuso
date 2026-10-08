@@ -1,13 +1,17 @@
 //! Totals, balances and debts of groups (GRP-02, GRP-10..14, SPL-03,
 //! SPL-04, SPL-06, SPL-07, PER-03), computed from the stored expenses and
-//! settlements by [`invuso_core::split::summarize`].
+//! settlements by [`invuso_core::split::summarize`], and the breakdowns by
+//! category and payment method (GRP-16, GRP-17, PAY-05).
 
 use std::collections::BTreeMap;
 
-use invuso_core::domain::{Currency, Group, Money, PersonId, Settlement};
-use invuso_core::split::{GroupSummary, PersonTotals, SettlementEntry, summarize};
+use invuso_core::domain::{CategoryId, Currency, Group, Money, PersonId, Settlement};
+use invuso_core::split::{
+    Breakdown, GroupSummary, PaymentKey, PersonTotals, SettlementEntry, by_category, by_payment,
+    summarize,
+};
 
-use crate::storage::{Db, StorageError};
+use crate::storage::{Db, MethodPayment, StorageError};
 
 /// Totals, per-person figures and simplified debts of the group in its
 /// base currency.
@@ -28,6 +32,38 @@ pub fn group_summary(db: &Db, group: &Group) -> Result<GroupSummary, StorageErro
         &expenses,
         &settlements,
     )?)
+}
+
+/// What a group spent per category and per payer and method, in its base
+/// currency (GRP-16, GRP-17). Both add up to the total of
+/// [`group_summary`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupBreakdowns {
+    pub categories: Breakdown<Option<CategoryId>>,
+    pub payments: Breakdown<PaymentKey>,
+}
+
+pub fn group_breakdowns(db: &Db, group: &Group) -> Result<GroupBreakdowns, StorageError> {
+    let expenses = db.group_expenses(&group.id)?;
+    Ok(GroupBreakdowns {
+        categories: by_category(group.base_currency, &expenses)?,
+        payments: by_payment(group.base_currency, &expenses)?,
+    })
+}
+
+/// What was paid with a method, summed per currency in currency order
+/// (PAY-05); amounts in different currencies cannot be added up.
+pub fn method_totals(payments: &[MethodPayment]) -> Vec<Money> {
+    let mut totals: BTreeMap<&str, (Currency, i64)> = BTreeMap::new();
+    for payment in payments {
+        let currency = payment.amount.currency();
+        let total = totals.entry(currency.code()).or_insert((currency, 0));
+        total.1 = total.1.saturating_add(payment.amount.amount_minor());
+    }
+    totals
+        .into_values()
+        .map(|(currency, amount)| Money::new(amount, currency))
+        .collect()
 }
 
 /// A person's figures in one group, in that group's base currency.
@@ -260,6 +296,58 @@ mod tests {
         assert_eq!(summary.total, Money::new(500, cur("JPY")));
         assert_eq!(summary.expense_count, 1);
         assert_eq!(summary.skipped_count, 1);
+    }
+
+    #[test]
+    fn breakdowns_add_up_to_the_summary_total() {
+        let (db, me) = setup();
+        let anna = person(&db, "Anna");
+        let trip = group(&db, "Japan", "EUR");
+        db.add_group_member(&trip.id, &anna).unwrap();
+        add(&db, &trip, &me, 3_000, &[&me, &anna]);
+        add(&db, &trip, &anna, 1_001, &[&me, &anna]);
+        add(&db, &trip, &me, 999, &[&anna]);
+
+        let summary = group_summary(&db, &trip).unwrap();
+        let breakdowns = group_breakdowns(&db, &trip).unwrap();
+        assert_eq!(breakdowns.categories.total, summary.total);
+        assert_eq!(breakdowns.payments.total, summary.total);
+        // No category and no method on any of them.
+        assert_eq!(breakdowns.categories.slices.len(), 1);
+        assert_eq!(breakdowns.categories.slices[0].amount_minor, 5_000);
+        assert_eq!(breakdowns.categories.slices[0].count, 3);
+        let paid: Vec<(PersonId, i64)> = breakdowns
+            .payments
+            .slices
+            .iter()
+            .map(|s| (s.key.person.clone(), s.amount_minor))
+            .collect();
+        assert_eq!(paid, [(me.clone(), 3_999), (anna.clone(), 1_001)]);
+        // Same figures as "who paid most".
+        assert_eq!(paid, summary.paid_ranking());
+    }
+
+    #[test]
+    fn method_totals_sum_per_currency() {
+        use crate::storage::{MethodPayment, MethodPaymentSource};
+        let payment = |minor: i64, code: &str| MethodPayment {
+            source: MethodPaymentSource::Withdrawal {
+                cash: Money::new(minor, cur(code)),
+            },
+            person_name: "Ich".into(),
+            amount: Money::new(minor, cur(code)),
+            occurred_at: "2026-10-04T12:00:00+09:00".into(),
+        };
+        assert_eq!(
+            method_totals(&[
+                payment(1_000, "JPY"),
+                payment(250, "EUR"),
+                payment(2_500, "JPY"),
+                payment(1, "EUR")
+            ]),
+            [Money::new(251, cur("EUR")), Money::new(3_500, cur("JPY"))]
+        );
+        assert!(method_totals(&[]).is_empty());
     }
 
     #[test]

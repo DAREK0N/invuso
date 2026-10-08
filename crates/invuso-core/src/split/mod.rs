@@ -1,4 +1,5 @@
-//! Splitting expenses, balances and debt simplification (idee.md 8.1–8.4).
+//! Splitting expenses, balances, debt simplification (idee.md 8.1–8.4) and
+//! breakdowns of spending by category and payment method.
 //!
 //! All amounts are integer minor units of one currency; callers convert to
 //! the group's base currency first (see [`rescale`]). Every function is
@@ -7,6 +8,7 @@
 
 mod allocate;
 mod balance;
+mod breakdown;
 mod items;
 mod mode;
 mod pairwise;
@@ -15,6 +17,7 @@ mod summary;
 
 pub use allocate::{allocate, rescale};
 pub use balance::{ExpenseEntry, PersonTotals, SettlementEntry, balances};
+pub use breakdown::{Breakdown, PaymentKey, Slice, by_category, by_payment};
 pub use items::{ItemLine, split_by_items};
 pub use mode::{SplitMode, split};
 pub use pairwise::pairwise_debts;

@@ -7,9 +7,13 @@ use dioxus_free_icons::{
         LdArchive, LdArchiveRestore, LdCircleAlert, LdPin, LdPlus, LdTrash2, LdTriangleAlert,
     },
 };
-use invuso_core::domain::{Group, GroupId, GroupMember, Money, Person, PersonId};
+use invuso_core::domain::{
+    Category, CategoryId, Group, GroupId, GroupMember, Money, PaymentMethod, PaymentMethodId,
+    Person, PersonId,
+};
 use invuso_core::split::GroupSummary;
 
+use super::breakdown::{CategoryBreakdown, MethodBreakdown};
 use super::form::GroupNotFound;
 use super::settle::{DebtRow, SettleChoices, SettleDraft, SettleSheet, person_label};
 use super::{DeleteGroupSheet, group_subtitle, mark_active, set_archived_with_undo};
@@ -19,7 +23,7 @@ use crate::components::{
     GroupIcon, LinkRow, MoneyText, OwnBalance, TopBar,
 };
 use crate::format::{NumberFormat, format_money};
-use crate::services::summary::group_summary;
+use crate::services::summary::{GroupBreakdowns, group_breakdowns, group_summary};
 use crate::state::{DataRevision, Toaster};
 use crate::storage::{Db, StorageError};
 
@@ -29,6 +33,11 @@ struct Overview {
     group: Group,
     members: Vec<GroupMember>,
     summary: GroupSummary,
+    breakdowns: GroupBreakdowns,
+    /// Every category, also deleted ones, which past expenses keep.
+    categories: BTreeMap<CategoryId, Category>,
+    /// The methods in `breakdowns`, also archived or deleted ones.
+    methods: BTreeMap<PaymentMethodId, PaymentMethod>,
     /// Everyone in `summary`, also people removed from the group or deleted
     /// since, who still count with their expenses.
     people: BTreeMap<PersonId, Person>,
@@ -39,8 +48,9 @@ struct Overview {
 }
 
 /// `/groups/:id`: total spent, own balance, who owes whom, who paid and who
-/// owes most, and everyone's paid / share / balance (GRP-10..14, SPL-03,
-/// SPL-04), with links to the expenses (GRP-20), members, debts and
+/// owes most, everyone's paid / share / balance (GRP-10..14, SPL-03,
+/// SPL-04) and spending by category and payment method (GRP-16, GRP-17),
+/// with links to the expenses (GRP-20), members, debts and
 /// settlements, and editing. Tapping a debt marks it as paid (GRP-15).
 #[component]
 pub fn GroupOverview(id: String) -> Element {
@@ -128,6 +138,16 @@ pub fn GroupOverview(id: String) -> Element {
                         }
                         if overview.summary.expense_count > 0 {
                             Balances { overview: overview.clone() }
+                            CategoryBreakdown {
+                                group_id: group.id.clone(),
+                                breakdown: overview.breakdowns.categories.clone(),
+                                categories: overview.categories.clone(),
+                            }
+                            MethodBreakdown {
+                                breakdown: overview.breakdowns.payments.clone(),
+                                methods: overview.methods.clone(),
+                                people: overview.people.clone(),
+                            }
                         }
                         Button {
                             variant: ButtonVariant::Danger,
@@ -169,6 +189,19 @@ fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
     };
     let members = db.group_members(id)?;
     let summary = group_summary(db, &group)?;
+    let breakdowns = group_breakdowns(db, &group)?;
+    let categories = db
+        .all_categories()?
+        .into_iter()
+        .map(|category| (category.id.clone(), category))
+        .collect();
+    let methods = db.payment_methods_any(
+        breakdowns
+            .payments
+            .slices
+            .iter()
+            .filter_map(|slice| slice.key.method.as_ref()),
+    )?;
     let people = db.people_any(summary.people.keys())?;
     let me = db.me()?.map(|person| person.id);
     let choices = SettleChoices::load(db, id)?;
@@ -179,6 +212,9 @@ fn load(db: &Db, id: &GroupId) -> Result<Option<Overview>, StorageError> {
         group,
         members,
         summary,
+        breakdowns,
+        categories,
+        methods,
         people,
         me,
         active,

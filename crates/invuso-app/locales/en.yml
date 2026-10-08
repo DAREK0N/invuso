@@ -59,6 +59,7 @@ page:
   settings_people: "People"
   person_detail: "Person"
   settings_payment_methods: "Payment methods"
+  payment_method_detail: "Payment method"
   settings_categories: "Categories"
   settings_appearance: "Appearance"
   settings_languages: "Language packs"
@@ -308,6 +309,36 @@ summary:
   former_member: "no longer in the group"
   transfer: "%{from} to %{to}"
   load_error_title: "Overview cannot be calculated"
+
+chart:
+  percent: "%{value}%"
+  below_one_percent: "< 1%"
+
+breakdown:
+  by_category: "By category"
+  by_method: "By payment method"
+  by_kind: "By kind"
+  per_method: "Who paid with what"
+  category_chart: "Spending by category"
+  no_category: "No category"
+  no_method: "No payment method"
+  expenses_one: "1 expense"
+  expenses_other: "%{count} expenses"
+  payments_one: "1 payment"
+  payments_other: "%{count} payments"
+  category_hint: "Tap to see the expenses of a category."
+
+method_detail:
+  totals: "Total per currency"
+  payments: "Payments"
+  empty_title: "No payments yet"
+  empty_text: "Expenses and cash withdrawals with this payment method show up here, across all groups."
+  personal: "Personal"
+  withdrawal: "Cash withdrawn"
+  withdrawn: "%{amount} withdrawn"
+  not_found_title: "Payment method not found"
+  not_found_text: "It may have been deleted."
+  archived: "Archived"
 
 settle:
   mode: "Debt view"

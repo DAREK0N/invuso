@@ -59,6 +59,7 @@ page:
   settings_people: "Personen"
   person_detail: "Person"
   settings_payment_methods: "Zahlungsmethoden"
+  payment_method_detail: "Zahlungsmethode"
   settings_categories: "Kategorien"
   settings_appearance: "Darstellung"
   settings_languages: "Sprachpakete"
@@ -308,6 +309,36 @@ summary:
   former_member: "nicht mehr in der Gruppe"
   transfer: "%{from} an %{to}"
   load_error_title: "Übersicht kann nicht berechnet werden"
+
+chart:
+  percent: "%{value} %"
+  below_one_percent: "< 1 %"
+
+breakdown:
+  by_category: "Nach Kategorie"
+  by_method: "Nach Zahlungsmethode"
+  by_kind: "Nach Art"
+  per_method: "Wer mit was"
+  category_chart: "Ausgaben nach Kategorie"
+  no_category: "Ohne Kategorie"
+  no_method: "Ohne Zahlungsmethode"
+  expenses_one: "1 Ausgabe"
+  expenses_other: "%{count} Ausgaben"
+  payments_one: "1 Zahlung"
+  payments_other: "%{count} Zahlungen"
+  category_hint: "Antippen zeigt die Ausgaben dieser Kategorie."
+
+method_detail:
+  totals: "Summe je Währung"
+  payments: "Zahlungen"
+  empty_title: "Noch keine Zahlungen"
+  empty_text: "Ausgaben und Bargeld-Abhebungen mit dieser Zahlungsmethode erscheinen hier, über alle Gruppen."
+  personal: "Persönlich"
+  withdrawal: "Bargeld abgehoben"
+  withdrawn: "%{amount} abgehoben"
+  not_found_title: "Zahlungsmethode nicht gefunden"
+  not_found_text: "Sie wurde vielleicht gelöscht."
+  archived: "Archiviert"
 
 settle:
   mode: "Ansicht der Schulden"

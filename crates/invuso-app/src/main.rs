@@ -75,6 +75,8 @@ pub enum Route {
         PersonDetail { id: String },
         #[route("/settings/payment-methods")]
         SettingsPaymentMethods {},
+        #[route("/settings/payment-methods/:id")]
+        PaymentMethodDetail { id: String },
         #[route("/settings/categories")]
         SettingsCategories {},
         #[route("/settings/appearance")]

@@ -605,7 +605,7 @@ fn entries(conn: &Connection, person: &PersonId) -> Result<Vec<CashEntry>, Stora
 
 /// What the card was charged for a withdrawal of `amount`, from the rate
 /// archived with it.
-fn charged(
+pub(super) fn charged(
     amount: Money,
     base: &str,
     quote: &str,

@@ -12,6 +12,7 @@ use invuso_core::domain::{
     PaymentMethod, PaymentMethodError, PaymentMethodKind, Person, PersonId, validate_last4,
 };
 
+use crate::Route;
 use crate::components::{
     Avatar, AvatarSize, BottomSheet, Button, Chip, ColorPicker, ConfirmSheet, EmptyState,
     ErrorBanner, IconPicker, ListItem, MenuRow, PaymentMethodIcon, TextField, TopBar,
@@ -45,8 +46,8 @@ struct Overview {
 }
 
 /// `/settings/payment-methods`: cards, cash, PayPal … grouped by owner,
-/// archived ones folded away at the bottom (PAY-01, SET-06). Tap edits,
-/// long-press opens a menu (UI-09).
+/// archived ones folded away at the bottom (PAY-01, SET-06). Tap opens the
+/// method's evaluation (PAY-05), long-press a menu (UI-09).
 #[component]
 pub fn SettingsPaymentMethods() -> Element {
     let db = use_context::<Db>();
@@ -58,6 +59,7 @@ pub fn SettingsPaymentMethods() -> Element {
     let mut delete_error = use_signal(|| None::<String>);
     let mut show_archived = use_signal(|| false);
 
+    let nav = use_navigator();
     let menu_db = db.clone();
     let overview = use_memo(move || {
         revision.track();
@@ -93,7 +95,9 @@ pub fn SettingsPaymentMethods() -> Element {
                             OwnerSectionView {
                                 key: "{section.owner.as_ref().map(|o| o.id.as_str()).unwrap_or_default()}",
                                 section,
-                                on_open: move |method| form.set(Some(Form::Edit(method))),
+                                on_open: move |method: PaymentMethod| {
+                                    nav.push(Route::PaymentMethodDetail { id: method.id.as_str().to_string() });
+                                },
                                 on_long_press: move |method| menu.set(Some(method)),
                             }
                         }
@@ -105,7 +109,9 @@ pub fn SettingsPaymentMethods() -> Element {
                             people: overview.people.clone(),
                             open: show_archived(),
                             on_toggle: move |_| show_archived.toggle(),
-                            on_open: move |method| form.set(Some(Form::Edit(method))),
+                            on_open: move |method: PaymentMethod| {
+                                nav.push(Route::PaymentMethodDetail { id: method.id.as_str().to_string() });
+                            },
                             on_long_press: move |method| menu.set(Some(method)),
                         }
                     }
@@ -296,7 +302,7 @@ fn MethodRow(
 }
 
 /// "Kreditkarte · •••• 4242 · Ben": only the last digits are ever shown.
-fn subtitle(method: &PaymentMethod, owner_name: Option<&str>) -> String {
+pub(super) fn subtitle(method: &PaymentMethod, owner_name: Option<&str>) -> String {
     let mut parts = vec![payment_kind_name(method.kind)];
     if let Some(last4) = &method.last4 {
         parts.push(format!("•••• {last4}"));
@@ -392,7 +398,7 @@ fn set_archived_with_undo(
 /// Bottom sheet to create (`method: None`) or edit a payment method: name,
 /// kind, owner, last digits for cards, color and icon (PAY-01).
 #[component]
-fn PaymentMethodFormSheet(
+pub(super) fn PaymentMethodFormSheet(
     method: Option<PaymentMethod>,
     people: Vec<Person>,
     on_saved: EventHandler<PaymentMethod>,

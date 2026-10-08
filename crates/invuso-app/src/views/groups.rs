@@ -8,6 +8,7 @@ use crate::preferences::period_text;
 use crate::state::{DataRevision, ToastAction, Toaster};
 use crate::storage::Db;
 
+mod breakdown;
 mod form;
 mod list;
 mod members;

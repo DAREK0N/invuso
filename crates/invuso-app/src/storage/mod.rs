@@ -16,6 +16,7 @@ mod exchange_rates;
 mod expenses;
 mod group_members;
 mod groups;
+mod method_payments;
 mod migrations;
 mod payment_methods;
 mod people;
@@ -36,6 +37,7 @@ pub use expenses::{
     ExpenseParties, NewExpense, NewExpensePayment, RecentExpense, TimelineEntry, TimelinePayer,
 };
 pub use groups::NewGroup;
+pub use method_payments::{MethodPayment, MethodPaymentSource};
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;
