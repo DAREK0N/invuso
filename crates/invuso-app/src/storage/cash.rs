@@ -129,7 +129,15 @@ impl Db {
             let tx = conn.unchecked_transaction()?;
             check_person(&tx, &new.person)?;
             if let Some(card) = &new.card {
-                check_method(&tx, card)?;
+                let account = check_method(&tx, card)?;
+                // A card with an account currency is charged in it (PAY-04).
+                if let (Some(account), Some(charged)) = (account, new.charged)
+                    && charged.currency() != account
+                {
+                    return Err(StorageError::InvalidInput(
+                        "charged amount is not in the card's currency",
+                    ));
+                }
             }
             let rate_id = rate
                 .map(|rate| {
@@ -357,14 +365,17 @@ fn check_person(conn: &Connection, person: &PersonId) -> Result<(), StorageError
     }
 }
 
-fn check_method(conn: &Connection, id: &PaymentMethodId) -> Result<(), StorageError> {
-    conn.query_row(
-        "SELECT 1 FROM payment_method WHERE id = ?1 AND deleted_at IS NULL",
-        [id.as_str()],
-        |_| Ok(()),
-    )
-    .optional()?
-    .ok_or(StorageError::InvalidInput("payment method does not exist"))
+/// Checks that the method exists; returns its account currency (PAY-04).
+fn check_method(conn: &Connection, id: &PaymentMethodId) -> Result<Option<Currency>, StorageError> {
+    let currency: Option<String> = conn
+        .query_row(
+            "SELECT currency FROM payment_method WHERE id = ?1 AND deleted_at IS NULL",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(StorageError::InvalidInput("payment method does not exist"))?;
+    currency.as_deref().map(stored_currency).transpose()
 }
 
 /// Kind, rate id and expense id of a movement that is (`deleted`) or is
@@ -633,7 +644,7 @@ fn stored_currency(code: &str) -> Result<Currency, StorageError> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use invuso_core::domain::{CategoryId, ExpenseSource, GroupId, Person};
+    use invuso_core::domain::{AccountTerms, CategoryId, ExpenseSource, GroupId, Person};
     use invuso_core::split::SplitMode;
 
     use super::*;
@@ -670,6 +681,7 @@ mod tests {
             kind,
             owner_person_id: Some(owner.id.clone()),
             last4: None,
+            account: Default::default(),
             color: "cerulean".into(),
             icon: "banknote".into(),
         })
@@ -799,6 +811,43 @@ mod tests {
 
         // Anna has her own cash (user decision in AP-22).
         assert_eq!(s.db.cash_balances(&s.anna.id).unwrap(), [yen(-800)]);
+    }
+
+    #[test]
+    fn usd_card_is_charged_in_usd() {
+        let s = setup();
+        let usd = cur("USD");
+        let card =
+            s.db.create_payment_method(NewPaymentMethod {
+                name: "Chase".into(),
+                kind: PaymentMethodKind::CreditCard,
+                owner_person_id: Some(s.me.id.clone()),
+                last4: None,
+                account: AccountTerms {
+                    currency: Some(usd),
+                    ..AccountTerms::default()
+                },
+                color: "cerulean".into(),
+                icon: "credit-card".into(),
+            })
+            .unwrap()
+            .id;
+        let new = |charged| NewWithdrawal {
+            card: Some(card.clone()),
+            ..withdrawal(&s, yen(30_000), Some(charged), MORNING)
+        };
+        s.db.record_withdrawal(new(Money::new(20_150, usd)), None)
+            .unwrap();
+        let entry = s.db.cash_entries(&s.me.id).unwrap().remove(0);
+        assert_eq!(entry.method.as_deref(), Some("Chase"));
+        assert_eq!(entry.counterpart, Some(Money::new(20_150, usd)));
+
+        // Charged in the home currency although the card is a USD card.
+        assert!(matches!(
+            s.db.record_withdrawal(new(eur(18_620)), None),
+            Err(StorageError::InvalidInput(_))
+        ));
+        assert_eq!(s.db.cash_entries(&s.me.id).unwrap().len(), 1);
     }
 
     #[test]

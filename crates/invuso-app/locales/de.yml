@@ -189,6 +189,13 @@ payment:
   last4_placeholder: "1234"
   last4_hint: "Nur die letzten 4 Ziffern, nie die ganze Kartennummer."
   last4_invalid: "Bitte genau 4 Ziffern eingeben oder das Feld leer lassen."
+  account_currency: "Kontowährung"
+  account_currency_hint: "Darin wird abgerechnet, z. B. eine US-Karte in USD. Bei Bargeld-Abhebungen wird „Belastet“ in dieser Währung erfasst."
+  no_account_currency: "Keine Kontowährung"
+  foreign_fee: "Auslandseinsatz"
+  fee_percent_invalid: "Bitte einen Wert zwischen 0 und 100 % eingeben."
+  fixed_fee: "Abhebegebühr"
+  fixed_fee_hint: "Bei einer Bargeld-Abhebung in fremder Währung wird Abhebegebühr plus Auslandseinsatz vom belasteten Betrag als Gebühr vorgeschlagen."
   color: "Farbe"
   icon: "Symbol"
   delete_title: "Zahlungsmethode löschen?"
@@ -339,6 +346,7 @@ method_detail:
   not_found_title: "Zahlungsmethode nicht gefunden"
   not_found_text: "Sie wurde vielleicht gelöscht."
   archived: "Archiviert"
+  terms: "Konto und Gebühren"
 
 settle:
   mode: "Ansicht der Schulden"
@@ -841,6 +849,7 @@ cash:
   charged_hint_no_rate: "Leer lassen, wenn noch unbekannt."
   fee: "Gebühr"
   fee_hint: "Wird als persönliche Ausgabe mit der Karte gebucht."
+  fee_hint_card: "Aus der Karte: %{terms} vom belasteten Betrag. Wird als persönliche Ausgabe mit der Karte gebucht."
   fee_title: "Abhebegebühr"
   given: "Gegeben"
   received: "Erhalten"

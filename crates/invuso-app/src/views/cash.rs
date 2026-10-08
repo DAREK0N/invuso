@@ -9,8 +9,8 @@ use dioxus_free_icons::{
     },
 };
 use invuso_core::domain::{
-    CashError, CashMovementId, CashMovementKind, Currency, Money, PaymentMethod, PaymentMethodKind,
-    Person, PersonId, local_date,
+    AccountTerms, CashError, CashMovementId, CashMovementKind, Currency, Money, PaymentMethod,
+    PaymentMethodKind, Person, PersonId, local_date,
 };
 use invuso_core::fx;
 
@@ -21,9 +21,12 @@ use crate::components::{
     CurrencyButton, CurrencyPicker, DateTimeField, EmptyState, ErrorBanner, MethodChoice,
     MoneyText, PaymentIconGlyph, PaymentMethodIcon, TopBar,
 };
-use crate::format::{NumberFormat, format_money, format_rate, parse_amount};
+use crate::format::{
+    NumberFormat, amount_text, fit_amount_text, format_money, format_number, format_rate,
+    parse_amount,
+};
 use crate::preferences::display_date;
-use crate::services::cash::{CashValue, cash_value, record_withdrawal};
+use crate::services::cash::{CashValue, WithdrawalTerms, cash_value, record_withdrawal};
 use crate::services::expenses::SaveExpenseError;
 use crate::services::rates::{CurrencyApi, Frankfurter};
 use crate::state::{DataRevision, ToastAction, Toaster};
@@ -464,6 +467,18 @@ fn toast_with_undo(
     );
 }
 
+/// The card's fees for the hint: "5,00 USD + 1,75 %".
+fn fee_terms_text(account: &AccountTerms, format: NumberFormat) -> String {
+    let mut parts = Vec::new();
+    parts.extend(account.fixed_fee.map(|f| format_money(f, format)));
+    parts.extend(
+        account
+            .foreign_fee_percent
+            .map(|p| format!("{} %", format_number(p, format))),
+    );
+    parts.join(" + ")
+}
+
 /// What a withdrawal sheet shows instead of its form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WithdrawChoosing {
@@ -473,8 +488,9 @@ enum WithdrawChoosing {
 
 /// Books a withdrawal (CASH-03): amount and currency, the charged card,
 /// what it was charged (the actual rate) and a fee, which becomes an
-/// expense (user decision in AP-22). Cards carry no currency yet (PAY-04),
-/// so charge and fee are in the home currency.
+/// expense (user decision in AP-22). "Belastet" is in the card's account
+/// currency, the fee starts with the card's withdrawal fee (PAY-04); a card
+/// without them falls back to the home currency and no fee.
 #[component]
 fn WithdrawSheet(
     person: PersonId,
@@ -498,7 +514,9 @@ fn WithdrawSheet(
         }
     });
     let mut charged = use_signal(String::new);
+    // What the user typed as fee; until then the card's fee is shown.
     let mut fee = use_signal(String::new);
+    let mut fee_edited = use_signal(|| false);
     let mut date = use_signal(|| local_now().0);
     let mut time = use_signal(|| local_now().1);
     let mut choosing = use_signal(|| None::<WithdrawChoosing>);
@@ -506,10 +524,14 @@ fn WithdrawSheet(
     let mut saving = use_signal(|| false);
 
     let cash = currency();
+    let chosen_card = card().and_then(|id| cards.iter().find(|m| m.id == id).cloned());
+    let terms = WithdrawalTerms::of(chosen_card.as_ref(), home);
+    let charged_in = terms.charged_in;
+    let fee_currency = terms.fee_currency();
     let parsed = parse_amount(&amount(), cash, format).filter(|m| m.amount_minor() > 0);
     // The estimate only helps to spot a typo in the charged amount.
-    let estimate = parsed.filter(|_| cash != home).and_then(|money| {
-        db.rate_near(cash, home, &date())
+    let estimate = parsed.filter(|_| cash != charged_in).and_then(|money| {
+        db.rate_near(cash, charged_in, &date())
             .ok()
             .flatten()
             .and_then(|near| fx::convert(money, &near.quote.rate).ok())
@@ -519,11 +541,35 @@ fn WithdrawSheet(
         None => t!("cash.charged_hint_no_rate"),
     }
     .to_string();
-    let chosen_card = card().and_then(|id| cards.iter().find(|m| m.id == id).cloned());
+    let charged_money = (cash != charged_in)
+        .then(|| parse_amount(&charged(), charged_in, format))
+        .flatten()
+        .filter(|m| m.amount_minor() > 0);
+    // Until the user types a fee, it follows the card: the fixed fee plus
+    // the foreign fee of what was charged, or of the estimate while that is
+    // not known (user decision in AP-31).
+    let fee_shown = if fee_edited() {
+        fee()
+    } else {
+        terms
+            .suggested_fee(cash, charged_money.or(estimate))
+            .map(|f| amount_text(f, format))
+            .unwrap_or_default()
+    };
+    let fee_hint = if terms.has_fees() && !fee_edited() {
+        t!(
+            "cash.fee_hint_card",
+            terms = fee_terms_text(&terms.account, format)
+        )
+    } else {
+        t!("cash.fee_hint")
+    }
+    .to_string();
 
     let save = {
         let db = db.clone();
         let person = person.clone();
+        let fee_shown = fee_shown.clone();
         move |_| {
             if saving() {
                 return;
@@ -538,11 +584,8 @@ fn WithdrawSheet(
                 error.set(Some(t!("expense.date_time_invalid").to_string()));
                 return;
             };
-            let charged_money = (currency() != home)
-                .then(|| parse_amount(&charged(), home, format))
-                .flatten()
-                .filter(|m| m.amount_minor() > 0);
-            let fee_money = parse_amount(&fee(), home, format).filter(|m| m.amount_minor() > 0);
+            let fee_money =
+                parse_amount(&fee_shown, fee_currency, format).filter(|m| m.amount_minor() > 0);
             let new = NewWithdrawal {
                 person: person.clone(),
                 amount: money,
@@ -620,6 +663,7 @@ fn WithdrawSheet(
                     selected: card().is_none(),
                     onclick: move |_| {
                         card.set(None);
+                        charged.set(fit_amount_text(&charged(), home, format));
                         choosing.set(None);
                     },
                     span { class: "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-jet-black-800 text-floral-white-400",
@@ -631,9 +675,14 @@ fn WithdrawSheet(
                         key: "{entry.id.as_str()}",
                         label: entry.name.clone(),
                         selected: card().as_ref() == Some(&entry.id),
-                        onclick: move |_| {
-                            card.set(Some(entry.id.clone()));
-                            choosing.set(None);
+                        onclick: {
+                            let entry = entry.clone();
+                            move |_| {
+                                card.set(Some(entry.id.clone()));
+                                let terms = WithdrawalTerms::of(Some(&entry), home);
+                                charged.set(fit_amount_text(&charged(), terms.charged_in, format));
+                                choosing.set(None);
+                            }
                         },
                         PaymentMethodIcon { icon: entry.icon.clone(), color: entry.color.clone() }
                     }
@@ -665,12 +714,12 @@ fn WithdrawSheet(
                         }
                     }
                 }
-                if cash != home {
+                if cash != charged_in {
                     AmountRow {
                         id: "withdraw-charged",
                         label: t!("cash.charged").to_string(),
                         value: charged(),
-                        currency: home,
+                        currency: charged_in,
                         oninput: move |text| charged.set(text),
                         hint: charged_hint,
                     }
@@ -678,10 +727,13 @@ fn WithdrawSheet(
                 AmountRow {
                     id: "withdraw-fee",
                     label: t!("cash.fee").to_string(),
-                    value: fee(),
-                    currency: home,
-                    oninput: move |text| fee.set(text),
-                    hint: t!("cash.fee_hint").to_string(),
+                    value: fee_shown,
+                    currency: fee_currency,
+                    oninput: move |text| {
+                        fee.set(text);
+                        fee_edited.set(true);
+                    },
+                    hint: fee_hint,
                 }
                 DateTimeField {
                     id: "withdraw-time",

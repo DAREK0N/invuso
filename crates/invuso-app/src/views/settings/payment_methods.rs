@@ -9,13 +9,18 @@ use dioxus_free_icons::{
     },
 };
 use invuso_core::domain::{
-    PaymentMethod, PaymentMethodError, PaymentMethodKind, Person, PersonId, validate_last4,
+    AccountTerms, Currency, PaymentMethod, PaymentMethodError, PaymentMethodKind, Person, PersonId,
+    validate_last4,
 };
 
 use crate::Route;
 use crate::components::{
-    Avatar, AvatarSize, BottomSheet, Button, Chip, ColorPicker, ConfirmSheet, EmptyState,
-    ErrorBanner, IconPicker, ListItem, MenuRow, PaymentMethodIcon, TextField, TopBar,
+    Avatar, AvatarSize, BottomSheet, Button, ButtonVariant, Chip, ColorPicker, CompactAmountInput,
+    CompactNumberInput, ConfirmSheet, CurrencyButton, CurrencyPicker, EmptyState, ErrorBanner,
+    IconPicker, ListItem, MenuRow, PaymentMethodIcon, TextField, TopBar,
+};
+use crate::format::{
+    NumberFormat, amount_text, fit_amount_text, number_text, parse_amount, parse_number,
 };
 use crate::preferences::{default_payment_icon, payment_kind_name, suggested_person_color};
 use crate::state::{DataRevision, ToastAction, Toaster};
@@ -301,11 +306,15 @@ fn MethodRow(
     }
 }
 
-/// "Kreditkarte · •••• 4242 · Ben": only the last digits are ever shown.
+/// "Kreditkarte · •••• 4242 · USD · Ben": only the last digits are ever
+/// shown.
 pub(super) fn subtitle(method: &PaymentMethod, owner_name: Option<&str>) -> String {
     let mut parts = vec![payment_kind_name(method.kind)];
     if let Some(last4) = &method.last4 {
         parts.push(format!("•••• {last4}"));
+    }
+    if let Some(currency) = method.account.currency {
+        parts.push(currency.code().to_string());
     }
     if let Some(owner) = owner_name {
         parts.push(owner.to_string());
@@ -433,12 +442,47 @@ pub(super) fn PaymentMethodFormSheet(
             |m| m.icon,
         )
     });
+    let format = NumberFormat::current();
+    let home = use_hook({
+        let db = db.clone();
+        move || db.expense_base_currency(None).ok()
+    });
+    let initial = method.clone();
+    let mut account_currency = use_signal(|| initial.and_then(|m| m.account.currency));
+    let initial = method.clone();
+    let mut fee_percent = use_signal(|| {
+        initial
+            .and_then(|m| m.account.foreign_fee_percent)
+            .map(|p| number_text(p, format))
+            .unwrap_or_default()
+    });
+    let initial = method.clone();
+    let mut fixed_fee = use_signal(|| {
+        initial
+            .and_then(|m| m.account.fixed_fee)
+            .map(|f| amount_text(f, format))
+            .unwrap_or_default()
+    });
+    let mut picking_currency = use_signal(|| false);
     let mut name_error = use_signal(|| None::<String>);
     let mut owner_error = use_signal(|| None::<String>);
     let mut last4_error = use_signal(|| None::<String>);
+    let mut percent_error = use_signal(|| None::<String>);
     let mut save_error = use_signal(|| None::<String>);
 
-    let title = if is_new {
+    // The withdrawal fee is in the account currency; without one, in the
+    // home currency, like a withdrawal with the card (CASH-03).
+    // `None` only if the profile cannot be read; the fee waits for a
+    // currency then.
+    let initial_fee_currency = method
+        .as_ref()
+        .and_then(|m| m.account.fixed_fee)
+        .map(|f| f.currency());
+    let fee_currency = account_currency().or(initial_fee_currency).or(home);
+
+    let title = if picking_currency() {
+        t!("payment.account_currency").to_string()
+    } else if is_new {
         t!("payment.new_title").to_string()
     } else {
         t!("payment.edit_title").to_string()
@@ -452,6 +496,14 @@ pub(super) fn PaymentMethodFormSheet(
         if !next.has_card_number() {
             last4.set(String::new());
             last4_error.set(None);
+        }
+        if !next.has_account_currency() {
+            account_currency.set(None);
+        }
+        if !next.has_fees() {
+            fee_percent.set(String::new());
+            fixed_fee.set(String::new());
+            percent_error.set(None);
         }
         kind.set(next);
     };
@@ -474,6 +526,25 @@ pub(super) fn PaymentMethodFormSheet(
                 None
             }
         };
+        let account = AccountTerms {
+            currency: account_currency(),
+            foreign_fee_percent: parse_number(&fee_percent(), format),
+            fixed_fee: fee_currency.and_then(|c| parse_amount(&fixed_fee(), c, format)),
+        }
+        .validate(kind());
+        let account = match account {
+            Ok(account) => account,
+            Err(PaymentMethodError::InvalidFeePercent) => {
+                percent_error.set(Some(t!("payment.fee_percent_invalid").to_string()));
+                valid = false;
+                AccountTerms::default()
+            }
+            Err(error) => {
+                save_error.set(Some(format!("{} {error}", t!("profile.save_error"))));
+                valid = false;
+                AccountTerms::default()
+            }
+        };
         if !valid {
             return;
         }
@@ -483,6 +554,7 @@ pub(super) fn PaymentMethodFormSheet(
                 kind: kind(),
                 owner_person_id: owner(),
                 last4: digits,
+                account,
                 color: color(),
                 icon: icon(),
             }),
@@ -492,6 +564,7 @@ pub(super) fn PaymentMethodFormSheet(
                     kind: kind(),
                     owner_person_id: owner(),
                     last4: digits,
+                    account,
                     color: color(),
                     icon: icon(),
                     ..existing.clone()
@@ -510,6 +583,33 @@ pub(super) fn PaymentMethodFormSheet(
             Err(error) => save_error.set(Some(format!("{} {error}", t!("profile.save_error")))),
         }
     };
+
+    if let (true, Some(shown_currency)) = (picking_currency(), fee_currency) {
+        return rsx! {
+            BottomSheet { title, on_close: move |_| picking_currency.set(false),
+                div { class: "flex max-h-[70vh] flex-col gap-2 overflow-hidden px-3 pt-2",
+                    Button {
+                        variant: ButtonVariant::Secondary,
+                        class: "w-full",
+                        onclick: move |_| {
+                            account_currency.set(None);
+                            picking_currency.set(false);
+                        },
+                        {t!("payment.no_account_currency").to_string()}
+                    }
+                    CurrencyPicker {
+                        selected: shown_currency,
+                        nothing_selected: account_currency().is_none(),
+                        on_select: move |picked: Currency| {
+                            account_currency.set(Some(picked));
+                            fixed_fee.set(fit_amount_text(&fixed_fee(), picked, format));
+                            picking_currency.set(false);
+                        },
+                    }
+                }
+            }
+        };
+    }
 
     rsx! {
         BottomSheet { title, on_close,
@@ -564,6 +664,67 @@ pub(super) fn PaymentMethodFormSheet(
                         },
                     }
                     p { class: "-mt-3 px-1 text-sm text-floral-white-500", {t!("payment.last4_hint").to_string()} }
+                }
+                if let (true, Some(shown_currency)) = (kind().has_account_currency(), fee_currency) {
+                    div { class: "flex flex-col gap-1",
+                        div { class: "flex min-h-12 items-center gap-3",
+                            span { class: "min-w-0 flex-1 text-sm font-medium text-floral-white-300",
+                                {t!("payment.account_currency").to_string()}
+                            }
+                            CurrencyButton {
+                                currency: shown_currency,
+                                unset: account_currency().is_none(),
+                                label: t!("payment.account_currency").to_string(),
+                                onclick: move |_| picking_currency.set(true),
+                            }
+                        }
+                        p { class: "px-1 text-sm text-floral-white-500", {t!("payment.account_currency_hint").to_string()} }
+                    }
+                }
+                if kind().has_fees() {
+                    div { class: "flex flex-col gap-1",
+                        div { class: "flex min-h-12 items-center gap-3",
+                            label {
+                                class: "min-w-0 flex-1 text-sm font-medium text-floral-white-300",
+                                r#for: "payment-fee-percent",
+                                {t!("payment.foreign_fee").to_string()}
+                            }
+                            CompactNumberInput {
+                                id: "payment-fee-percent",
+                                label: t!("payment.foreign_fee").to_string(),
+                                value: fee_percent(),
+                                decimals: 2,
+                                unit: "%".to_string(),
+                                invalid: percent_error().is_some(),
+                                oninput: move |value| {
+                                    fee_percent.set(value);
+                                    percent_error.set(None);
+                                },
+                            }
+                        }
+                        if let Some(error) = percent_error() {
+                            p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
+                        }
+                    }
+                    if let Some(currency) = fee_currency {
+                        div { class: "flex flex-col gap-1",
+                            div { class: "flex min-h-12 items-center gap-3",
+                                label {
+                                    class: "min-w-0 flex-1 text-sm font-medium text-floral-white-300",
+                                    r#for: "payment-fixed-fee",
+                                    {t!("payment.fixed_fee").to_string()}
+                                }
+                                CompactAmountInput {
+                                    id: "payment-fixed-fee",
+                                    label: t!("payment.fixed_fee").to_string(),
+                                    value: fixed_fee(),
+                                    currency,
+                                    oninput: move |value| fixed_fee.set(value),
+                                }
+                            }
+                            p { class: "px-1 text-sm text-floral-white-500", {t!("payment.fixed_fee_hint").to_string()} }
+                        }
+                    }
                 }
                 ColorPicker {
                     label: t!("payment.color").to_string(),
@@ -681,6 +842,7 @@ mod tests {
             kind: PaymentMethodKind::CreditCard,
             owner_person_id: owner.map(PersonId::from),
             last4: None,
+            account: Default::default(),
             color: "cerulean".into(),
             icon: "credit-card".into(),
             archived,

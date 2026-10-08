@@ -23,7 +23,8 @@ pub use line_item::{
 };
 pub use money::{Money, MoneyError};
 pub use payment_method::{
-    PaymentMethod, PaymentMethodError, PaymentMethodId, PaymentMethodKind, validate_last4,
+    AccountTerms, PaymentMethod, PaymentMethodError, PaymentMethodId, PaymentMethodKind,
+    validate_last4,
 };
 pub use person::{Person, PersonId};
 pub use settlement::{Settlement, SettlementError, SettlementId, validate_settlement};

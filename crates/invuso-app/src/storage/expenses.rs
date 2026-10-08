@@ -1428,6 +1428,7 @@ mod tests {
                 kind: PaymentMethodKind::CreditCard,
                 owner_person_id: Some(s.anna.id.clone()),
                 last4: None,
+                account: Default::default(),
                 color: "cerulean".into(),
                 icon: "credit-card".into(),
             })
@@ -1438,6 +1439,7 @@ mod tests {
                 kind: PaymentMethodKind::Cash,
                 owner_person_id: Some(s.me.id.clone()),
                 last4: None,
+                account: Default::default(),
                 color: "muted-teal".into(),
                 icon: "banknote".into(),
             })
@@ -1843,6 +1845,7 @@ mod tests {
                 kind: PaymentMethodKind::CreditCard,
                 owner_person_id: Some(owner.id.clone()),
                 last4: None,
+                account: Default::default(),
                 color: "cerulean".into(),
                 icon: "credit-card".into(),
             })
@@ -2022,6 +2025,7 @@ mod tests {
                 kind: PaymentMethodKind::CreditCard,
                 owner_person_id: Some(s.anna.id.clone()),
                 last4: None,
+                account: Default::default(),
                 color: "cerulean".into(),
                 icon: "credit-card".into(),
             })
@@ -2159,6 +2163,7 @@ mod tests {
                 kind: PaymentMethodKind::CreditCard,
                 owner_person_id: Some(s.me.id.clone()),
                 last4: None,
+                account: Default::default(),
                 color: "cerulean".into(),
                 icon: "credit-card".into(),
             })

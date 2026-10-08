@@ -3,7 +3,7 @@ use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{LdArchive, LdBanknote, LdChevronRight, LdCircleAlert, LdPencil, LdWallet},
 };
-use invuso_core::domain::PaymentMethodId;
+use invuso_core::domain::{AccountTerms, PaymentMethodId};
 
 use super::payment_methods::{PaymentMethodFormSheet, subtitle};
 use crate::Route;
@@ -11,7 +11,7 @@ use crate::components::{
     Button, ButtonVariant, CardSection, EmptyState, ErrorBanner, MoneyText, PaymentMethodIcon,
     TopBar,
 };
-use crate::format::{NumberFormat, format_money};
+use crate::format::{NumberFormat, format_money, format_number};
 use crate::preferences::display_date;
 use crate::services::summary::method_totals;
 use crate::state::DataRevision;
@@ -79,6 +79,9 @@ pub fn PaymentMethodDetail(id: String) -> Element {
                                 }
                             }
                         }
+                        if method.account != AccountTerms::default() {
+                            Terms { account: method.account.clone() }
+                        }
                         match &*payments.read() {
                             Err(message) => rsx! { ErrorBanner { error: Some(message.clone()) } },
                             Ok(payments) if payments.is_empty() => rsx! {
@@ -106,6 +109,43 @@ pub fn PaymentMethodDetail(id: String) -> Element {
                             on_close: move |_| editing.set(false),
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Account currency and fees of the method (PAY-04), only those known.
+#[component]
+fn Terms(account: AccountTerms) -> Element {
+    let format = NumberFormat::current();
+    let mut rows: Vec<(String, String)> = Vec::new();
+    if let Some(currency) = account.currency {
+        rows.push((
+            t!("payment.account_currency").to_string(),
+            format!("{} · {}", currency.code(), currency.name()),
+        ));
+    }
+    if let Some(percent) = account.foreign_fee_percent {
+        rows.push((
+            t!("payment.foreign_fee").to_string(),
+            format!("{} %", format_number(percent, format)),
+        ));
+    }
+    if let Some(fee) = account.fixed_fee {
+        rows.push((
+            t!("payment.fixed_fee").to_string(),
+            format_money(fee, format),
+        ));
+    }
+    rsx! {
+        CardSection { title: t!("method_detail.terms").to_string(),
+            for (label, value) in rows {
+                div {
+                    key: "{label}",
+                    class: "flex min-h-12 items-center gap-3 border-b border-jet-black-800 px-4 py-2 last:border-b-0",
+                    span { class: "min-w-0 flex-1 text-base text-floral-white-300", "{label}" }
+                    span { class: "shrink-0 text-base font-medium tabular-nums text-floral-white-50", "{value}" }
                 }
             }
         }

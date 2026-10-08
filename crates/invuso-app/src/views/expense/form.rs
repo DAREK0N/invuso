@@ -2362,6 +2362,7 @@ mod tests {
             kind,
             owner_person_id: owner.map(PersonId::new),
             last4: None,
+            account: Default::default(),
             color: "cerulean".into(),
             icon: "credit-card".into(),
             archived: false,

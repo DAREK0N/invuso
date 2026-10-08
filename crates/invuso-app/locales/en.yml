@@ -189,6 +189,13 @@ payment:
   last4_placeholder: "1234"
   last4_hint: "Only the last 4 digits, never the full card number."
   last4_invalid: "Please enter exactly 4 digits or leave the field empty."
+  account_currency: "Account currency"
+  account_currency_hint: "What the account is billed in, e.g. USD for a US card. Cash withdrawals record the charged amount in this currency."
+  no_account_currency: "No account currency"
+  foreign_fee: "Foreign transaction fee"
+  fee_percent_invalid: "Please enter a value between 0 and 100 %."
+  fixed_fee: "Withdrawal fee"
+  fixed_fee_hint: "When withdrawing foreign cash, the withdrawal fee plus the foreign transaction fee of the charged amount is suggested as the fee."
   color: "Color"
   icon: "Icon"
   delete_title: "Delete payment method?"
@@ -339,6 +346,7 @@ method_detail:
   not_found_title: "Payment method not found"
   not_found_text: "It may have been deleted."
   archived: "Archived"
+  terms: "Account and fees"
 
 settle:
   mode: "Debt view"
@@ -841,6 +849,7 @@ cash:
   charged_hint_no_rate: "Leave empty if not known yet."
   fee: "Fee"
   fee_hint: "Booked as a personal expense paid with the card."
+  fee_hint_card: "From the card: %{terms} of the charged amount. Booked as a personal expense paid with the card."
   fee_title: "Withdrawal fee"
   given: "Given"
   received: "Received"

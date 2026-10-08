@@ -236,6 +236,7 @@ mod tests {
             kind: PaymentMethodKind::CreditCard,
             owner_person_id: Some(owner.clone()),
             last4: None,
+            account: Default::default(),
             color: "cerulean".into(),
             icon: "credit-card".into(),
         })

@@ -6,7 +6,8 @@
 use std::collections::BTreeSet;
 
 use invuso_core::domain::{
-    CashMovementId, CategoryId, Currency, ExpenseSource, Money, PaymentMethodId, PersonId,
+    AccountTerms, CashMovementId, CategoryId, Currency, ExpenseSource, Money, PaymentMethod,
+    PaymentMethodId, PersonId,
 };
 use invuso_core::fx;
 use invuso_core::split::SplitMode;
@@ -19,6 +20,50 @@ use crate::storage::{
 
 /// Category of the fee expense: the default "Sonstiges".
 const FEE_CATEGORY: &str = "default-other";
+
+/// What a withdrawal with a card starts with (CASH-03, PAY-04).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WithdrawalTerms {
+    /// "Belastet" is in the card's account currency, else in the home
+    /// currency.
+    pub charged_in: Currency,
+    /// The card's fees; none without a card.
+    pub account: AccountTerms,
+}
+
+impl WithdrawalTerms {
+    pub fn of(card: Option<&PaymentMethod>, home: Currency) -> Self {
+        Self {
+            charged_in: card.map_or(home, |c| c.charge_currency(home)),
+            account: card.map(|c| c.account.clone()).unwrap_or_default(),
+        }
+    }
+
+    /// The fee field's currency: that of the fixed fee, else the one the
+    /// card is charged in, which the foreign fee is a part of.
+    pub fn fee_currency(&self) -> Currency {
+        self.account
+            .fixed_fee
+            .map_or(self.charged_in, |f| f.currency())
+    }
+
+    /// Whether the card suggests a fee at all.
+    pub fn has_fees(&self) -> bool {
+        self.account.fixed_fee.is_some() || self.account.foreign_fee_percent.is_some()
+    }
+
+    /// The fee suggested for a withdrawal of cash in `cash` currency that
+    /// was `charged` (user decision in AP-31): fixed fee plus foreign fee
+    /// in percent. Cash in the card's own currency is no foreign
+    /// transaction, so only the fixed fee applies.
+    pub fn suggested_fee(&self, cash: Currency, charged: Option<Money>) -> Option<Money> {
+        let foreign = (cash != self.charged_in)
+            .then_some(charged)
+            .flatten()
+            .filter(|c| c.currency() == self.charged_in);
+        self.account.withdrawal_fee(foreign).ok().flatten()
+    }
+}
 
 /// Books a withdrawal; a fee becomes a personal expense of the person,
 /// paid with the card, converted into the home currency like any personal
@@ -174,6 +219,7 @@ mod tests {
                 kind: PaymentMethodKind::CreditCard,
                 owner_person_id: Some(me.clone()),
                 last4: None,
+                account: Default::default(),
                 color: "cerulean".into(),
                 icon: "credit-card".into(),
             })
@@ -220,6 +266,91 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.cash_entries(&me).unwrap()[0].expense_id, None);
+    }
+
+    #[test]
+    fn withdrawal_with_a_usd_card_charges_and_suggests_the_fee_in_usd() {
+        let (db, me) = db();
+        let usd = cur("USD");
+        let card = db
+            .create_payment_method(NewPaymentMethod {
+                name: "Chase".into(),
+                kind: PaymentMethodKind::CreditCard,
+                owner_person_id: Some(me.clone()),
+                last4: Some("4242".into()),
+                account: AccountTerms {
+                    currency: Some(usd),
+                    foreign_fee_percent: Some(Decimal::from_str("1.75").unwrap()),
+                    fixed_fee: Some(Money::new(500, usd)),
+                },
+                color: "cerulean".into(),
+                icon: "credit-card".into(),
+            })
+            .unwrap();
+        let terms = WithdrawalTerms::of(Some(&card), cur("EUR"));
+        assert_eq!(terms.charged_in, usd);
+        assert_eq!(terms.fee_currency(), usd);
+        let charged = Money::new(20_150, terms.charged_in);
+        // 5,00 + 1,75 % of 201,50 (3,52625 → 3,53) = 8,53 USD.
+        let fee = terms.suggested_fee(cur("JPY"), Some(charged));
+        assert_eq!(fee, Some(Money::new(853, usd)));
+        // Dollars from a dollar card: no foreign fee.
+        assert_eq!(
+            terms.suggested_fee(usd, Some(charged)),
+            Some(Money::new(500, usd))
+        );
+        // Charged amount not known yet: the fixed fee only.
+        assert_eq!(
+            terms.suggested_fee(cur("JPY"), None),
+            Some(Money::new(500, usd))
+        );
+
+        db.archive_rates("frankfurter", 1, &[eur_to("USD", "1.25", "2026-10-03")])
+            .unwrap();
+        let new = NewWithdrawal {
+            person: me.clone(),
+            amount: Money::new(30_000, cur("JPY")),
+            card: Some(card.id.clone()),
+            charged: Some(charged),
+            occurred_at: "2026-10-03T10:00:00+09:00".into(),
+        };
+        record_withdrawal(&db, &Offline, &Offline, new, fee, "Abhebegebühr").unwrap();
+        let entry = db.cash_entries(&me).unwrap().remove(0);
+        assert_eq!(entry.counterpart, Some(charged));
+        assert_eq!(entry.fee, Some(Money::new(853, usd)));
+        // The fee expense is in USD, converted into the home currency:
+        // 8,53 / 1,25 = 6,824 → 6,82 €.
+        let fee = db.expense(&entry.expense_id.unwrap()).unwrap().unwrap();
+        assert_eq!(fee.total, Money::new(853, usd));
+        assert_eq!(fee.total_in_base, Money::new(682, cur("EUR")));
+    }
+
+    #[test]
+    fn withdrawal_without_card_currency_is_charged_in_the_home_currency() {
+        let eur = cur("EUR");
+        let no_card = WithdrawalTerms::of(None, eur);
+        assert_eq!(no_card.charged_in, eur);
+        assert!(!no_card.has_fees());
+        assert_eq!(no_card.suggested_fee(cur("JPY"), None), None);
+        let card = PaymentMethod {
+            id: PaymentMethodId::new("visa"),
+            name: "Visa".into(),
+            kind: PaymentMethodKind::CreditCard,
+            owner_person_id: None,
+            last4: None,
+            account: AccountTerms {
+                currency: None,
+                foreign_fee_percent: None,
+                fixed_fee: Some(Money::new(250, cur("JPY"))),
+            },
+            color: "cerulean".into(),
+            icon: "credit-card".into(),
+            archived: false,
+        };
+        let terms = WithdrawalTerms::of(Some(&card), eur);
+        assert_eq!(terms.charged_in, eur);
+        // A fee kept without an account currency stays in its own currency.
+        assert_eq!(terms.fee_currency(), cur("JPY"));
     }
 
     #[test]
