@@ -40,8 +40,9 @@ pub struct NewExpense {
     /// Who carries the expense and how (EXP-04, idee.md 8.1); exact
     /// amounts are in the expense's currency.
     pub split: SplitMode,
-    /// Archived receipt to attach (RCP-03); only read when creating, an
-    /// edit keeps the expense's receipt (replacing it is RCP-08).
+    /// Archived receipt to attach (RCP-03). On an edit another one
+    /// replaces the expense's receipt, which stays archived (RCP-08);
+    /// `None` keeps the one it has.
     pub receipt_id: Option<String>,
     /// Positions in order (idee.md 4.1 `LineItem`), stored with any split;
     /// `SplitMode::Items` must be built from them (`item_lines`).
@@ -185,13 +186,21 @@ impl Db {
             let source = ExpenseSource::from_code(&source)?;
             let (base, fx_rate_id) =
                 prepare(&tx, self.device_id(), &new, rate, category.as_deref())?;
+            let receipt_id = match new.receipt_id.clone() {
+                Some(other) if receipt_id.as_ref() != Some(&other) => {
+                    receipts::check_unattached(&tx, &other)?;
+                    Some(other)
+                }
+                _ => receipt_id,
+            };
             let now = now_ms();
             tx.execute(
                 "UPDATE expense
                  SET title = ?2, category_id = ?3, occurred_at = ?4, occurred_date = ?5,
                      total_minor = ?6, currency = ?7, fx_rate_id = ?8, total_base_minor = ?9,
                      base_currency = ?10, split_mode = ?11, updated_at = ?12, group_id = ?13,
-                     note = ?14, location = ?15, latitude = ?16, longitude = ?17
+                     note = ?14, location = ?15, latitude = ?16, longitude = ?17,
+                     receipt_id = ?18
                  WHERE id = ?1",
                 params![
                     id.as_str(),
@@ -210,7 +219,8 @@ impl Db {
                     new.note,
                     new.location,
                     new.coordinates.map(GeoPoint::latitude),
-                    new.coordinates.map(GeoPoint::longitude)
+                    new.coordinates.map(GeoPoint::longitude),
+                    receipt_id
                 ],
             )?;
             tx.execute(
@@ -1404,7 +1414,7 @@ mod tests {
             Err(StorageError::InvalidInput(_))
         ));
 
-        // Editing keeps the receipt, whatever the input says (RCP-08 later).
+        // An edit without a receipt keeps the one the expense has.
         let edited = s.db.update_expense(&saved.id, ramen(&s), &rate).unwrap();
         assert_eq!(edited.receipt_id.as_deref(), Some(receipt.id.as_str()));
         assert_eq!(s.db.expense(&saved.id).unwrap(), Some(edited));
@@ -1414,8 +1424,57 @@ mod tests {
             ..ramen(&s)
         };
         assert!(matches!(
-            s.db.create_expense(unknown, &rate),
+            s.db.create_expense(unknown.clone(), &rate),
             Err(StorageError::NotFound)
+        ));
+        assert!(matches!(
+            s.db.update_expense(&saved.id, unknown, &rate),
+            Err(StorageError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn a_replaced_receipt_stays_in_the_archive() {
+        let s = setup("JPY");
+        let rate = s.db.latest_rate(cur("JPY"), cur("JPY")).unwrap().unwrap();
+        let manual = s.db.create_expense(ramen(&s), &rate).unwrap();
+        assert_eq!(manual.receipt_id, None);
+        let first = s.db.create_receipt("receipts/a.jpg", None).unwrap();
+        let second = s.db.create_receipt("receipts/b.jpg", None).unwrap();
+
+        // Added afterwards to an expense entered by hand (RCP-08).
+        let with_first = NewExpense {
+            receipt_id: Some(first.id.clone()),
+            ..ramen(&s)
+        };
+        let added = s.db.update_expense(&manual.id, with_first, &rate).unwrap();
+        assert_eq!(added.receipt_id.as_deref(), Some(first.id.as_str()));
+
+        let with_second = NewExpense {
+            receipt_id: Some(second.id.clone()),
+            ..ramen(&s)
+        };
+        let replaced = s.db.update_expense(&manual.id, with_second, &rate).unwrap();
+        assert_eq!(replaced.receipt_id.as_deref(), Some(second.id.as_str()));
+        assert_eq!(s.db.expense(&manual.id).unwrap(), Some(replaced));
+
+        // The old one is still archived, now without an expense.
+        assert_eq!(s.db.receipt(&first.id).unwrap(), Some(first.clone()));
+        let archive = s.db.receipt_archive().unwrap();
+        let old = archive.iter().find(|r| r.id == first.id).unwrap();
+        assert_eq!(old.expense, None);
+        let new = archive.iter().find(|r| r.id == second.id).unwrap();
+        assert_eq!(new.expense.as_ref().map(|e| &e.id), Some(&manual.id));
+
+        // A receipt another expense holds cannot be taken.
+        let other = s.db.create_expense(ramen(&s), &rate).unwrap();
+        let taken = NewExpense {
+            receipt_id: Some(second.id.clone()),
+            ..ramen(&s)
+        };
+        assert!(matches!(
+            s.db.update_expense(&other.id, taken, &rate),
+            Err(StorageError::InvalidInput(_))
         ));
     }
 

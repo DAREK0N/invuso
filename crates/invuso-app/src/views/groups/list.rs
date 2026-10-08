@@ -3,7 +3,7 @@ use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
         LdArchive, LdArchiveRestore, LdChevronDown, LdChevronRight, LdCircleAlert, LdPencil, LdPin,
-        LdPinOff, LdPlus, LdTrash2, LdUsers,
+        LdPinOff, LdPlus, LdReceipt, LdTrash2, LdUsers,
     },
 };
 use invuso_core::domain::{Group, Money};
@@ -53,7 +53,19 @@ pub fn GroupList() -> Element {
     });
 
     rsx! {
-        TopBar { title: t!("page.groups").to_string() }
+        TopBar { title: t!("page.groups").to_string(),
+            // The receipt archive spans all groups (RCP-09; user decision
+            // in AP-33).
+            button {
+                class: "flex h-11 w-11 items-center justify-center rounded-full text-floral-white-200 active:bg-jet-black-800 transition-colors",
+                r#type: "button",
+                aria_label: t!("archive.open_archive").to_string(),
+                onclick: move |_| {
+                    nav.push(Route::ReceiptArchive {});
+                },
+                Icon { icon: LdReceipt, class: "h-6 w-6" }
+            }
+        }
         match &*entries.read() {
             Err(message) => rsx! {
                 EmptyState {

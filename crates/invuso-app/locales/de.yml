@@ -32,10 +32,6 @@ startup:
   db_error_title: "Daten können nicht geladen werden"
   db_error_text: "Die Datenbank konnte nicht geöffnet werden. Deine Daten wurden nicht verändert."
 
-placeholder:
-  title: "Noch nicht verfügbar"
-  text: "Dieser Bereich wird in einem späteren Meilenstein umgesetzt."
-
 page:
   home: "Home"
   groups: "Gruppen"
@@ -688,6 +684,9 @@ receipt:
   choose: "Galerie"
   image_error: "Das Bild kann nicht angezeigt werden. Es bleibt archiviert."
   mark: "Position: %{text}"
+  replace: "Kassenzettel ersetzen"
+  replaced_hint: "Der bisherige Kassenzettel bleibt im Archiv."
+  from_archive: "Archiv"
 
 items:
   title: "Positionen"
@@ -949,3 +948,30 @@ export:
   row_expense: "Ausgabe"
   row_item: "Position"
   everyone: "Alle"
+
+review:
+  later: "Später prüfen"
+  later_saved: "Kassenzettel gesichert. Du findest ihn im Kassenzettel-Archiv."
+
+archive:
+  open_archive: "Kassenzettel-Archiv öffnen"
+  search: "Händler oder Text suchen"
+  loading: "Kassenzettel werden geladen …"
+  load_error_title: "Archiv kann nicht geladen werden"
+  empty_title: "Noch keine Kassenzettel"
+  empty_text: "Gescannte Kassenzettel erscheinen hier, auch solche, die du später prüfen willst."
+  no_hits_title: "Keine Treffer"
+  no_hits_text: "Kein Kassenzettel passt zur Suche."
+  open: "Warten auf Prüfung (%{count})"
+  done: "Mit Ausgabe (%{count})"
+  unnamed: "Kassenzettel"
+  no_expense: "ohne Ausgabe"
+  status_new: "Neu"
+  status_analyzed: "Analysiert"
+  status_reviewed: "Geprüft"
+  status_reading: "Wird erkannt …"
+  status_failed: "Erkennung fehlgeschlagen"
+  pick_title: "Kassenzettel aus dem Archiv"
+  pick_empty_title: "Keine freien Kassenzettel"
+  pick_empty_text: "Im Archiv liegt kein Kassenzettel ohne Ausgabe."
+  pick_gone: "Dieser Kassenzettel ist nicht mehr vorhanden."

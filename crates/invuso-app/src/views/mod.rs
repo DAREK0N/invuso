@@ -1,5 +1,4 @@
-//! One component per route (idee.md 6). Screens not built yet render
-//! `PlaceholderPage` until their milestone.
+//! One component per route (idee.md 6).
 
 mod cash;
 mod converter;
@@ -8,7 +7,6 @@ mod groups;
 mod home;
 mod not_found;
 mod onboarding;
-mod placeholder;
 mod receipt;
 mod receipt_adjust;
 mod settings;
@@ -23,5 +21,3 @@ pub use onboarding::*;
 pub use receipt::*;
 pub use receipt_adjust::*;
 pub use settings::*;
-
-use placeholder::PlaceholderPage;

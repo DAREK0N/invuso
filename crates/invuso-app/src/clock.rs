@@ -21,6 +21,23 @@ pub fn local_now() -> (String, String) {
     )
 }
 
+/// The local day (`YYYY-MM-DD`) of a moment in Unix milliseconds, such as
+/// a row's `created_at`; UTC if the time zone cannot be read.
+pub fn local_date_of(unix_ms: i64) -> String {
+    let utc = OffsetDateTime::from_unix_timestamp(unix_ms.div_euclid(1000))
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let date = UtcOffset::local_offset_at(utc)
+        .map(|offset| utc.to_offset(offset))
+        .unwrap_or(utc)
+        .date();
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        u8::from(date.month()),
+        date.day()
+    )
+}
+
 /// `occurred_at` for a local date (`YYYY-MM-DD`) and time (`HH:MM`), e.g.
 /// `2026-10-04T19:30:00+09:00`, with the offset the device's time zone has
 /// at that moment, so a date across a daylight-saving change still gets
@@ -112,6 +129,19 @@ mod tests {
     use invuso_core::domain::validate_occurred_at;
 
     use super::*;
+
+    #[test]
+    fn local_date_of_a_moment() {
+        // Noon UTC is the same day in every time zone up to ±11 hours.
+        let noon = Date::from_calendar_date(2026, Month::October, 4)
+            .unwrap()
+            .with_hms(12, 0, 0)
+            .unwrap()
+            .assume_utc();
+        let ms = noon.unix_timestamp() * 1000 + 999;
+        assert_eq!(local_date_of(ms), "2026-10-04");
+        assert!(is_iso_date(&local_date_of(0)));
+    }
 
     #[test]
     fn formats_with_offset() {

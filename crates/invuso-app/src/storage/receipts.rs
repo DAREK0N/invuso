@@ -1,3 +1,4 @@
+use invuso_core::domain::{Currency, ExpenseId, Money};
 use invuso_core::receipt::{BoundingBox, RecognizedText, text_rows};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -219,6 +220,140 @@ impl Db {
             }))
         })
     }
+}
+
+/// How far a receipt got (idee.md 4.1 `Receipt.status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptStatus {
+    /// Archived, text not recognized yet.
+    New,
+    /// Text recognized, not checked by the user.
+    Analyzed,
+    /// Checked in the review and saved as an expense.
+    Reviewed,
+}
+
+impl ReceiptStatus {
+    fn from_code(code: &str) -> Result<Self, StorageError> {
+        match code {
+            "new" => Ok(Self::New),
+            "analyzed" => Ok(Self::Analyzed),
+            "reviewed" => Ok(Self::Reviewed),
+            _ => Err(StorageError::InvalidInput("unknown receipt status")),
+        }
+    }
+}
+
+/// The expense a receipt is attached to, as the archive names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptExpense {
+    pub id: ExpenseId,
+    pub title: String,
+    pub occurred_at: String,
+    pub total: Money,
+    pub total_in_base: Money,
+    /// `None` for a personal expense (EXP-06).
+    pub group_name: Option<String>,
+}
+
+/// A receipt as the archive lists it (RCP-09).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedReceipt {
+    pub id: String,
+    pub status: ReceiptStatus,
+    pub thumbnail_path: Option<String>,
+    /// When it was archived, Unix milliseconds.
+    pub created_at: i64,
+    /// The recognized rows (`ocr_raw_text`); `None` until analyzed.
+    pub raw_text: Option<String>,
+    /// `None` while no (undeleted) expense holds it: saved "for later"
+    /// (RCP-07), left without saving, removed from the form or replaced
+    /// (RCP-08).
+    pub expense: Option<ReceiptExpense>,
+}
+
+impl Db {
+    /// Every archived receipt, newest first, with the expense holding it
+    /// (RCP-09). Receipts of deleted expenses or groups count as without
+    /// expense: the photo stays reachable (idee.md 1.4).
+    pub fn receipt_archive(&self) -> Result<Vec<ArchivedReceipt>, StorageError> {
+        self.with(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT r.id, r.status, r.thumbnail_path, r.created_at, r.ocr_raw_text,
+                        e.id, e.title, e.occurred_at, e.total_minor, e.currency,
+                        e.total_base_minor, e.base_currency, g.name
+                 FROM receipt r
+                 LEFT JOIN expense e ON e.id = (
+                     SELECT x.id FROM expense x
+                     LEFT JOIN expense_group xg ON xg.id = x.group_id
+                     WHERE x.receipt_id = r.id AND x.deleted_at IS NULL
+                       AND (x.group_id IS NULL OR xg.deleted_at IS NULL)
+                     ORDER BY x.created_at LIMIT 1)
+                 LEFT JOIN expense_group g ON g.id = e.group_id
+                 WHERE r.deleted_at IS NULL
+                 ORDER BY r.created_at DESC, r.id DESC",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        (
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                        ),
+                        (
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                            row.get::<_, Option<i64>>(8)?,
+                            row.get::<_, Option<String>>(9)?,
+                            row.get::<_, Option<i64>>(10)?,
+                            row.get::<_, Option<String>>(11)?,
+                            row.get::<_, Option<String>>(12)?,
+                        ),
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(|((id, status, thumbnail_path, created_at, raw_text), e)| {
+                    let expense = match e {
+                        (
+                            Some(id),
+                            Some(title),
+                            Some(occurred_at),
+                            Some(total),
+                            Some(currency),
+                            Some(base),
+                            Some(base_currency),
+                            group_name,
+                        ) => Some(ReceiptExpense {
+                            id: ExpenseId::new(id),
+                            title,
+                            occurred_at,
+                            total: Money::new(total, stored_currency(&currency)?),
+                            total_in_base: Money::new(base, stored_currency(&base_currency)?),
+                            group_name,
+                        }),
+                        _ => None,
+                    };
+                    Ok(ArchivedReceipt {
+                        id,
+                        status: ReceiptStatus::from_code(&status)?,
+                        thumbnail_path,
+                        created_at,
+                        raw_text,
+                        expense,
+                    })
+                })
+                .collect()
+        })
+    }
+}
+
+fn stored_currency(code: &str) -> Result<Currency, StorageError> {
+    Currency::from_code(code).map_err(|_| StorageError::InvalidInput("unknown stored currency"))
 }
 
 impl Db {

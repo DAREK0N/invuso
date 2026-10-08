@@ -6,8 +6,8 @@ use dioxus::router::Navigator;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdCamera, LdCheck, LdChevronRight, LdCircleAlert, LdImage, LdLocateFixed, LdMapPin, LdPlus,
-        LdTrash2, LdTriangleAlert, LdUser, LdX,
+        LdCamera, LdCheck, LdChevronRight, LdCircleAlert, LdClock, LdImage, LdLocateFixed,
+        LdMapPin, LdPlus, LdReceipt, LdTrash2, LdTriangleAlert, LdUser, LdX,
     },
 };
 use invuso_core::Decimal;
@@ -45,7 +45,7 @@ use crate::preferences::{
     category_name, default_home_currency, display_date, language_name, suggested_target_language,
 };
 use crate::services::expenses::{SaveExpenseError, save_expense, update_expense};
-use crate::services::ocr::{PhotoQuad, bounds_of};
+use crate::services::ocr::{OcrJobs, PhotoQuad, bounds_of};
 use crate::services::rates::{CurrencyApi, Frankfurter};
 use crate::services::receipts::{self, capture_receipt};
 use crate::services::translation::{
@@ -57,7 +57,7 @@ use crate::storage::{
     Db, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, NearRate, NewExpense, NewExpensePayment,
     ReceiptFiles, StorageError,
 };
-use crate::views::ReceiptAdjuster;
+use crate::views::{ArchivePickSheet, ReceiptAdjuster};
 
 /// What the form reads from the database once; it keeps its own state
 /// while open.
@@ -130,6 +130,8 @@ enum Sheet {
     Item(u64),
     /// The own rate of the expense (EXP-08).
     OwnRate,
+    /// A receipt from the archive for a saved expense (RCP-08).
+    Archive,
 }
 
 /// `/expense/new`: records an expense by hand (EXP-01..04, EXP-06, EXP-07;
@@ -210,6 +212,57 @@ pub fn ReceiptReview(receipt_id: String) -> Element {
         match data {
             Err(message) => rsx! { LoadError { message } },
             Ok(data) => rsx! { ExpenseForm { data } },
+        }
+    }
+}
+
+/// Where a receipt can come from: camera, gallery and, for a saved
+/// expense, the archive (RCP-03, RCP-08). `label` heads the buttons, e.g.
+/// "replace".
+#[component]
+fn ReceiptSources(
+    #[props(default)] label: Option<String>,
+    can_take_photo: bool,
+    busy: bool,
+    on_pick: Callback<ImageKind>,
+    #[props(default)] on_archive: Option<EventHandler<()>>,
+) -> Element {
+    rsx! {
+        if let Some(label) = label {
+            span { class: "px-1 text-sm text-floral-white-400", "{label}" }
+        }
+        div { class: "flex gap-3",
+            if can_take_photo {
+                Button {
+                    variant: ButtonVariant::Secondary,
+                    class: "flex-1",
+                    disabled: busy,
+                    onclick: move |_| on_pick.call(ImageKind::Camera),
+                    Icon { icon: LdCamera, class: "h-5 w-5" }
+                    {t!("receipt.take_photo").to_string()}
+                }
+            }
+            Button {
+                variant: ButtonVariant::Secondary,
+                class: "flex-1",
+                disabled: busy,
+                onclick: move |_| on_pick.call(ImageKind::Gallery),
+                Icon { icon: LdImage, class: "h-5 w-5" }
+                {t!("receipt.choose").to_string()}
+            }
+            if let Some(on_archive) = on_archive {
+                Button {
+                    variant: ButtonVariant::Secondary,
+                    class: "flex-1",
+                    disabled: busy,
+                    onclick: move |_| on_archive.call(()),
+                    Icon { icon: LdReceipt, class: "h-5 w-5" }
+                    {t!("receipt.from_archive").to_string()}
+                }
+            }
+        }
+        if busy {
+            p { class: "px-1 text-sm text-floral-white-400", role: "status", {t!("scan.working").to_string()} }
         }
     }
 }
@@ -374,6 +427,14 @@ fn ExpenseForm(data: FormData) -> Element {
     let mut photo_size = use_signal(|| None::<(u32, u32)>);
     // The receipt in full screen, zoomed to the line with this key if any.
     let mut viewer = use_signal(|| None::<Option<u64>>);
+    let jobs = use_context::<OcrJobs>();
+    let recognize_db = db.clone();
+    // The receipt the saved expense had; another one replaces it on saving
+    // and it stays in the archive (RCP-08).
+    let original_receipt = data.receipt.as_ref().map(|r| r.id.clone());
+    let replaced = editing
+        && original_receipt.is_some()
+        && receipt.read().as_ref().map(|r| &r.id) != original_receipt.as_ref();
 
     let groups = data.groups.clone();
     let home_currency = data.home_currency;
@@ -602,6 +663,7 @@ fn ExpenseForm(data: FormData) -> Element {
 
     let save_db = db.clone();
     let save_existing = existing.clone();
+    let remember_receipt = original_receipt.clone();
     let save = move |_| {
         let format = NumberFormat::current();
         let cur = currency();
@@ -666,8 +728,14 @@ fn ExpenseForm(data: FormData) -> Element {
             return;
         };
 
+        // The lines of an edited expense were read from its first receipt,
+        // whatever replaces it now.
         let remember = (
-            receipt.read().as_ref().map(|r| r.id.clone()),
+            if editing {
+                remember_receipt.clone()
+            } else {
+                receipt.read().as_ref().map(|r| r.id.clone())
+            },
             source_language().flatten(),
             target_language(),
             line_items.clone(),
@@ -752,6 +820,22 @@ fn ExpenseForm(data: FormData) -> Element {
                 }
             }
         });
+    };
+
+    // RCP-07: the receipt is archived already; leaving keeps it waiting in
+    // the archive, and its recognition, if still running, goes on there
+    // (user decision in AP-33: no expense until it is checked).
+    let later_db = db.clone();
+    let later = move |_| {
+        if let Some(id) = receipt.peek().as_ref().map(|r| r.id.clone())
+            && matches!(later_db.receipt_text(&id), Ok(None))
+            && jobs.peek(&id).is_none()
+        {
+            jobs.start(later_db.clone(), id, revision);
+        }
+        let mut toaster = toaster;
+        toaster.show(t!("review.later_saved").to_string(), None);
+        leave(nav, None, true);
     };
 
     let pick_db = db.clone();
@@ -1117,8 +1201,23 @@ fn ExpenseForm(data: FormData) -> Element {
                                 on_open: move |_| viewer.set(Some(None)),
                             }
                         }
-                        // Replacing the receipt of a saved expense is RCP-08.
-                        if !editing {
+                        if editing {
+                            // Only attached: amount, split and lines stay as
+                            // they are (user decision in AP-33).
+                            ReceiptSources {
+                                label: t!("receipt.replace").to_string(),
+                                can_take_photo,
+                                busy: picking(),
+                                on_pick: pick,
+                                on_archive: move |_| sheet.set(Some(Sheet::Archive)),
+                            }
+                            if replaced {
+                                p { class: "px-1 text-sm text-floral-white-400", role: "status", {t!("receipt.replaced_hint").to_string()} }
+                            }
+                            if let Some(error) = receipt_error() {
+                                p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
+                            }
+                        } else {
                             ReceiptRecognition {
                                 key: "{attached.id}",
                                 receipt_id: attached.id.clone(),
@@ -1143,44 +1242,37 @@ fn ExpenseForm(data: FormData) -> Element {
                         }
                     }
                 },
-                None if !editing => rsx! {
+                // Picking from the archive is for saved expenses (RCP-08); a
+                // new one comes from a fresh photo or the archive's review.
+                None => rsx! {
                     section { class: "flex flex-col gap-2",
                         h2 { class: "px-1 text-sm font-medium text-floral-white-300", {t!("receipt.title").to_string()} }
-                        div { class: "flex gap-3",
-                            if can_take_photo {
-                                Button {
-                                    variant: ButtonVariant::Secondary,
-                                    class: "flex-1",
-                                    disabled: picking(),
-                                    onclick: move |_| pick.call(ImageKind::Camera),
-                                    Icon { icon: LdCamera, class: "h-5 w-5" }
-                                    {t!("receipt.take_photo").to_string()}
-                                }
+                        if editing {
+                            ReceiptSources {
+                                can_take_photo,
+                                busy: picking(),
+                                on_pick: pick,
+                                on_archive: move |_| sheet.set(Some(Sheet::Archive)),
                             }
-                            Button {
-                                variant: ButtonVariant::Secondary,
-                                class: "flex-1",
-                                disabled: picking(),
-                                onclick: move |_| pick.call(ImageKind::Gallery),
-                                Icon { icon: LdImage, class: "h-5 w-5" }
-                                {t!("receipt.choose").to_string()}
-                            }
-                        }
-                        if picking() {
-                            p { class: "px-1 text-sm text-floral-white-400", role: "status", {t!("scan.working").to_string()} }
+                        } else {
+                            ReceiptSources { can_take_photo, busy: picking(), on_pick: pick }
                         }
                         if let Some(error) = receipt_error() {
                             p { class: "px-1 text-sm text-watermelon-300", role: "alert", "{error}" }
                         }
                     }
                 },
-                None => rsx! {},
             }
             if let Some(picked) = adjusting() {
                 ReceiptAdjuster {
                     receipt: picked,
                     on_done: move |files: ReceiptFiles| {
                         adjusting.set(None);
+                        if editing {
+                            // Not shown while editing, but searched in the
+                            // archive (RCP-09).
+                            jobs.start(recognize_db.clone(), files.id.clone(), revision);
+                        }
                         receipt.set(Some(files));
                     },
                     // Not attached, but kept in the archive like any photo.
@@ -1401,6 +1493,16 @@ fn ExpenseForm(data: FormData) -> Element {
                     {t!("common.save").to_string()}
                 }
             }
+            if review && receipt.read().is_some() {
+                Button {
+                    variant: ButtonVariant::Secondary,
+                    class: "w-full",
+                    disabled: saving(),
+                    onclick: later,
+                    Icon { icon: LdClock, class: "h-5 w-5" }
+                    {t!("review.later").to_string()}
+                }
+            }
             if editing {
                 Button {
                     variant: ButtonVariant::Danger,
@@ -1530,6 +1632,16 @@ fn ExpenseForm(data: FormData) -> Element {
                     None => rsx! {},
                 }
             }
+            Some(Sheet::Archive) => rsx! {
+                ArchivePickSheet {
+                    on_pick: move |files: ReceiptFiles| {
+                        sheet.set(None);
+                        receipt_error.set(None);
+                        receipt.set(Some(files));
+                    },
+                    on_close: move |_| sheet.set(None),
+                }
+            },
             None => rsx! {},
         }
         if let (Some(focus), Some(photo)) = (viewer(), photo) {

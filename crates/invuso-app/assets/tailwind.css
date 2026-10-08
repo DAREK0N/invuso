@@ -74,6 +74,7 @@
     --color-muted-teal-500: #67986d;
     --color-muted-teal-700: #3e5b41;
     --color-muted-teal-800: #293d2c;
+    --color-muted-teal-900: #151e16;
     --color-muted-teal-950: #0e150f;
     --color-watermelon-200: #f4a4ab;
     --color-watermelon-300: #ee7781;
@@ -946,6 +947,9 @@
   }
   .bg-muted-teal-800 {
     background-color: var(--color-muted-teal-800);
+  }
+  .bg-muted-teal-900 {
+    background-color: var(--color-muted-teal-900);
   }
   .bg-muted-teal-950 {
     background-color: var(--color-muted-teal-950);

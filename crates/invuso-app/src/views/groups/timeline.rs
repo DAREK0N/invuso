@@ -4,8 +4,8 @@ use dioxus::prelude::*;
 use dioxus_free_icons::{
     Icon,
     icons::ld_icons::{
-        LdChevronDown, LdChevronRight, LdCircleAlert, LdHandCoins, LdPlus, LdReceipt, LdSearch,
-        LdSearchX, LdSquare, LdSquareCheck,
+        LdChevronDown, LdChevronRight, LdCircleAlert, LdHandCoins, LdPlus, LdReceipt, LdSearchX,
+        LdSquare, LdSquareCheck,
     },
 };
 use invuso_core::domain::{
@@ -17,7 +17,8 @@ use crate::Route;
 use crate::clock;
 use crate::components::{
     BottomSheet, Button, ButtonVariant, CategoryIcon, DateField, EmptyState, ExpenseRow,
-    FilterChip, MoneyText, PaymentMethodIcon, PersonOption, PersonPicker, RemovableChip, TopBar,
+    FilterChip, MoneyText, PaymentMethodIcon, PersonOption, PersonPicker, RemovableChip,
+    SearchField, TopBar,
 };
 use crate::preferences::{category_name, day_heading, display_date};
 use crate::services::receipts;
@@ -153,6 +154,7 @@ pub fn GroupTimeline(id: String) -> Element {
                 div { class: "flex flex-col gap-3",
                     SearchField {
                         value: filter_now.query.clone(),
+                        placeholder: t!("timeline.search").to_string(),
                         oninput: move |query: String| change(Box::new(move |f: &mut TimelineFilter| f.query = query)),
                     }
                     FilterBar {
@@ -290,25 +292,6 @@ fn LoadError(message: String) -> Element {
             title: t!("timeline.load_error_title").to_string(),
             text: message,
             Icon { icon: LdCircleAlert, class: "h-8 w-8" }
-        }
-    }
-}
-
-/// Search over titles, merchants and line texts (GRP-25).
-#[component]
-fn SearchField(value: String, oninput: EventHandler<String>) -> Element {
-    rsx! {
-        label { class: "flex min-h-12 items-center gap-2 rounded-2xl border border-jet-black-700 bg-jet-black-900 px-4 focus-within:border-cerulean-500 transition-colors",
-            Icon { icon: LdSearch, class: "h-5 w-5 shrink-0 text-floral-white-400" }
-            input {
-                class: "min-h-12 min-w-0 flex-1 bg-transparent text-base text-floral-white-50 placeholder:text-floral-white-600 outline-none",
-                r#type: "search",
-                autocomplete: "off",
-                placeholder: t!("timeline.search").to_string(),
-                aria_label: t!("timeline.search").to_string(),
-                value: "{value}",
-                oninput: move |event| oninput.call(event.value()),
-            }
         }
     }
 }

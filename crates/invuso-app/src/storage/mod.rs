@@ -41,7 +41,7 @@ pub use method_payments::{MethodPayment, MethodPaymentSource};
 pub use payment_methods::NewPaymentMethod;
 pub use people::NewPerson;
 pub use profile::Profile;
-pub use receipts::{OcrFragment, ReceiptFiles, ReceiptText};
+pub use receipts::{ArchivedReceipt, OcrFragment, ReceiptFiles, ReceiptStatus, ReceiptText};
 pub use settings::{
     APP_LANGUAGE, CONVERTER_FROM, CONVERTER_MANUAL_RATE, CONVERTER_TO, CORNER_RADIUS,
     FAVORITE_CURRENCY_LIST, LAST_EXPENSE_CURRENCY, LAST_EXPENSE_GROUP, RECEIPT_AUTO_CORNERS,

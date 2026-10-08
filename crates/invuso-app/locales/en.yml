@@ -32,10 +32,6 @@ startup:
   db_error_title: "Data cannot be loaded"
   db_error_text: "The database could not be opened. Your data has not been changed."
 
-placeholder:
-  title: "Not available yet"
-  text: "This area will be built in a later milestone."
-
 page:
   home: "Home"
   groups: "Groups"
@@ -688,6 +684,9 @@ receipt:
   choose: "Gallery"
   image_error: "The image cannot be shown. It stays archived."
   mark: "Item: %{text}"
+  replace: "Replace receipt"
+  replaced_hint: "The previous receipt stays in the archive."
+  from_archive: "Archive"
 
 items:
   title: "Items"
@@ -949,3 +948,30 @@ export:
   row_expense: "Expense"
   row_item: "Item"
   everyone: "Everyone"
+
+review:
+  later: "Review later"
+  later_saved: "Receipt saved. You will find it in the receipt archive."
+
+archive:
+  open_archive: "Open receipt archive"
+  search: "Search merchant or text"
+  loading: "Loading receipts …"
+  load_error_title: "The archive cannot be loaded"
+  empty_title: "No receipts yet"
+  empty_text: "Scanned receipts show up here, including those you want to review later."
+  no_hits_title: "No matches"
+  no_hits_text: "No receipt matches the search."
+  open: "Waiting for review (%{count})"
+  done: "With expense (%{count})"
+  unnamed: "Receipt"
+  no_expense: "no expense"
+  status_new: "New"
+  status_analyzed: "Analyzed"
+  status_reviewed: "Reviewed"
+  status_reading: "Recognizing …"
+  status_failed: "Recognition failed"
+  pick_title: "Receipt from the archive"
+  pick_empty_title: "No free receipts"
+  pick_empty_text: "The archive holds no receipt without an expense."
+  pick_gone: "This receipt no longer exists."
